@@ -2,6 +2,7 @@
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     database_url: PostgresDsn = PostgresDsn(
         "postgresql+asyncpg://adaptive_bot:local-dev-only@localhost:5432/adaptive_trading_bot"
     )
+    historical_market_data_root: Path = Path("data/market_data")
     live_trading_enabled: bool = False
 
 

@@ -99,6 +99,27 @@ limited to `15m`, `1h`, and `4h`; all domain timestamps must be aware UTC values
 immutable, use `Decimal` for OHLCV values, and cover half-open intervals
 `[open_time, close_time)`, where `close_time` is exactly one timeframe after `open_time`.
 
+### Historical candle dataset
+
+Historical candles use PyArrow `>=25.0,<26` and schema version `1`. Files are monthly partitions:
+
+```text
+<market_data_root>/source=<source_id>/base=<BASE>/quote=<QUOTE>/timeframe=<timeframe>/year=<YYYY>/month=<MM>/candles.parquet
+```
+
+The normalized `source_id` is included in both the path and Arrow schema metadata, so sources are
+never mixed. Timestamps use `timestamp[us, tz=UTC]`, matching Python `datetime` microsecond
+resolution. OHLCV columns use `decimal128(38, 18)`: 20 integer digits and 18 fractional digits,
+which comfortably covers V1 BTC/ETH/USDT prices and volumes. Values outside that precision/scale
+are rejected instead of rounded.
+
+Reads select candle `open_time` with inclusive-start/exclusive-end semantics (`[start, end)`) and
+return immutable `Candle` values in chronological order. Identical writes are idempotent;
+conflicting values for `(source, symbol, timeframe, open_time)` fail closed. Monthly updates are
+written to a same-directory temporary file before atomic replacement. Integrity scans report
+schema/provenance mismatches, malformed rows, duplicates, physical ordering errors, gaps, and
+overlaps without modifying, interpolating, or synthesizing data.
+
 ## Safety
 
 - No committed secrets.
