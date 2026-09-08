@@ -18,7 +18,13 @@ from typing import Protocol
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol, are_contiguous
+from adaptive_trading_bot.domain import (
+    Candle,
+    Timeframe,
+    TradingSymbol,
+    align_timestamp,
+    are_contiguous,
+)
 from adaptive_trading_bot.domain.clock import require_utc
 
 SCHEMA_VERSION = "1"
@@ -345,6 +351,14 @@ class ParquetHistoricalCandleStore:
             seen.add(candle.open_time)
 
         chronological = sorted(physical_candles, key=lambda item: item[0].open_time)
+        issues.extend(
+            _boundary_coverage_issues(
+                chronological,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+            )
+        )
         for (previous, _), (current, partition) in pairwise(chronological):
             if current.open_time > previous.close_time:
                 issues.append(
@@ -473,6 +487,69 @@ def _validate_range(
     ):
         raise ValueError("start must be less than or equal to end")
     return normalized_start, normalized_end
+
+
+def _boundary_coverage_issues(
+    chronological: list[tuple[Candle, str]],
+    *,
+    timeframe: Timeframe,
+    start: datetime | None,
+    end: datetime | None,
+) -> list[IntegrityIssue]:
+    """Report missing expected opens at explicitly requested range boundaries."""
+
+    expected_first: datetime | None = None
+    if start is not None:
+        expected_first = align_timestamp(start, timeframe)
+        if expected_first < start:
+            expected_first += timeframe.duration
+
+    expected_last: datetime | None = None
+    if end is not None:
+        expected_last = align_timestamp(end, timeframe)
+        if expected_last == end:
+            expected_last -= timeframe.duration
+
+    has_expected_open = not (
+        expected_first is not None and expected_last is not None and expected_first > expected_last
+    )
+    if not has_expected_open:
+        return []
+
+    if not chronological:
+        if expected_first is not None and expected_last is not None:
+            return [
+                IntegrityIssue(
+                    IntegrityIssueKind.GAP,
+                    "requested non-empty range contains no candles",
+                    "<requested-range>",
+                    expected_first,
+                )
+            ]
+        return []
+
+    issues: list[IntegrityIssue] = []
+    actual_first = chronological[0][0].open_time
+    actual_last = chronological[-1][0].open_time
+    if expected_first is not None and actual_first != expected_first:
+        issues.append(
+            IntegrityIssue(
+                IntegrityIssueKind.GAP,
+                f"missing first expected candle at {expected_first.isoformat()}",
+                "<requested-range>",
+                expected_first,
+            )
+        )
+    if expected_last is not None and actual_last != expected_last:
+        issues.append(
+            IntegrityIssue(
+                IntegrityIssueKind.GAP,
+                f"missing last expected candle at {expected_last.isoformat()}",
+                "<requested-range>",
+                expected_last,
+            )
+        )
+    return issues
 
 
 def _validate_candle_decimals(candle: Candle) -> None:

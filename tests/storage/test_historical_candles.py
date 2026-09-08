@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -260,6 +260,85 @@ def test_clean_integrity_report_and_gap_detection(tmp_path: Path) -> None:
     gap_report = gap_store.scan_integrity(SOURCE, BTC_USDT, Timeframe.MINUTES_15)
     assert not gap_report.is_clean
     assert [issue.kind for issue in gap_report.issues] == [IntegrityIssueKind.GAP]
+
+
+def test_integrity_range_reports_missing_first_expected_candle(tmp_path: Path) -> None:
+    store = ParquetHistoricalCandleStore(tmp_path)
+    range_start = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    candles = [
+        make_candle(range_start + index * Timeframe.MINUTES_15.duration) for index in range(4)
+    ]
+    store.merge(SOURCE, candles[1:])
+
+    report = store.scan_integrity(
+        SOURCE,
+        BTC_USDT,
+        Timeframe.MINUTES_15,
+        start=range_start,
+        end=range_start + timedelta(hours=1),
+    )
+
+    assert not report.is_clean
+    assert [issue.kind for issue in report.issues] == [IntegrityIssueKind.GAP]
+    assert report.issues[0].open_time == range_start
+
+
+def test_integrity_range_reports_missing_last_expected_candle(tmp_path: Path) -> None:
+    store = ParquetHistoricalCandleStore(tmp_path)
+    range_start = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    candles = [
+        make_candle(range_start + index * Timeframe.MINUTES_15.duration) for index in range(4)
+    ]
+    store.merge(SOURCE, candles[:-1])
+
+    report = store.scan_integrity(
+        SOURCE,
+        BTC_USDT,
+        Timeframe.MINUTES_15,
+        start=range_start,
+        end=range_start + timedelta(hours=1),
+    )
+
+    assert not report.is_clean
+    assert [issue.kind for issue in report.issues] == [IntegrityIssueKind.GAP]
+    assert report.issues[0].open_time == range_start + timedelta(minutes=45)
+
+
+def test_integrity_range_reports_completely_empty_non_empty_range(tmp_path: Path) -> None:
+    store = ParquetHistoricalCandleStore(tmp_path)
+    range_start = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+
+    report = store.scan_integrity(
+        SOURCE,
+        BTC_USDT,
+        Timeframe.MINUTES_15,
+        start=range_start,
+        end=range_start + timedelta(hours=1),
+    )
+
+    assert not report.is_clean
+    assert [issue.kind for issue in report.issues] == [IntegrityIssueKind.GAP]
+    assert report.rows_scanned == 0
+
+
+def test_integrity_range_is_clean_when_boundary_coverage_is_complete(tmp_path: Path) -> None:
+    store = ParquetHistoricalCandleStore(tmp_path)
+    range_start = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    candles = [
+        make_candle(range_start + index * Timeframe.MINUTES_15.duration) for index in range(4)
+    ]
+    store.merge(SOURCE, candles)
+
+    report = store.scan_integrity(
+        SOURCE,
+        BTC_USDT,
+        Timeframe.MINUTES_15,
+        start=range_start,
+        end=range_start + timedelta(hours=1),
+    )
+
+    assert report.is_clean
+    assert report.rows_scanned == 4
 
 
 def test_integrity_reports_duplicates_order_and_overlap(tmp_path: Path) -> None:
