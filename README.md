@@ -92,6 +92,13 @@ alembic current
 `GET /health` is process liveness only. It deliberately does not report database or exchange
 readiness. Live trading is controlled by `ATB_LIVE_TRADING_ENABLED` and defaults to `false`.
 
+## Market-data domain conventions
+
+Internal symbols use normalized exchange-neutral `BASE/QUOTE` notation. V1 candle timeframes are
+limited to `15m`, `1h`, and `4h`; all domain timestamps must be aware UTC values. Candles are
+immutable, use `Decimal` for OHLCV values, and cover half-open intervals
+`[open_time, close_time)`, where `close_time` is exactly one timeframe after `open_time`.
+
 ## Safety
 
 - No committed secrets.
