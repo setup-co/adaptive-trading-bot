@@ -51,6 +51,47 @@ Smoke / health checks + deployed SHA record
 
 GitHub is the source of truth. Direct Staging deployment is used for iteration speed; GitHub Actions remains an independent CI/quality gate.
 
+## Local development
+
+The project uses a `src` package layout so imports always resolve from the installed package,
+preventing accidental reliance on the repository working directory. Python 3.12 or newer is
+required.
+
+Create a virtual environment and install the application with its explicit development tools:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+cp .env.example .env       # Windows PowerShell: Copy-Item .env.example .env
+```
+
+Run the API locally (the host and port shown match the safe defaults):
+
+```bash
+uvicorn adaptive_trading_bot.api:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Run the same quality gates used by CI:
+
+```bash
+ruff format --check .
+ruff check .
+mypy src tests migrations
+pytest
+```
+
+To apply or inspect migrations after configuring a reachable PostgreSQL database:
+
+```bash
+alembic upgrade head
+alembic current
+```
+
+`GET /health` is process liveness only. It deliberately does not report database or exchange
+readiness. Live trading is controlled by `ATB_LIVE_TRADING_ENABLED` and defaults to `false`.
+
 ## Safety
 
 - No committed secrets.
