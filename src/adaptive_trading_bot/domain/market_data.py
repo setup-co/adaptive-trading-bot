@@ -84,6 +84,8 @@ class Candle:
     def __post_init__(self) -> None:
         object.__setattr__(self, "open_time", require_utc(self.open_time, field="open_time"))
         object.__setattr__(self, "close_time", require_utc(self.close_time, field="close_time"))
+        if self.open_time != align_timestamp(self.open_time, self.timeframe):
+            raise ValueError("candle open_time must be aligned to its timeframe boundary")
         if self.close_time - self.open_time != self.timeframe.duration:
             raise ValueError("candle interval duration must match its timeframe")
 

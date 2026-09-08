@@ -137,6 +137,19 @@ def test_candle_rejects_timeframe_duration_mismatch() -> None:
 
 
 @pytest.mark.parametrize(
+    ("timeframe", "open_time"),
+    [
+        (Timeframe.MINUTES_15, datetime(2026, 9, 9, 12, 7, tzinfo=UTC)),
+        (Timeframe.HOUR_1, datetime(2026, 9, 9, 12, 15, tzinfo=UTC)),
+        (Timeframe.HOURS_4, datetime(2026, 9, 9, 10, 0, tzinfo=UTC)),
+    ],
+)
+def test_candle_rejects_misaligned_open_time(timeframe: Timeframe, open_time: datetime) -> None:
+    with pytest.raises(ValueError, match="aligned"):
+        make_candle(timeframe=timeframe, open_time=open_time)
+
+
+@pytest.mark.parametrize(
     ("timestamp", "timeframe", "expected"),
     [
         (
