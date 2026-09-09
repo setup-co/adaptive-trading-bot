@@ -18,6 +18,18 @@ from adaptive_trading_bot.strategies.core import (
     StrategyEvaluation,
     StrategyEvaluationContext,
 )
+from adaptive_trading_bot.strategies.range_context import (
+    RangeContextSnapshot,
+    RangeDetectorSeriesState,
+    RangePivotIdentity,
+    RangePivotReference,
+    RangeReasonCode,
+    RangeStateError,
+    RangeStatus,
+    ValidatedRange,
+    ValidatedRangeConfiguration,
+    ValidatedRangeDetector,
+)
 from adaptive_trading_bot.strategies.trend_pullback import (
     StrategyReasonCode,
     TrendPullbackConfiguration,
@@ -34,6 +46,13 @@ __all__ = [
     "BreakoutRetestStrategy",
     "BreakoutSide",
     "CandidateAction",
+    "RangeContextSnapshot",
+    "RangeDetectorSeriesState",
+    "RangePivotIdentity",
+    "RangePivotReference",
+    "RangeReasonCode",
+    "RangeStateError",
+    "RangeStatus",
     "SourceIdentity",
     "Strategy",
     "StrategyContextError",
@@ -43,5 +62,8 @@ __all__ = [
     "TrendPullbackConfiguration",
     "TrendPullbackRuleAudit",
     "TrendPullbackStrategy",
+    "ValidatedRange",
+    "ValidatedRangeConfiguration",
+    "ValidatedRangeDetector",
     "assemble_strategy_contexts",
 ]
