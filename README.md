@@ -151,6 +151,28 @@ clock to that time before returning the batch, and orders simultaneous members c
 source ID, symbol, timeframe duration, then timeframe value. Sessions expose only one-batch
 stepping/iteration and exhaustion state—no future-candle lookup, wall-clock sleep, or pacing.
 
+Replay pacing is an outer operator-control layer with exact `1x`, `10x`, `50x`, and `100x`
+speeds. It maps the actual historical delta between consecutive batch observation times to a
+monotonic wall-clock deadline; processing lag clamps the next sleep to zero without changing,
+dropping, or reordering replay batches. Manual stepping is immediate. Interactive pause/resume is
+deferred to later UI work.
+
+Run one or more stored series in paced or immediate non-interactive step mode:
+
+```bash
+atb-replay \
+  --series "ccxt-binance-spot,BTC/USDT,15m,2026-09-01T00:00:00Z,2026-09-01T01:00:00Z" \
+  --speed 100x
+
+atb-replay \
+  --series "ccxt-binance-spot,BTC/USDT,15m,2026-09-01T00:00:00Z,2026-09-01T01:00:00Z" \
+  --step
+```
+
+Each replay batch is emitted as one JSON line with source provenance, symbol/timeframe, UTC candle
+boundaries, batch size, and OHLCV encoded as decimal strings. Integrity or input failures exit
+non-zero before replay output.
+
 ## Safety
 
 - No committed secrets.
