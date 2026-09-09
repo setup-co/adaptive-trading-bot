@@ -139,6 +139,18 @@ effective closed-candle boundary and a non-mutating integrity scan; it never rep
 OHLCV values use `Decimal(str(value))` without rounding. If CCXT's JSON decoder has already
 represented a wire number as a binary float, the original lexical precision cannot be recovered.
 
+### Deterministic replay core
+
+Replay reads immutable candles only through the historical-store contract. Every requested series
+is integrity-scanned across its complete candle-open range before any series is read or any event
+can be emitted; one dirty series blocks the entire replay without repair or synthesis.
+
+A stored candle covering `[open_time, close_time)` becomes visible only at `close_time`. Replay
+groups every candle with the same close into one atomic `ReplayBatch`, advances the shared replay
+clock to that time before returning the batch, and orders simultaneous members canonically by
+source ID, symbol, timeframe duration, then timeframe value. Sessions expose only one-batch
+stepping/iteration and exhaustion state—no future-candle lookup, wall-clock sleep, or pacing.
+
 ## Safety
 
 - No committed secrets.
