@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
-from adaptive_trading_bot.features import FeatureSnapshot, StructureSnapshot
+from adaptive_trading_bot.features import FeatureSnapshot, PivotKind, StructureSnapshot
 from adaptive_trading_bot.regime import MultiTimeframeRegimeSnapshot
 
 
@@ -33,53 +33,6 @@ class CandidateAction(StrEnum):
     LONG_CANDIDATE = "LONG_CANDIDATE"
     SHORT_CANDIDATE = "SHORT_CANDIDATE"
     NO_TRADE = "NO_TRADE"
-
-
-class StrategyReasonCode(StrEnum):
-    """Stable, canonically ordered evidence and failure codes."""
-
-    CONTEXT_READY = "CONTEXT_READY"
-    REQUIRED_FEATURES_AVAILABLE = "REQUIRED_FEATURES_AVAILABLE"
-    VOLATILITY_ACCEPTABLE = "VOLATILITY_ACCEPTABLE"
-    HTF_TREND_CONFIRMED = "HTF_TREND_CONFIRMED"
-    ENTRY_DIRECTION_COMPATIBLE = "ENTRY_DIRECTION_COMPATIBLE"
-    EMA_TREND_ALIGNED = "EMA_TREND_ALIGNED"
-    VALUE_ZONE_TOUCHED = "VALUE_ZONE_TOUCHED"
-    PULLBACK_DEPTH_ACCEPTABLE = "PULLBACK_DEPTH_ACCEPTABLE"
-    EMA_RECLAIM_CONFIRMED = "EMA_RECLAIM_CONFIRMED"
-    CANDLE_DIRECTION_CONFIRMED = "CANDLE_DIRECTION_CONFIRMED"
-    MOMENTUM_RECOVERY_CONFIRMED = "MOMENTUM_RECOVERY_CONFIRMED"
-    RSI_CONFIRMATION = "RSI_CONFIRMATION"
-    VOLUME_CONFIRMATION = "VOLUME_CONFIRMATION"
-    STRUCTURAL_PIVOT_AVAILABLE = "STRUCTURAL_PIVOT_AVAILABLE"
-    INVALIDATION_GEOMETRY_VALID = "INVALIDATION_GEOMETRY_VALID"
-
-    CONTEXT_NOT_READY = "CONTEXT_NOT_READY"
-    FEATURES_NOT_FULLY_WARMED = "FEATURES_NOT_FULLY_WARMED"
-    MISSING_EMA_20 = "MISSING_EMA_20"
-    MISSING_EMA_50 = "MISSING_EMA_50"
-    MISSING_ATR_14 = "MISSING_ATR_14"
-    MISSING_RSI_14 = "MISSING_RSI_14"
-    MISSING_MOMENTUM_4 = "MISSING_MOMENTUM_4"
-    MISSING_VOLUME_ZSCORE_20 = "MISSING_VOLUME_ZSCORE_20"
-    ATR_NOT_POSITIVE = "ATR_NOT_POSITIVE"
-    EXTREME_VOLATILITY = "EXTREME_VOLATILITY"
-    HTF_BIAS_NOT_DIRECTIONAL = "HTF_BIAS_NOT_DIRECTIONAL"
-    ONE_HOUR_DIRECTION_MISMATCH = "ONE_HOUR_DIRECTION_MISMATCH"
-    FOUR_HOUR_DIRECTION_MISMATCH = "FOUR_HOUR_DIRECTION_MISMATCH"
-    ENTRY_DIRECTION_OPPOSED = "ENTRY_DIRECTION_OPPOSED"
-    EMA_ALIGNMENT_FAILED = "EMA_ALIGNMENT_FAILED"
-    VALUE_ZONE_NOT_TOUCHED = "VALUE_ZONE_NOT_TOUCHED"
-    PULLBACK_TOO_DEEP = "PULLBACK_TOO_DEEP"
-    EMA_RECLAIM_FAILED = "EMA_RECLAIM_FAILED"
-    CANDLE_DIRECTION_FAILED = "CANDLE_DIRECTION_FAILED"
-    MOMENTUM_RECOVERY_FAILED = "MOMENTUM_RECOVERY_FAILED"
-    RSI_CONFIRMATION_FAILED = "RSI_CONFIRMATION_FAILED"
-    VOLUME_CONFIRMATION_FAILED = "VOLUME_CONFIRMATION_FAILED"
-    MISSING_CONFIRMED_LOW = "MISSING_CONFIRMED_LOW"
-    MISSING_CONFIRMED_HIGH = "MISSING_CONFIRMED_HIGH"
-    INVALIDATION_WRONG_SIDE = "INVALIDATION_WRONG_SIDE"
-    INVALIDATION_TOO_WIDE = "INVALIDATION_TOO_WIDE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,34 +88,23 @@ class StrategyEvaluationContext:
             or regime.regime_15m.observed_at != observed_at
         ):
             raise StrategyContextError("multi-timeframe anchor mismatch")
-        for pivot in (structure.latest_confirmed_high, structure.latest_confirmed_low):
+        for pivot, expected_kind in (
+            (structure.latest_confirmed_high, PivotKind.HIGH),
+            (structure.latest_confirmed_low, PivotKind.LOW),
+        ):
             if pivot is not None and (
                 pivot.source_id != self.source_id
                 or pivot.symbol != self.symbol
                 or pivot.timeframe is not Timeframe.MINUTES_15
+                or pivot.kind is not expected_kind
                 or pivot.confirmed_at > observed_at
             ):
-                raise StrategyContextError("confirmed pivot identity or causality mismatch")
+                raise StrategyContextError("confirmed pivot identity, kind, or causality mismatch")
 
 
 @dataclass(frozen=True, slots=True)
-class TrendPullbackRuleAudit:
-    """Decimal rule inputs and derived geometry used by one evaluation."""
-
-    ema_20: Decimal | None
-    ema_50: Decimal | None
-    atr_14: Decimal | None
-    rsi_14: Decimal | None
-    momentum_4: Decimal | None
-    volume_zscore_20: Decimal | None
-    value_zone_boundary: Decimal | None
-    structural_pivot_price: Decimal | None
-    invalidation_distance: Decimal | None
-
-
-@dataclass(frozen=True, slots=True)
-class StrategyEvaluation:
-    """Immutable candidate assessment; reference prices are not execution fills/stops."""
+class StrategyEvaluation[ReasonT, AuditT]:
+    """Strategy-agnostic candidate assessment with typed evidence and audit data."""
 
     strategy_id: str
     strategy_version: str
@@ -172,13 +114,13 @@ class StrategyEvaluation:
     action: CandidateAction
     reference_price: Decimal | None
     invalidation_reference_price: Decimal | None
-    reasons_for: tuple[StrategyReasonCode, ...]
-    reasons_against: tuple[StrategyReasonCode, ...]
-    rule_audit: TrendPullbackRuleAudit
+    reasons_for: tuple[ReasonT, ...]
+    reasons_against: tuple[ReasonT, ...]
+    rule_audit: AuditT
 
 
 @runtime_checkable
-class Strategy(Protocol):
+class Strategy[ReasonT, AuditT](Protocol):
     """Shared strategy interface usable unchanged by every environment adapter."""
 
     @property
@@ -189,5 +131,5 @@ class Strategy(Protocol):
     def strategy_version(self) -> str:
         """Return the immutable strategy rule version."""
 
-    def evaluate(self, context: StrategyEvaluationContext) -> StrategyEvaluation:
+    def evaluate(self, context: StrategyEvaluationContext) -> StrategyEvaluation[ReasonT, AuditT]:
         """Evaluate one already-observed context without side effects."""

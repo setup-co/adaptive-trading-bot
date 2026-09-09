@@ -12,6 +12,7 @@ from adaptive_trading_bot.features import (
     FeatureSnapshot,
     ObservedCandle,
     ObservedCandleBatch,
+    PivotKind,
     StructureBatch,
     StructureSnapshot,
 )
@@ -160,13 +161,17 @@ def _validate_pivots(
     series: FeatureSeries,
     observed_at: datetime,
 ) -> None:
-    for pivot in (snapshot.latest_confirmed_high, snapshot.latest_confirmed_low):
+    for pivot, expected_kind in (
+        (snapshot.latest_confirmed_high, PivotKind.HIGH),
+        (snapshot.latest_confirmed_low, PivotKind.LOW),
+    ):
         if pivot is None:
             continue
         if (
             pivot.source_id != series.source_id
             or pivot.symbol != series.symbol
             or pivot.timeframe is not Timeframe.MINUTES_15
+            or pivot.kind is not expected_kind
             or pivot.confirmed_at > observed_at
         ):
-            raise StrategyContextError("confirmed pivot identity or causality mismatch")
+            raise StrategyContextError("confirmed pivot identity, kind, or causality mismatch")

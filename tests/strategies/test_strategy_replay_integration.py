@@ -58,7 +58,7 @@ def evaluate_replay(
     path: Path, *, extra_candles: int = 0
 ) -> tuple[
     tuple[StrategyEvaluationContext, ...],
-    tuple[StrategyEvaluation, ...],
+    tuple[StrategyEvaluation[object, object], ...],
 ]:
     store = ParquetHistoricalCandleStore(path)
     stored = tuple(
@@ -84,7 +84,7 @@ def evaluate_replay(
     composer = MultiTimeframeRegimeComposer()
     strategy = TrendPullbackStrategy()
     contexts: list[StrategyEvaluationContext] = []
-    evaluations: list[StrategyEvaluation] = []
+    evaluations: list[StrategyEvaluation[object, object]] = []
     for replay_batch in replay:
         observed = observed_candles_from_replay(replay_batch)
         features = feature_engine.process(observed)

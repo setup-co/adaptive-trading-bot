@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from enum import StrEnum
 
 from adaptive_trading_bot.domain import Timeframe
 from adaptive_trading_bot.features import FeatureSnapshot
@@ -12,11 +13,71 @@ from adaptive_trading_bot.strategies.core import (
     CandidateAction,
     StrategyEvaluation,
     StrategyEvaluationContext,
-    StrategyReasonCode,
-    TrendPullbackRuleAudit,
 )
 
 _STRATEGY_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
+
+
+class StrategyReasonCode(StrEnum):
+    """Stable, canonically ordered Trend Pullback evidence and failure codes."""
+
+    CONTEXT_READY = "CONTEXT_READY"
+    REQUIRED_FEATURES_AVAILABLE = "REQUIRED_FEATURES_AVAILABLE"
+    VOLATILITY_ACCEPTABLE = "VOLATILITY_ACCEPTABLE"
+    HTF_TREND_CONFIRMED = "HTF_TREND_CONFIRMED"
+    ENTRY_DIRECTION_COMPATIBLE = "ENTRY_DIRECTION_COMPATIBLE"
+    EMA_TREND_ALIGNED = "EMA_TREND_ALIGNED"
+    VALUE_ZONE_TOUCHED = "VALUE_ZONE_TOUCHED"
+    PULLBACK_DEPTH_ACCEPTABLE = "PULLBACK_DEPTH_ACCEPTABLE"
+    EMA_RECLAIM_CONFIRMED = "EMA_RECLAIM_CONFIRMED"
+    CANDLE_DIRECTION_CONFIRMED = "CANDLE_DIRECTION_CONFIRMED"
+    MOMENTUM_RECOVERY_CONFIRMED = "MOMENTUM_RECOVERY_CONFIRMED"
+    RSI_CONFIRMATION = "RSI_CONFIRMATION"
+    VOLUME_CONFIRMATION = "VOLUME_CONFIRMATION"
+    STRUCTURAL_PIVOT_AVAILABLE = "STRUCTURAL_PIVOT_AVAILABLE"
+    INVALIDATION_GEOMETRY_VALID = "INVALIDATION_GEOMETRY_VALID"
+
+    CONTEXT_NOT_READY = "CONTEXT_NOT_READY"
+    FEATURES_NOT_FULLY_WARMED = "FEATURES_NOT_FULLY_WARMED"
+    MISSING_EMA_20 = "MISSING_EMA_20"
+    MISSING_EMA_50 = "MISSING_EMA_50"
+    MISSING_ATR_14 = "MISSING_ATR_14"
+    MISSING_RSI_14 = "MISSING_RSI_14"
+    MISSING_MOMENTUM_4 = "MISSING_MOMENTUM_4"
+    MISSING_VOLUME_ZSCORE_20 = "MISSING_VOLUME_ZSCORE_20"
+    ATR_NOT_POSITIVE = "ATR_NOT_POSITIVE"
+    EXTREME_VOLATILITY = "EXTREME_VOLATILITY"
+    HTF_BIAS_NOT_DIRECTIONAL = "HTF_BIAS_NOT_DIRECTIONAL"
+    ONE_HOUR_DIRECTION_MISMATCH = "ONE_HOUR_DIRECTION_MISMATCH"
+    FOUR_HOUR_DIRECTION_MISMATCH = "FOUR_HOUR_DIRECTION_MISMATCH"
+    ENTRY_DIRECTION_OPPOSED = "ENTRY_DIRECTION_OPPOSED"
+    EMA_ALIGNMENT_FAILED = "EMA_ALIGNMENT_FAILED"
+    VALUE_ZONE_NOT_TOUCHED = "VALUE_ZONE_NOT_TOUCHED"
+    PULLBACK_TOO_DEEP = "PULLBACK_TOO_DEEP"
+    EMA_RECLAIM_FAILED = "EMA_RECLAIM_FAILED"
+    CANDLE_DIRECTION_FAILED = "CANDLE_DIRECTION_FAILED"
+    MOMENTUM_RECOVERY_FAILED = "MOMENTUM_RECOVERY_FAILED"
+    RSI_CONFIRMATION_FAILED = "RSI_CONFIRMATION_FAILED"
+    VOLUME_CONFIRMATION_FAILED = "VOLUME_CONFIRMATION_FAILED"
+    MISSING_CONFIRMED_LOW = "MISSING_CONFIRMED_LOW"
+    MISSING_CONFIRMED_HIGH = "MISSING_CONFIRMED_HIGH"
+    INVALIDATION_WRONG_SIDE = "INVALIDATION_WRONG_SIDE"
+    INVALIDATION_TOO_WIDE = "INVALIDATION_TOO_WIDE"
+
+
+@dataclass(frozen=True, slots=True)
+class TrendPullbackRuleAudit:
+    """Decimal rule inputs and derived geometry used by one evaluation."""
+
+    ema_20: Decimal | None
+    ema_50: Decimal | None
+    atr_14: Decimal | None
+    rsi_14: Decimal | None
+    momentum_4: Decimal | None
+    volume_zscore_20: Decimal | None
+    value_zone_boundary: Decimal | None
+    structural_pivot_price: Decimal | None
+    invalidation_distance: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +125,9 @@ class TrendPullbackStrategy:
     strategy_id: str = field(init=False, default="trend_pullback")
     strategy_version: str = field(init=False, default="1.0.0")
 
-    def evaluate(self, context: StrategyEvaluationContext) -> StrategyEvaluation:
+    def evaluate(
+        self, context: StrategyEvaluationContext
+    ) -> StrategyEvaluation[StrategyReasonCode, TrendPullbackRuleAudit]:
         """Return a deterministic candidate or explicit NO_TRADE assessment."""
 
         with localcontext(_STRATEGY_DECIMAL_CONTEXT):
@@ -121,7 +184,7 @@ class TrendPullbackStrategy:
         self,
         context: StrategyEvaluationContext,
         common_failures: tuple[StrategyReasonCode, ...],
-    ) -> StrategyEvaluation:
+    ) -> StrategyEvaluation[StrategyReasonCode, TrendPullbackRuleAudit]:
         feature = context.features_15m
         candle = context.candle_15m
         regime = context.multi_timeframe_regime
@@ -187,7 +250,7 @@ class TrendPullbackStrategy:
         self,
         context: StrategyEvaluationContext,
         common_failures: tuple[StrategyReasonCode, ...],
-    ) -> StrategyEvaluation:
+    ) -> StrategyEvaluation[StrategyReasonCode, TrendPullbackRuleAudit]:
         feature = context.features_15m
         candle = context.candle_15m
         regime = context.multi_timeframe_regime
@@ -274,7 +337,7 @@ class TrendPullbackStrategy:
         action: CandidateAction,
         pivot_price: Decimal | None,
         audit: TrendPullbackRuleAudit,
-    ) -> StrategyEvaluation:
+    ) -> StrategyEvaluation[StrategyReasonCode, TrendPullbackRuleAudit]:
         assert pivot_price is not None
         return StrategyEvaluation(
             strategy_id=self.strategy_id,
@@ -312,7 +375,7 @@ class TrendPullbackStrategy:
         action: CandidateAction,
         failures: tuple[StrategyReasonCode, ...],
         audit: TrendPullbackRuleAudit,
-    ) -> StrategyEvaluation:
+    ) -> StrategyEvaluation[StrategyReasonCode, TrendPullbackRuleAudit]:
         return StrategyEvaluation(
             strategy_id=self.strategy_id,
             strategy_version=self.strategy_version,

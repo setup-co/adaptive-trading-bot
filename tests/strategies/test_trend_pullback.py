@@ -1,6 +1,7 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Context, Decimal, getcontext, setcontext
+from enum import StrEnum
 from typing import cast
 
 import pytest
@@ -41,6 +42,7 @@ from adaptive_trading_bot.strategies import (
     StrategyEvaluationContext,
     StrategyReasonCode,
     TrendPullbackConfiguration,
+    TrendPullbackRuleAudit,
     TrendPullbackStrategy,
     assemble_strategy_contexts,
 )
@@ -209,7 +211,9 @@ def evaluation_context(
     return StrategyEvaluationContext(SOURCE, BTC, START, candle, feature, structure, mtf)
 
 
-def evaluate(context: StrategyEvaluationContext) -> StrategyEvaluation:
+def evaluate(
+    context: StrategyEvaluationContext,
+) -> StrategyEvaluation[StrategyReasonCode, TrendPullbackRuleAudit]:
     return TrendPullbackStrategy().evaluate(context)
 
 
@@ -285,6 +289,49 @@ def with_identity(
     )
 
 
+class DummyReason(StrEnum):
+    """Evidence vocabulary owned by a non-Trend-Pullback strategy."""
+
+    OBSERVATION_ACCEPTED = "OBSERVATION_ACCEPTED"
+
+
+@dataclass(frozen=True, slots=True)
+class DummyAudit:
+    """Audit shape unrelated to Trend Pullback indicators and geometry."""
+
+    observation_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class DummyStrategy:
+    """Minimal independent implementation proving the shared contract is reusable."""
+
+    @property
+    def strategy_id(self) -> str:
+        return "dummy"
+
+    @property
+    def strategy_version(self) -> str:
+        return "0.0.1"
+
+    def evaluate(
+        self, context: StrategyEvaluationContext
+    ) -> StrategyEvaluation[DummyReason, DummyAudit]:
+        return StrategyEvaluation(
+            strategy_id=self.strategy_id,
+            strategy_version=self.strategy_version,
+            source_id=context.source_id,
+            symbol=context.symbol,
+            observed_at=context.observed_at,
+            action=CandidateAction.NO_TRADE,
+            reference_price=None,
+            invalidation_reference_price=None,
+            reasons_for=(DummyReason.OBSERVATION_ACCEPTED,),
+            reasons_against=(),
+            rule_audit=DummyAudit(observation_label="dummy-only"),
+        )
+
+
 def test_context_assembler_isolates_symbols_and_sources_in_canonical_order() -> None:
     source_b = SourceId("zz-archive")
     eth = TradingSymbol("ETH", "USDT")
@@ -320,13 +367,52 @@ def test_context_assembler_rejects_mismatched_batch_timestamp() -> None:
         assemble_strategy_contexts(batches[0], batches[1], stale_structures, batches[3])
 
 
+def test_context_assembler_rejects_high_slot_containing_low_pivot() -> None:
+    context = evaluation_context(side=CandidateAction.SHORT_CANDIDATE)
+    high = context.structure_15m.latest_confirmed_high
+    assert high is not None
+    malformed = replace(
+        context.structure_15m,
+        latest_confirmed_high=replace(high, kind=PivotKind.LOW),
+    )
+    batches = batches_for(context)
+    structures = replace(batches[2], snapshots=(malformed,))
+
+    with pytest.raises(StrategyContextError, match="pivot identity, kind, or causality"):
+        assemble_strategy_contexts(batches[0], batches[1], structures, batches[3])
+
+
+def test_context_assembler_rejects_low_slot_containing_high_pivot() -> None:
+    context = evaluation_context()
+    low = context.structure_15m.latest_confirmed_low
+    assert low is not None
+    malformed = replace(
+        context.structure_15m,
+        latest_confirmed_low=replace(low, kind=PivotKind.HIGH),
+    )
+    batches = batches_for(context)
+    structures = replace(batches[2], snapshots=(malformed,))
+
+    with pytest.raises(StrategyContextError, match="pivot identity, kind, or causality"):
+        assemble_strategy_contexts(batches[0], batches[1], structures, batches[3])
+
+
 def test_shared_strategy_protocol_is_environment_neutral_and_callable() -> None:
-    strategy: Strategy = TrendPullbackStrategy()
+    strategy: Strategy[StrategyReasonCode, TrendPullbackRuleAudit] = TrendPullbackStrategy()
 
     assert isinstance(strategy, Strategy)
     assert strategy.strategy_id == "trend_pullback"
     assert strategy.strategy_version == "1.0.0"
     assert strategy.evaluate(evaluation_context()).action is CandidateAction.LONG_CANDIDATE
+
+
+def test_shared_strategy_contract_accepts_independent_reason_and_audit_types() -> None:
+    strategy: Strategy[DummyReason, DummyAudit] = DummyStrategy()
+
+    assert isinstance(strategy, Strategy)
+    result = strategy.evaluate(evaluation_context())
+    assert result.reasons_for == (DummyReason.OBSERVATION_ACCEPTED,)
+    assert result.rule_audit == DummyAudit(observation_label="dummy-only")
 
 
 @pytest.mark.parametrize(
