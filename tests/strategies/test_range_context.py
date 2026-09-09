@@ -235,7 +235,7 @@ def test_configuration_defaults_are_exact_and_reject_floats_and_bools() -> None:
     with pytest.raises(TypeError, match="Decimal"):
         ValidatedRangeConfiguration(boundary_cluster_tolerance_atr=0.4)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="integer"):
-        ValidatedRangeConfiguration(pivot_history_limit=True)  # type: ignore[arg-type]
+        ValidatedRangeConfiguration(pivot_history_limit=True)
 
 
 @pytest.mark.parametrize("invalid_sequence", [1, 0, 3])
@@ -483,14 +483,15 @@ def test_malformed_pivots_fail_closed(malformation: str) -> None:
     detector = ValidatedRangeDetector()
     context = _context(1, ((PivotKind.LOW, Decimal(20), 1),))
     pivot = context.structure_15m.newly_confirmed[0]
-    changes: dict[str, object] = {
+    changes_by_malformation: dict[str, dict[str, object]] = {
         "source": {"source_id": SourceId("wrong")},
         "symbol": {"symbol": ETH},
         "timeframe": {"timeframe": Timeframe.HOUR_1},
         "kind": {"kind": "LOW"},
         "confirmation": {"confirmed_at": context.observed_at - timedelta(minutes=1)},
         "occurrence": {"pivot_open_time": context.observed_at},
-    }[malformation]
+    }
+    changes = changes_by_malformation[malformation]
     malformed = replace(pivot, **changes)  # type: ignore[arg-type]
     structure = replace(
         context.structure_15m,
