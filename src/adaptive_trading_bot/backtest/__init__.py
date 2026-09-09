@@ -1,5 +1,18 @@
 """Deterministic historical execution simulation."""
 
+from adaptive_trading_bot.backtest.accounting import (
+    AccountingBatchResult,
+    AccountingFillBatch,
+    AccountingLedgerResult,
+    FillAccountingEvent,
+    FillBatchError,
+    MarkError,
+    PositionAccountingEngine,
+    PositionAccountingError,
+    PositionMark,
+    PositionSide,
+    PositionSnapshot,
+)
 from adaptive_trading_bot.backtest.execution import (
     BacktestExecutionError,
     BacktestExecutionResult,
@@ -20,6 +33,9 @@ from adaptive_trading_bot.backtest.execution import (
 )
 
 __all__ = [
+    "AccountingBatchResult",
+    "AccountingFillBatch",
+    "AccountingLedgerResult",
     "BacktestExecutionError",
     "BacktestExecutionResult",
     "BacktestExecutionSimulator",
@@ -29,11 +45,19 @@ __all__ = [
     "ExecutionIntegrityError",
     "ExecutionSeries",
     "ExecutionSourceError",
+    "FillAccountingEvent",
+    "FillBatchError",
     "HistoricalExecutionSource",
     "InvalidFillPriceError",
+    "MarkError",
     "MarketFill",
     "MarketOrderRequest",
     "OrderSide",
+    "PositionAccountingEngine",
+    "PositionAccountingError",
+    "PositionMark",
+    "PositionSide",
+    "PositionSnapshot",
     "UnfilledOrder",
     "UnfilledReason",
 ]
