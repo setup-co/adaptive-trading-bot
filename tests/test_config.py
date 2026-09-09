@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from adaptive_trading_bot.config import Environment, Settings
 
 
@@ -5,6 +7,7 @@ def test_live_trading_defaults_to_disabled() -> None:
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.live_trading_enabled is False
+    assert settings.historical_market_data_root == Path("data/market_data")
 
 
 def test_environment_variables_override_defaults(monkeypatch: object) -> None:
