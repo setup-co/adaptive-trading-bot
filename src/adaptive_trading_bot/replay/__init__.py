@@ -1,5 +1,13 @@
 """Deterministic historical candle replay."""
 
+from adaptive_trading_bot.replay.control import (
+    PacedReplayController,
+    ReplayPacingError,
+    ReplaySpeed,
+    ReplayTimer,
+    SystemReplayTimer,
+    planned_wall_delay,
+)
 from adaptive_trading_bot.replay.core import (
     HistoricalReplaySource,
     ReplayBatch,
@@ -19,6 +27,7 @@ from adaptive_trading_bot.replay.core import (
 
 __all__ = [
     "HistoricalReplaySource",
+    "PacedReplayController",
     "ReplayBatch",
     "ReplayClock",
     "ReplayClockError",
@@ -28,8 +37,13 @@ __all__ = [
     "ReplayEvent",
     "ReplayIntegrityError",
     "ReplayIntegrityFailure",
+    "ReplayPacingError",
     "ReplaySeries",
     "ReplaySession",
     "ReplaySource",
     "ReplaySourceError",
+    "ReplaySpeed",
+    "ReplayTimer",
+    "SystemReplayTimer",
+    "planned_wall_delay",
 ]
