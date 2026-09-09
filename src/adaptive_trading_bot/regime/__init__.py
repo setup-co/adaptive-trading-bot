@@ -1,5 +1,15 @@
 """Deterministic causal technical market-regime classification."""
 
+from adaptive_trading_bot.regime.composition import (
+    CompositionBatchError,
+    CompositionSeriesError,
+    HigherTimeframeBias,
+    MultiTimeframeAlignment,
+    MultiTimeframeRegimeBatch,
+    MultiTimeframeRegimeComposer,
+    MultiTimeframeRegimeSnapshot,
+    RegimeCompositionError,
+)
 from adaptive_trading_bot.regime.technical import (
     Direction,
     DirectionComponent,
@@ -19,12 +29,20 @@ from adaptive_trading_bot.regime.technical import (
 )
 
 __all__ = [
+    "CompositionBatchError",
+    "CompositionSeriesError",
     "Direction",
     "DirectionComponent",
     "DirectionEvidence",
     "EventRiskState",
+    "HigherTimeframeBias",
     "LiquidityState",
+    "MultiTimeframeAlignment",
+    "MultiTimeframeRegimeBatch",
+    "MultiTimeframeRegimeComposer",
+    "MultiTimeframeRegimeSnapshot",
     "RegimeBatchError",
+    "RegimeCompositionError",
     "RegimeLabel",
     "RegimeSeriesError",
     "TechnicalRegimeBatch",
