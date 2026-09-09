@@ -120,6 +120,25 @@ written to a same-directory temporary file before atomic replacement. Integrity 
 schema/provenance mismatches, malformed rows, duplicates, physical ordering errors, gaps, and
 overlaps without modifying, interpolating, or synthesizing data.
 
+### Public OHLCV import
+
+Public spot OHLCV acquisition uses CCXT `>=4.5,<5` only at the infrastructure boundary. The
+adapter enables CCXT rate limiting, uses a finite timeout, loads markets, and fails closed unless
+the exchange supports public OHLCV, the requested V1 timeframe, and the exact spot market. Source
+identities use `ccxt-<exchange-id>-spot`; no credentials are accepted or stored.
+
+Run a finite import with UTC-aligned, inclusive-start/exclusive-end boundaries:
+
+```bash
+atb-import-ohlcv --exchange binance --symbol BTC/USDT --timeframe 15m \
+  --start 2026-01-01T00:00:00Z --end 2026-01-02T00:00:00Z
+```
+
+Only candles closed by `min(requested_end, current_time)` are persisted. The command reports its
+effective closed-candle boundary and a non-mutating integrity scan; it never repairs missing data.
+OHLCV values use `Decimal(str(value))` without rounding. If CCXT's JSON decoder has already
+represented a wire number as a binary float, the original lexical precision cannot be recovered.
+
 ## Safety
 
 - No committed secrets.

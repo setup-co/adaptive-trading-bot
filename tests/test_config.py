@@ -8,6 +8,8 @@ def test_live_trading_defaults_to_disabled() -> None:
 
     assert settings.live_trading_enabled is False
     assert settings.historical_market_data_root == Path("data/market_data")
+    assert settings.ccxt_request_timeout_ms == 10_000
+    assert settings.ccxt_ohlcv_page_limit == 500
 
 
 def test_environment_variables_override_defaults(monkeypatch: object) -> None:
