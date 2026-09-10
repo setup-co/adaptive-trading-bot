@@ -49,8 +49,10 @@ class PortfolioAdmissionReasonCode(StrEnum):
     PORTFOLIO_BASELINE_MISMATCH = "PORTFOLIO_BASELINE_MISMATCH"
     DUPLICATE_DECISION = "DUPLICATE_DECISION"
     DUPLICATE_PENDING_RESERVATION = "DUPLICATE_PENDING_RESERVATION"
+    DUPLICATE_PENDING_SYMBOL_RESERVATION = "DUPLICATE_PENDING_SYMBOL_RESERVATION"
     INVALID_PENDING_RESERVATION = "INVALID_PENDING_RESERVATION"
     ALREADY_RESERVED_INTENT = "ALREADY_RESERVED_INTENT"
+    PENDING_SYMBOL_ALREADY_RESERVED = "PENDING_SYMBOL_ALREADY_RESERVED"
     PENDING_SNAPSHOT_TIME_MISMATCH = "PENDING_SNAPSHOT_TIME_MISMATCH"
     AUTHORITY_REVALIDATION_FAILED = "AUTHORITY_REVALIDATION_FAILED"
     COMBINED_SIMULTANEOUS_RISK_WITHIN_CAP = "COMBINED_SIMULTANEOUS_RISK_WITHIN_CAP"
@@ -308,6 +310,13 @@ class PortfolioAdmissionGate:
                 pending_reservations.observed_at,
                 PortfolioAdmissionReasonCode.DUPLICATE_PENDING_RESERVATION,
             )
+        pending_symbols = tuple(item.symbol for item in pending_reservations.reservations)
+        if _has_duplicate(pending_symbols):
+            return self._integrity_result(
+                candidates,
+                pending_reservations.observed_at,
+                PortfolioAdmissionReasonCode.DUPLICATE_PENDING_SYMBOL_RESERVATION,
+            )
         if any(
             identity in reservation_ids for identity in (item.intent.identity for item in ordered)
         ):
@@ -332,7 +341,12 @@ class PortfolioAdmissionGate:
         for item in ordered:
             key = (item.intent.source_id.value, item.intent.symbol, item.intent.observed_at)
             groups.setdefault(key, []).append(item)
-        unique = tuple(item for item in ordered if len(groups[_arbitration_key(item)]) == 1)
+        unique = tuple(
+            item
+            for item in ordered
+            if len(groups[_arbitration_key(item)]) == 1
+            and item.intent.symbol not in pending_symbols
+        )
         conflicts = frozenset(
             item.intent.decision_identity
             for item in ordered
@@ -360,6 +374,18 @@ class PortfolioAdmissionGate:
                         (
                             PortfolioAdmissionReasonCode.AUTHORITY_REVALIDATED,
                             PortfolioAdmissionReasonCode.STRATEGY_CONFLICT_NO_SELECTION,
+                        ),
+                        None,
+                    )
+                )
+            elif item.intent.symbol in pending_symbols:
+                results.append(
+                    PortfolioAdmissionCandidateResult(
+                        identity,
+                        PortfolioAdmissionStatus.NO_ADMISSION,
+                        (
+                            PortfolioAdmissionReasonCode.AUTHORITY_REVALIDATED,
+                            PortfolioAdmissionReasonCode.PENDING_SYMBOL_ALREADY_RESERVED,
                         ),
                         None,
                     )

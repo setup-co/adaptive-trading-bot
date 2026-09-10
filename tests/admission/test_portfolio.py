@@ -51,13 +51,14 @@ _health = _HELPERS["_health"]
 def _candidate(
     *,
     symbol: TradingSymbol = BTC,
+    source_id: SourceId = SOURCE,
     strategy_id: str = "manual",
     configuration: RiskManagerConfiguration | None = None,
     portfolio: RiskPortfolioSnapshot | None = None,
     reason: object = "reason",
     audit: object = "audit",
 ) -> PortfolioAdmissionCandidate[object, object]:
-    context = _context(symbol=symbol)
+    context = _context(source_id=source_id, symbol=symbol)
     evaluation = _manual_evaluation(
         context,
         strategy_id=strategy_id,
@@ -249,6 +250,86 @@ def test_already_reserved_candidate_rejects_batch() -> None:
 
     assert result.status is PortfolioAdmissionStatus.REJECTED_INCONSISTENT
     assert result.reasons == (PortfolioAdmissionReasonCode.ALREADY_RESERVED_INTENT,)
+
+
+def test_different_candidate_for_pending_symbol_receives_no_admission() -> None:
+    pending_candidate = _candidate(
+        symbol=BTC,
+        source_id=SourceId("different-source"),
+        strategy_id="earlier",
+    )
+    later_candidate = _candidate(symbol=BTC, strategy_id="later")
+    pending = PendingReservationSnapshot(
+        NOW,
+        "USDT",
+        (_reservation(pending_candidate),),
+    )
+
+    result = _evaluate(later_candidate, pending=pending)
+
+    assert result.status is PortfolioAdmissionStatus.NO_ADMISSION
+    assert result.permits == ()
+    assert result.candidate_results[0].reasons == (
+        PortfolioAdmissionReasonCode.AUTHORITY_REVALIDATED,
+        PortfolioAdmissionReasonCode.PENDING_SYMBOL_ALREADY_RESERVED,
+    )
+
+
+def test_pending_btc_blocks_btc_from_cap_set_but_unrelated_eth_admits_at_boundary() -> None:
+    configuration = RiskManagerConfiguration(max_gross_exposure_fraction=Decimal("0.0175"))
+    pending_candidate = _candidate(symbol=BTC, strategy_id="earlier")
+    blocked_btc = _candidate(symbol=BTC, strategy_id="later", configuration=configuration)
+    eth = _candidate(symbol=ETH, configuration=configuration)
+    pending = PendingReservationSnapshot(
+        NOW,
+        "USDT",
+        (
+            PendingPortfolioReservation(
+                pending_candidate.intent.identity,
+                pending_candidate.intent.source_id,
+                pending_candidate.intent.symbol,
+                Decimal(25),
+                Decimal("87.5"),
+            ),
+        ),
+    )
+
+    result = _evaluate(blocked_btc, eth, pending=pending)
+    permuted = _evaluate(eth, blocked_btc, pending=pending)
+
+    assert result == permuted
+    assert result.status is PortfolioAdmissionStatus.ADMITTED
+    assert tuple(permit.symbol for permit in result.permits) == (ETH,)
+    btc_result = next(
+        item for item in result.candidate_results if item.decision_identity.symbol == BTC
+    )
+    eth_result = next(
+        item for item in result.candidate_results if item.decision_identity.symbol == ETH
+    )
+    assert btc_result.status is PortfolioAdmissionStatus.NO_ADMISSION
+    assert btc_result.reasons[-1] is PortfolioAdmissionReasonCode.PENDING_SYMBOL_ALREADY_RESERVED
+    assert eth_result.status is PortfolioAdmissionStatus.ADMITTED
+    assert PortfolioAdmissionReasonCode.COMBINED_SIMULTANEOUS_RISK_WITHIN_CAP in eth_result.reasons
+    assert PortfolioAdmissionReasonCode.COMBINED_GROSS_EXPOSURE_WITHIN_CAP in eth_result.reasons
+
+
+def test_distinct_pending_intents_for_same_symbol_are_inconsistent() -> None:
+    first = _candidate(symbol=BTC, strategy_id="first")
+    second = _candidate(symbol=BTC, strategy_id="second")
+    candidate = _candidate(symbol=ETH)
+
+    result = _evaluate(
+        candidate,
+        pending=PendingReservationSnapshot(
+            NOW,
+            "USDT",
+            (_reservation(second), _reservation(first)),
+        ),
+    )
+
+    assert result.status is PortfolioAdmissionStatus.REJECTED_INCONSISTENT
+    assert result.permits == ()
+    assert result.reasons == (PortfolioAdmissionReasonCode.DUPLICATE_PENDING_SYMBOL_RESERVATION,)
 
 
 def test_pending_snapshot_must_match_batch_instant() -> None:
