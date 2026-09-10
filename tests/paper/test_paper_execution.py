@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError, fields, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -19,16 +19,18 @@ from adaptive_trading_bot.backtest import (
 )
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.execution import SimulatedExecutionCostConfiguration
-from adaptive_trading_bot.journal import DecisionJournalEntry
+from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import (
     EntryOrderIntent,
     EntryOrderIntentAuthorizer,
+    EntryOrderIntentIdentity,
     EntrySide,
     OrderIntentAuthorizationStatus,
 )
 from adaptive_trading_bot.paper import (
     PaperAuthorizationError,
     PaperExecutionObservation,
+    PaperLifecycleError,
     PaperObservationError,
     PaperOrderLifecycle,
     PaperOrderSimulator,
@@ -97,7 +99,8 @@ def test_valid_authority_starts_pending(short: bool, side: EntrySide) -> None:
     lifecycle = PaperOrderSimulator().start(entry, intent, costs)
 
     assert lifecycle.status is PaperOrderStatus.PENDING
-    assert lifecycle.intent is intent
+    assert lifecycle.intent == intent
+    assert lifecycle.intent is not intent
     assert lifecycle.intent.side is side
     assert lifecycle.eligible_at == intent.authorized_at + timedelta(seconds=7)
     assert lifecycle.last_observed_at is None
@@ -215,6 +218,49 @@ def test_observation_requires_utc_aware_time() -> None:
             NOW.replace(tzinfo=None),
             Decimal(100),
         )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("quantity", Decimal("1E+50")),
+        ("side", EntrySide.SELL),
+        ("reference_price", Decimal(999)),
+        ("stop_basis", Decimal(1)),
+        ("risk_policy_version", "forged-risk-policy"),
+        ("safety_policy_version", "forged-safety-policy"),
+        ("authorized_for_execution", False),
+        (
+            "decision_identity",
+            DecisionIdentity(SourceId("archive"), BTC, NOW, "forged", "1.0.0"),
+        ),
+        (
+            "identity",
+            EntryOrderIntentIdentity(
+                DecisionIdentity(SourceId("archive"), BTC, NOW, "forged", "1.0.0")
+            ),
+        ),
+    ],
+)
+def test_post_start_intent_drift_fails_before_pricing_or_fill(
+    field_name: str,
+    value: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry, intent = _authority()
+    simulator = PaperOrderSimulator()
+    lifecycle = simulator.start(entry, intent, SimulatedExecutionCostConfiguration())
+    object.__setattr__(intent, field_name, value)
+
+    def forbidden_pricing(**kwargs: object) -> NoReturn:
+        raise AssertionError(f"pricing must not run after authority drift: {kwargs}")
+
+    monkeypatch.setattr(paper_module, "price_simulated_market_fill", forbidden_pricing)
+    with pytest.raises(PaperLifecycleError, match="authority drifted"):
+        simulator.observe(lifecycle, _observation())
+
+    assert lifecycle.status is PaperOrderStatus.PENDING
+    assert lifecycle.fill is None
 
 
 @pytest.mark.parametrize(

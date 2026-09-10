@@ -21,6 +21,7 @@ from adaptive_trading_bot.execution import (
 )
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import (
+    EntryIntentPurpose,
     EntryOrderIntent,
     EntryOrderIntentAuthorizer,
     EntryOrderIntentIdentity,
@@ -62,6 +63,32 @@ class PaperOrderIdentity:
 
     intent_identity: EntryOrderIntentIdentity
     simulation_schema_version: str = field(init=False, default=_PAPER_SIMULATION_SCHEMA_VERSION)
+
+
+@dataclass(frozen=True, slots=True)
+class PaperAuthorizationSnapshot:
+    """Detached immutable values accepted from an exact authorization at start."""
+
+    source_id_value: str
+    symbol: TradingSymbol
+    observed_at: datetime
+    strategy_id: str
+    strategy_version: str
+    intent_identity_decision: tuple[str, str, str, datetime, str, str]
+    decision_identity: tuple[str, str, str, datetime, str, str]
+    intent_purpose: EntryIntentPurpose
+    intent_schema_version: str
+    authorized_at: datetime
+    risk_policy_version: str
+    safety_policy_version: str
+    side: EntrySide
+    quantity: Decimal
+    approved_notional_quote: Decimal
+    approved_risk_quote: Decimal
+    stop_basis: Decimal
+    reference_price: Decimal
+    quote_currency: str
+    authorized_for_execution: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,11 +152,13 @@ class PaperOrderLifecycle:
 
     identity: PaperOrderIdentity
     intent: EntryOrderIntent
+    accepted_authorization: PaperAuthorizationSnapshot
     costs: SimulatedExecutionCostConfiguration
     status: PaperOrderStatus
     eligible_at: datetime
     last_observed_at: datetime | None
     fill: PaperMarketFill | None
+    _supplied_intent: EntryOrderIntent = field(repr=False, compare=False)
     _authorization_seal: object = field(repr=False, compare=False)
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
@@ -177,8 +206,12 @@ class PaperOrderSimulator:
             raise PaperAuthorizationError(
                 "intent does not exactly match reauthorized journal authority"
             )
+        accepted_intent = authorization.intent
+        accepted_authorization = _snapshot_authorization(accepted_intent)
         return _create_lifecycle(
-            intent=intent,
+            intent=accepted_intent,
+            supplied_intent=intent,
+            accepted_authorization=accepted_authorization,
             costs=costs,
             status=PaperOrderStatus.PENDING,
             last_observed_at=None,
@@ -202,9 +235,13 @@ class PaperOrderSimulator:
         except (TypeError, ValueError) as error:
             raise PaperObservationError("paper observation is invalid") from error
         intent = lifecycle.intent
-        if observation.source_id != intent.source_id or observation.symbol != intent.symbol:
+        authority = lifecycle.accepted_authorization
+        if (
+            observation.source_id.value != authority.source_id_value
+            or observation.symbol != authority.symbol
+        ):
             raise PaperObservationError("observation identity does not match intent")
-        if observation.observed_at < intent.authorized_at:
+        if observation.observed_at < authority.authorized_at:
             raise PaperObservationError("observation precedes intent authorization")
         if (
             lifecycle.last_observed_at is not None
@@ -216,6 +253,8 @@ class PaperOrderSimulator:
         if observation.observed_at < lifecycle.eligible_at:
             return _create_lifecycle(
                 intent=intent,
+                supplied_intent=lifecycle._supplied_intent,
+                accepted_authorization=authority,
                 costs=lifecycle.costs,
                 status=PaperOrderStatus.PENDING,
                 last_observed_at=observation.observed_at,
@@ -224,12 +263,12 @@ class PaperOrderSimulator:
 
         side = (
             SimulatedExecutionSide.BUY
-            if intent.side is EntrySide.BUY
+            if authority.side is EntrySide.BUY
             else SimulatedExecutionSide.SELL
         )
         quote = price_simulated_market_fill(
             side=side,
-            quantity=intent.quantity,
+            quantity=authority.quantity,
             reference_price=observation.reference_price,
             costs=lifecycle.costs,
         )
@@ -238,9 +277,9 @@ class PaperOrderSimulator:
             decision_identity=intent.decision_identity,
             source_id=intent.source_id,
             symbol=intent.symbol,
-            side=intent.side,
-            quantity=intent.quantity,
-            authorized_at=intent.authorized_at,
+            side=authority.side,
+            quantity=authority.quantity,
+            authorized_at=authority.authorized_at,
             eligible_at=lifecycle.eligible_at,
             fill_at=observation.observed_at,
             reference_price=observation.reference_price,
@@ -249,11 +288,13 @@ class PaperOrderSimulator:
             fill_price=quote.fill_price,
             fee_bps=lifecycle.costs.fee_bps,
             fee_quote=quote.fee_quote,
-            risk_policy_version=intent.risk_policy_version,
-            safety_policy_version=intent.safety_policy_version,
+            risk_policy_version=authority.risk_policy_version,
+            safety_policy_version=authority.safety_policy_version,
         )
         return _create_lifecycle(
             intent=intent,
+            supplied_intent=lifecycle._supplied_intent,
+            accepted_authorization=authority,
             costs=lifecycle.costs,
             status=PaperOrderStatus.FILLED,
             last_observed_at=observation.observed_at,
@@ -264,6 +305,8 @@ class PaperOrderSimulator:
 def _create_lifecycle(
     *,
     intent: EntryOrderIntent,
+    supplied_intent: EntryOrderIntent,
+    accepted_authorization: PaperAuthorizationSnapshot,
     costs: SimulatedExecutionCostConfiguration,
     status: PaperOrderStatus,
     last_observed_at: datetime | None,
@@ -273,11 +316,13 @@ def _create_lifecycle(
     values: tuple[tuple[str, object], ...] = (
         ("identity", PaperOrderIdentity(intent.identity)),
         ("intent", intent),
+        ("accepted_authorization", accepted_authorization),
         ("costs", costs),
         ("status", status),
-        ("eligible_at", intent.authorized_at + costs.latency),
+        ("eligible_at", accepted_authorization.authorized_at + costs.latency),
         ("last_observed_at", last_observed_at),
         ("fill", fill),
+        ("_supplied_intent", supplied_intent),
         ("_authorization_seal", _PAPER_LIFECYCLE_TOKEN),
     )
     for name, value in values:
@@ -288,20 +333,26 @@ def _create_lifecycle(
 
 def _validate_lifecycle(lifecycle: PaperOrderLifecycle) -> None:
     intent = lifecycle.intent
+    authority = lifecycle.accepted_authorization
     costs = lifecycle.costs
     if lifecycle._authorization_seal is not _PAPER_LIFECYCLE_TOKEN:
         raise PaperLifecycleError("lifecycle was not created by PaperOrderSimulator")
+    if (
+        _snapshot_authorization(intent) != authority
+        or _snapshot_authorization(lifecycle._supplied_intent) != authority
+    ):
+        raise PaperLifecycleError("intent authority drifted after Paper start")
     try:
         costs.validate()
     except (TypeError, ValueError) as error:
         raise PaperLifecycleError("lifecycle costs are invalid") from error
     if (
         lifecycle.identity != PaperOrderIdentity(intent.identity)
-        or lifecycle.eligible_at != intent.authorized_at + costs.latency
+        or lifecycle.eligible_at != authority.authorized_at + costs.latency
         or lifecycle.status not in {PaperOrderStatus.PENDING, PaperOrderStatus.FILLED}
         or (
             lifecycle.last_observed_at is not None
-            and lifecycle.last_observed_at < intent.authorized_at
+            and lifecycle.last_observed_at < authority.authorized_at
         )
     ):
         raise PaperLifecycleError("lifecycle identity, time, or status is inconsistent")
@@ -316,10 +367,10 @@ def _validate_lifecycle(lifecycle: PaperOrderLifecycle) -> None:
         quote = price_simulated_market_fill(
             side=(
                 SimulatedExecutionSide.BUY
-                if intent.side is EntrySide.BUY
+                if authority.side is EntrySide.BUY
                 else SimulatedExecutionSide.SELL
             ),
-            quantity=intent.quantity,
+            quantity=authority.quantity,
             reference_price=fill.reference_price,
             costs=costs,
         )
@@ -330,9 +381,9 @@ def _validate_lifecycle(lifecycle: PaperOrderLifecycle) -> None:
         or fill.decision_identity != intent.decision_identity
         or fill.source_id != intent.source_id
         or fill.symbol != intent.symbol
-        or fill.side is not intent.side
-        or fill.quantity != intent.quantity
-        or fill.authorized_at != intent.authorized_at
+        or fill.side is not authority.side
+        or fill.quantity != authority.quantity
+        or fill.authorized_at != authority.authorized_at
         or fill.eligible_at != lifecycle.eligible_at
         or fill.fill_at < lifecycle.eligible_at
         or fill.spread_bps != costs.spread_bps
@@ -340,7 +391,47 @@ def _validate_lifecycle(lifecycle: PaperOrderLifecycle) -> None:
         or fill.fee_bps != costs.fee_bps
         or fill.fill_price != quote.fill_price
         or fill.fee_quote != quote.fee_quote
-        or fill.risk_policy_version != intent.risk_policy_version
-        or fill.safety_policy_version != intent.safety_policy_version
+        or fill.risk_policy_version != authority.risk_policy_version
+        or fill.safety_policy_version != authority.safety_policy_version
     ):
         raise PaperLifecycleError("fill does not exactly preserve intent authority")
+
+
+def _snapshot_authorization(intent: EntryOrderIntent) -> PaperAuthorizationSnapshot:
+    """Copy every execution-relevant value without retaining mutable identity aliases."""
+
+    return PaperAuthorizationSnapshot(
+        source_id_value=intent.source_id.value,
+        symbol=TradingSymbol(intent.symbol.base, intent.symbol.quote),
+        observed_at=intent.observed_at,
+        strategy_id=intent.strategy_id,
+        strategy_version=intent.strategy_version,
+        intent_identity_decision=_identity_fingerprint(intent.identity.decision_identity),
+        decision_identity=_identity_fingerprint(intent.decision_identity),
+        intent_purpose=intent.identity.purpose,
+        intent_schema_version=intent.identity.intent_schema_version,
+        authorized_at=intent.authorized_at,
+        risk_policy_version=intent.risk_policy_version,
+        safety_policy_version=intent.safety_policy_version,
+        side=intent.side,
+        quantity=intent.quantity,
+        approved_notional_quote=intent.approved_notional_quote,
+        approved_risk_quote=intent.approved_risk_quote,
+        stop_basis=intent.stop_basis,
+        reference_price=intent.reference_price,
+        quote_currency=intent.quote_currency,
+        authorized_for_execution=intent.authorized_for_execution,
+    )
+
+
+def _identity_fingerprint(
+    identity: DecisionIdentity,
+) -> tuple[str, str, str, datetime, str, str]:
+    return (
+        identity.source_id.value,
+        identity.symbol.base,
+        identity.symbol.quote,
+        identity.observed_at,
+        identity.strategy_id,
+        identity.strategy_version,
+    )

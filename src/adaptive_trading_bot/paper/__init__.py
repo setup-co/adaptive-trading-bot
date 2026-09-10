@@ -2,6 +2,7 @@
 
 from adaptive_trading_bot.paper.execution import (
     PaperAuthorizationError,
+    PaperAuthorizationSnapshot,
     PaperExecutionError,
     PaperExecutionObservation,
     PaperLifecycleError,
@@ -15,6 +16,7 @@ from adaptive_trading_bot.paper.execution import (
 
 __all__ = [
     "PaperAuthorizationError",
+    "PaperAuthorizationSnapshot",
     "PaperExecutionError",
     "PaperExecutionObservation",
     "PaperLifecycleError",
