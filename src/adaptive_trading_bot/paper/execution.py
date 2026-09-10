@@ -6,6 +6,7 @@ reservation, positions, balances, exits, persistence, and live execution are def
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -175,6 +176,31 @@ class PaperOrderSimulator:
     """Start and causally advance one authorized Paper lifecycle at a time."""
 
     __slots__ = ()
+
+    def clone(self, lifecycle: PaperOrderLifecycle) -> PaperOrderLifecycle:
+        """Return a detached authoritative lifecycle for atomic coordinator staging."""
+
+        if type(lifecycle) is not PaperOrderLifecycle:
+            raise TypeError("lifecycle must be a PaperOrderLifecycle")
+        _validate_lifecycle(lifecycle)
+        intent = _copy_authoritative_intent(lifecycle.intent)
+        supplied_intent = _copy_authoritative_intent(lifecycle._supplied_intent)
+        costs = SimulatedExecutionCostConfiguration(
+            spread_bps=lifecycle.costs.spread_bps,
+            slippage_bps=lifecycle.costs.slippage_bps,
+            fee_bps=lifecycle.costs.fee_bps,
+            latency=lifecycle.costs.latency,
+        )
+        fill = None if lifecycle.fill is None else _copy_paper_fill(lifecycle.fill)
+        return _create_lifecycle(
+            intent=intent,
+            supplied_intent=supplied_intent,
+            accepted_authorization=_snapshot_authorization(intent),
+            costs=costs,
+            status=lifecycle.status,
+            last_observed_at=lifecycle.last_observed_at,
+            fill=fill,
+        )
 
     def start[ReasonT, AuditT](
         self,
@@ -434,4 +460,72 @@ def _identity_fingerprint(
         identity.observed_at,
         identity.strategy_id,
         identity.strategy_version,
+    )
+
+
+def _copy_authoritative_intent(intent: EntryOrderIntent) -> EntryOrderIntent:
+    """Copy an already-validated intent without exposing a public minting path."""
+
+    source_id = deepcopy(intent.source_id)
+    decision = DecisionIdentity(
+        source_id,
+        TradingSymbol(intent.symbol.base, intent.symbol.quote),
+        intent.observed_at,
+        intent.strategy_id,
+        intent.strategy_version,
+    )
+    copied = object.__new__(EntryOrderIntent)
+    values: tuple[tuple[str, object], ...] = (
+        ("identity", EntryOrderIntentIdentity(decision)),
+        ("decision_identity", decision),
+        ("source_id", source_id),
+        ("symbol", decision.symbol),
+        ("observed_at", decision.observed_at),
+        ("authorized_at", intent.authorized_at),
+        ("strategy_id", decision.strategy_id),
+        ("strategy_version", decision.strategy_version),
+        ("risk_policy_version", intent.risk_policy_version),
+        ("safety_policy_version", intent.safety_policy_version),
+        ("side", intent.side),
+        ("quantity", intent.quantity),
+        ("approved_notional_quote", intent.approved_notional_quote),
+        ("approved_risk_quote", intent.approved_risk_quote),
+        ("stop_basis", intent.stop_basis),
+        ("reference_price", intent.reference_price),
+        ("quote_currency", intent.quote_currency),
+        ("authorized_for_execution", intent.authorized_for_execution),
+    )
+    for name, value in values:
+        object.__setattr__(copied, name, value)
+    if _snapshot_authorization(copied) != _snapshot_authorization(intent):
+        raise PaperLifecycleError("detached intent copy lost accepted authority")
+    return copied
+
+
+def _copy_paper_fill(fill: PaperMarketFill) -> PaperMarketFill:
+    decision = DecisionIdentity(
+        deepcopy(fill.source_id),
+        TradingSymbol(fill.symbol.base, fill.symbol.quote),
+        fill.decision_identity.observed_at,
+        fill.decision_identity.strategy_id,
+        fill.decision_identity.strategy_version,
+    )
+    return PaperMarketFill(
+        EntryOrderIntentIdentity(decision),
+        decision,
+        decision.source_id,
+        decision.symbol,
+        fill.side,
+        fill.quantity,
+        fill.authorized_at,
+        fill.eligible_at,
+        fill.fill_at,
+        fill.reference_price,
+        fill.spread_bps,
+        fill.slippage_bps,
+        fill.fill_price,
+        fill.fee_bps,
+        fill.fee_quote,
+        fill.risk_policy_version,
+        fill.safety_policy_version,
     )

@@ -223,6 +223,31 @@ def test_committed_state_is_detached_from_raw_mutation_of_inputs_and_outputs() -
     assert core.transitions[0].fill.quantity == 1
 
 
+def test_clone_is_independent_and_preserves_complete_deterministic_state() -> None:
+    core = PositionAccountingCore()
+    first = fill("first", side=SimulatedExecutionSide.BUY, quantity=Decimal(1), price=Decimal(100))
+    apply(core, first)
+
+    cloned = core.clone()
+    assert cloned.position(BTC) == core.position(BTC)
+    assert cloned.transitions == core.transitions
+    assert cloned.last_fill_at == core.last_fill_at
+
+    second = fill(
+        "second",
+        side=SimulatedExecutionSide.SELL,
+        quantity=Decimal(1),
+        price=Decimal(110),
+        minute=1,
+    )
+    apply(cloned, second)
+
+    assert core.position(BTC).quantity == 1
+    assert len(core.transitions) == 1
+    assert cloned.position(BTC).quantity == 0
+    assert len(cloned.transitions) == 2
+
+
 def test_shared_accounting_has_no_environment_or_side_effect_dependencies() -> None:
     assert accounting_module.__file__ is not None
     tree = ast.parse(Path(accounting_module.__file__).read_text(encoding="utf-8"))
