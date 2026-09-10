@@ -356,6 +356,12 @@ class OperationalSafetyGate:
             )
 
 
+def risk_decision_is_internally_consistent(decision: RiskDecision) -> bool:
+    """Return whether a RiskDecision satisfies the gate's authoritative invariants."""
+
+    return _risk_decision_is_consistent(decision)
+
+
 def _risk_decision_is_consistent(decision: RiskDecision) -> bool:
     if type(decision.requires_halt_review) is not bool:
         return False

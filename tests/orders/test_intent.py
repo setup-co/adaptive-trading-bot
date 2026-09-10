@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError, replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -11,6 +12,7 @@ import adaptive_trading_bot.orders.intent as intent_module
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders import (
     EntryIntentPurpose,
+    EntryOrderIntent,
     EntryOrderIntentAuthorizer,
     EntrySide,
     InMemoryOrderIntentLedger,
@@ -91,6 +93,39 @@ def test_long_cleared_chain_creates_exact_buy_intent() -> None:
     assert intent.risk_policy_version == entry.risk_decision.risk_policy_version
     assert intent.safety_policy_version == entry.safety_decision.safety_policy_version
     assert intent.authorized_for_execution is True
+
+
+def test_public_constructor_cannot_mint_executable_or_oversized_intent() -> None:
+    authorized = _authorize().intent
+    assert authorized is not None
+    public_constructor = cast(Any, EntryOrderIntent)
+
+    with pytest.raises(TypeError, match="only be created by its authorizer"):
+        public_constructor(
+            identity=authorized.identity,
+            decision_identity=authorized.decision_identity,
+            source_id=authorized.source_id,
+            symbol=authorized.symbol,
+            observed_at=authorized.observed_at,
+            authorized_at=authorized.authorized_at,
+            strategy_id="forged-strategy",
+            strategy_version="forged-version",
+            risk_policy_version="forged-risk-policy",
+            safety_policy_version="forged-safety-policy",
+            side=EntrySide.SELL,
+            quantity=Decimal("1E+99"),
+            approved_notional_quote=Decimal("1E+99"),
+            approved_risk_quote=Decimal("1E+99"),
+            stop_basis=Decimal(1),
+            reference_price=Decimal(1),
+            quote_currency="USDT",
+        )
+
+    with pytest.raises(TypeError, match="only be created by its authorizer"):
+        public_constructor(_authorization_token=object())
+
+    with pytest.raises(TypeError, match="only be created by its authorizer"):
+        replace(authorized, quantity=Decimal("1E+99"))
 
 
 def test_short_cleared_chain_creates_sell_intent() -> None:
@@ -231,6 +266,30 @@ def test_forged_sizing_mismatch_rejects(field_name: str) -> None:
 
     assert result.status is OrderIntentAuthorizationStatus.REJECTED_INCONSISTENT
     assert OrderIntentAuthorizationReasonCode.SIZING_MISMATCH in result.reasons
+
+
+def test_coordinated_risk_and_safety_quantity_upsize_cannot_create_intent() -> None:
+    entry = _entry()
+    approved = entry.risk_decision.approved_quantity
+    assert isinstance(approved, Decimal)
+    oversized = approved * Decimal(2)
+    object.__setattr__(
+        entry,
+        "risk_decision",
+        replace(entry.risk_decision, approved_quantity=oversized),
+    )
+    object.__setattr__(
+        entry,
+        "safety_decision",
+        replace(entry.safety_decision, approved_quantity=oversized),
+    )
+
+    result = EntryOrderIntentAuthorizer().authorize(entry)
+
+    assert result.status is OrderIntentAuthorizationStatus.REJECTED_INCONSISTENT
+    assert OrderIntentAuthorizationReasonCode.PERMISSION_INCONSISTENT in result.reasons
+    assert OrderIntentAuthorizationReasonCode.SIZING_MISMATCH not in result.reasons
+    assert result.intent is None
 
 
 @pytest.mark.parametrize(

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Self
 
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
@@ -21,10 +22,12 @@ from adaptive_trading_bot.risk import (
     OperationalSafetyStatus,
     RiskDecisionStatus,
     RiskReasonCode,
+    risk_decision_is_internally_consistent,
 )
 from adaptive_trading_bot.strategies.core import CandidateAction, SourceIdentity
 
 _INTENT_SCHEMA_VERSION = "1.0.0"
+_ENTRY_INTENT_AUTHORIZATION_TOKEN = object()
 
 
 class EntryIntentPurpose(StrEnum):
@@ -81,9 +84,9 @@ class EntryOrderIntentIdentity:
     intent_schema_version: str = field(init=False, default=_INTENT_SCHEMA_VERSION)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class EntryOrderIntent:
-    """Exact authorization carried forward for a later environment adapter."""
+    """Exact authorization carried forward; instances come only from the authorizer."""
 
     identity: EntryOrderIntentIdentity
     decision_identity: DecisionIdentity
@@ -103,6 +106,16 @@ class EntryOrderIntent:
     reference_price: Decimal
     quote_currency: str
     authorized_for_execution: bool = field(init=False, default=True)
+
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        authorization_token = kwargs.pop("_authorization_token", None)
+        if args or kwargs or authorization_token is not _ENTRY_INTENT_AUTHORIZATION_TOKEN:
+            raise TypeError("EntryOrderIntent can only be created by its authorizer")
+        return object.__new__(cls)
+
+    def __init__(self, *, _authorization_token: object) -> None:
+        # The private factory initializes frozen slots only after token validation.
+        del _authorization_token
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,34 +185,7 @@ class EntryOrderIntentAuthorizer:
                 ),
             )
 
-        quantity = _approved_decimal(safety.approved_quantity)
-        notional = _approved_decimal(safety.approved_notional_quote)
-        approved_risk = _approved_decimal(safety.approved_risk_quote)
-        stop_basis = _approved_decimal(safety.approved_risk_stop_basis)
-        reference_price = _approved_decimal(risk.reference_price)
-        side = (
-            EntrySide.BUY if evaluation.action is CandidateAction.LONG_CANDIDATE else EntrySide.SELL
-        )
-        identity = EntryOrderIntentIdentity(journal_entry.identity)
-        intent = EntryOrderIntent(
-            identity=identity,
-            decision_identity=journal_entry.identity,
-            source_id=journal_entry.identity.source_id,
-            symbol=journal_entry.identity.symbol,
-            observed_at=journal_entry.identity.observed_at,
-            authorized_at=journal_entry.identity.observed_at,
-            strategy_id=journal_entry.identity.strategy_id,
-            strategy_version=journal_entry.identity.strategy_version,
-            risk_policy_version=risk.risk_policy_version,
-            safety_policy_version=safety.safety_policy_version,
-            side=side,
-            quantity=quantity,
-            approved_notional_quote=notional,
-            approved_risk_quote=approved_risk,
-            stop_basis=stop_basis,
-            reference_price=reference_price,
-            quote_currency=risk.quote_currency,
-        )
+        intent = _create_entry_order_intent(journal_entry)
         return _result(
             journal_entry,
             OrderIntentAuthorizationStatus.AUTHORIZED,
@@ -277,6 +263,7 @@ def _prevalidation_reasons(
         cleared
         and (
             risk.status is not RiskDecisionStatus.APPROVED
+            or not risk_decision_is_internally_consistent(risk)
             or evaluation.action
             not in {CandidateAction.LONG_CANDIDATE, CandidateAction.SHORT_CANDIDATE}
             or risk.requires_halt_review
@@ -389,6 +376,85 @@ def _approved_decimal(value: Decimal | None) -> Decimal:
     if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
         raise ValueError("approved Decimal was not validated")
     return value
+
+
+def _create_entry_order_intent(
+    entry: DecisionJournalEntry[object, object],
+) -> EntryOrderIntent:
+    """Create an intent only after the caller has validated the complete journal chain."""
+
+    evaluation = entry.strategy_evaluation
+    risk = entry.risk_decision
+    safety = entry.safety_decision
+    intent = EntryOrderIntent(_authorization_token=_ENTRY_INTENT_AUTHORIZATION_TOKEN)
+    values: tuple[tuple[str, object], ...] = (
+        ("identity", EntryOrderIntentIdentity(entry.identity)),
+        ("decision_identity", entry.identity),
+        ("source_id", entry.identity.source_id),
+        ("symbol", entry.identity.symbol),
+        ("observed_at", entry.identity.observed_at),
+        ("authorized_at", entry.identity.observed_at),
+        ("strategy_id", entry.identity.strategy_id),
+        ("strategy_version", entry.identity.strategy_version),
+        ("risk_policy_version", risk.risk_policy_version),
+        ("safety_policy_version", safety.safety_policy_version),
+        (
+            "side",
+            EntrySide.BUY
+            if evaluation.action is CandidateAction.LONG_CANDIDATE
+            else EntrySide.SELL,
+        ),
+        ("quantity", _approved_decimal(safety.approved_quantity)),
+        ("approved_notional_quote", _approved_decimal(safety.approved_notional_quote)),
+        ("approved_risk_quote", _approved_decimal(safety.approved_risk_quote)),
+        ("stop_basis", _approved_decimal(safety.approved_risk_stop_basis)),
+        ("reference_price", _approved_decimal(risk.reference_price)),
+        ("quote_currency", risk.quote_currency),
+        ("authorized_for_execution", True),
+    )
+    for name, value in values:
+        object.__setattr__(intent, name, value)
+    _validate_created_intent(intent, entry)
+    return intent
+
+
+def _validate_created_intent(
+    intent: EntryOrderIntent,
+    entry: DecisionJournalEntry[object, object],
+) -> None:
+    """Fail closed if factory output diverges from the validated authority."""
+
+    evaluation = entry.strategy_evaluation
+    risk = entry.risk_decision
+    safety = entry.safety_decision
+    expected_side = (
+        EntrySide.BUY if evaluation.action is CandidateAction.LONG_CANDIDATE else EntrySide.SELL
+    )
+    if (
+        intent.identity != EntryOrderIntentIdentity(entry.identity)
+        or intent.decision_identity != entry.identity
+        or intent.source_id != entry.identity.source_id
+        or intent.symbol != entry.identity.symbol
+        or intent.observed_at != entry.identity.observed_at
+        or intent.authorized_at != entry.identity.observed_at
+        or intent.strategy_id != entry.identity.strategy_id
+        or intent.strategy_version != entry.identity.strategy_version
+        or intent.risk_policy_version != risk.risk_policy_version
+        or intent.safety_policy_version != safety.safety_policy_version
+        or intent.side is not expected_side
+        or intent.quantity != safety.approved_quantity
+        or intent.quantity != risk.approved_quantity
+        or intent.approved_notional_quote != safety.approved_notional_quote
+        or intent.approved_notional_quote != risk.approved_notional_quote
+        or intent.approved_risk_quote != safety.approved_risk_quote
+        or intent.approved_risk_quote != risk.approved_risk_quote
+        or intent.stop_basis != safety.approved_risk_stop_basis
+        or intent.stop_basis != risk.approved_risk_stop_basis
+        or intent.reference_price != risk.reference_price
+        or intent.quote_currency != risk.quote_currency
+        or intent.authorized_for_execution is not True
+    ):
+        raise ValueError("created intent diverged from validated journal authority")
 
 
 def _is_positive_finite_decimal(value: object) -> bool:
