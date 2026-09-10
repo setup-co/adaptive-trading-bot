@@ -12,6 +12,7 @@ from adaptive_trading_bot.backtest.accounting import (
     PositionMark,
     PositionSide,
     PositionSnapshot,
+    market_fill_to_position_accounting_fill,
 )
 from adaptive_trading_bot.backtest.execution import (
     BacktestExecutionError,
@@ -90,4 +91,5 @@ __all__ = [
     "UnfilledOrder",
     "UnfilledReason",
     "calculate_trade_metrics",
+    "market_fill_to_position_accounting_fill",
 ]
