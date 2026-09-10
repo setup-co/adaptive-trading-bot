@@ -20,6 +20,7 @@ from adaptive_trading_bot.risk import (
     RiskDecision,
     RiskDecisionStatus,
     RiskManager,
+    RiskManagerConfiguration,
     RiskPortfolioSnapshot,
     RiskReasonCode,
     VolatilitySafetyState,
@@ -66,8 +67,10 @@ def _risk_decision(
     day_start: Decimal = Decimal(10000),
     peak: Decimal = Decimal(10000),
     reason: object = StrategyReasonCode.CONTEXT_READY,
+    configuration: RiskManagerConfiguration | None = None,
 ) -> RiskDecision:
-    return RiskManager().evaluate(
+    manager = RiskManager() if configuration is None else RiskManager(configuration)
+    return manager.evaluate(
         _evaluation(action, reason=reason),
         RiskPortfolioSnapshot(NOW, "USDT", equity, day_start, peak),
     )
@@ -98,6 +101,27 @@ def _evaluate(
     return OperationalSafetyGate().evaluate(
         _risk_decision() if risk_decision is None else risk_decision,
         _health() if health is None else health,
+    )
+
+
+def _replace_account_audit(
+    decision: RiskDecision,
+    *,
+    equity: Decimal,
+    day_start: Decimal,
+    peak: Decimal,
+) -> RiskDecision:
+    daily_loss = max(Decimal(0), day_start - equity)
+    drawdown = max(Decimal(0), peak - equity)
+    return replace(
+        decision,
+        account_equity_quote=equity,
+        day_start_equity_quote=day_start,
+        peak_equity_quote=peak,
+        daily_loss_quote=daily_loss,
+        daily_loss_fraction=daily_loss / day_start,
+        drawdown_quote=drawdown,
+        drawdown_fraction=drawdown / peak,
     )
 
 
@@ -418,6 +442,131 @@ def test_forged_approved_risk_decisions_fail_closed(field_name: str, value: obje
     assert not decision.entry_permitted
     assert decision.approved_quantity is None
     assert OperationalSafetyReasonCode.RISK_DECISION_INCONSISTENT in decision.reasons
+
+
+@pytest.mark.parametrize("equity", [Decimal(9900), Decimal(9899)])
+def test_forged_approved_at_or_above_daily_loss_limit_fails_closed(
+    equity: Decimal,
+) -> None:
+    forged = _replace_account_audit(
+        _risk_decision(), equity=equity, day_start=Decimal(10000), peak=Decimal(10000)
+    )
+    assert RiskReasonCode.DAILY_LOSS_LIMIT_REACHED not in forged.reasons
+
+    decision = _evaluate(forged)
+
+    assert decision.status is OperationalSafetyStatus.SAFE_MODE
+    assert OperationalSafetyReasonCode.RISK_DECISION_INCONSISTENT in decision.reasons
+    assert not decision.entry_permitted
+
+
+@pytest.mark.parametrize("equity", [Decimal(9500), Decimal(9499)])
+def test_forged_approved_at_or_above_drawdown_limit_fails_closed(
+    equity: Decimal,
+) -> None:
+    forged = _replace_account_audit(
+        _risk_decision(), equity=equity, day_start=equity, peak=Decimal(10000)
+    )
+    assert not forged.requires_halt_review
+    assert RiskReasonCode.DRAWDOWN_LIMIT_REACHED not in forged.reasons
+
+    decision = _evaluate(forged)
+
+    assert decision.status is OperationalSafetyStatus.SAFE_MODE
+    assert OperationalSafetyReasonCode.RISK_DECISION_INCONSISTENT in decision.reasons
+    assert not decision.entry_permitted
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("account_equity_quote", Decimal("NaN")),
+        ("day_start_equity_quote", Decimal("NaN")),
+        ("peak_equity_quote", Decimal("NaN")),
+        ("daily_loss_quote", Decimal("NaN")),
+        ("daily_loss_fraction", Decimal("NaN")),
+        ("drawdown_quote", Decimal("NaN")),
+        ("drawdown_fraction", Decimal("NaN")),
+        ("max_daily_loss_fraction", Decimal("NaN")),
+        ("max_drawdown_fraction", Decimal("NaN")),
+        ("account_equity_quote", Decimal(10001)),
+        ("peak_equity_quote", Decimal(9999)),
+        ("daily_loss_quote", Decimal(1)),
+        ("daily_loss_fraction", Decimal("0.001")),
+        ("drawdown_quote", Decimal(1)),
+        ("drawdown_fraction", Decimal("0.001")),
+    ],
+)
+def test_forged_approved_nan_or_inconsistent_account_audit_fails_closed(
+    field_name: str, value: object
+) -> None:
+    forged = replace(_risk_decision(), **{field_name: value})  # type: ignore[arg-type]
+
+    decision = _evaluate(forged)
+
+    assert decision.status is OperationalSafetyStatus.SAFE_MODE
+    assert OperationalSafetyReasonCode.RISK_DECISION_INCONSISTENT in decision.reasons
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("requires_halt_review", True),
+        (
+            "reasons",
+            (
+                RiskReasonCode.STRATEGY_CANDIDATE_ACCEPTED,
+                RiskReasonCode.DAILY_LOSS_LIMIT_REACHED,
+            ),
+        ),
+        (
+            "reasons",
+            (
+                RiskReasonCode.STRATEGY_CANDIDATE_ACCEPTED,
+                RiskReasonCode.DRAWDOWN_LIMIT_REACHED,
+            ),
+        ),
+    ],
+)
+def test_forged_approved_halt_and_limit_reason_inconsistency_fails_closed(
+    field_name: str, value: object
+) -> None:
+    forged = replace(_risk_decision(), **{field_name: value})  # type: ignore[arg-type]
+
+    assert _evaluate(forged).status is OperationalSafetyStatus.SAFE_MODE
+
+
+def test_custom_risk_limits_are_carried_and_validated_without_default_assumptions() -> None:
+    configuration = RiskManagerConfiguration(
+        max_daily_loss_fraction=Decimal("0.0200"),
+        max_drawdown_fraction=Decimal("0.1000"),
+    )
+    risk = _risk_decision(
+        equity=Decimal(9850),
+        day_start=Decimal(10000),
+        peak=Decimal(10000),
+        configuration=configuration,
+    )
+
+    decision = _evaluate(risk)
+
+    assert risk.status is RiskDecisionStatus.APPROVED
+    assert risk.daily_loss_fraction == Decimal("0.015")
+    assert risk.max_daily_loss_fraction == Decimal("0.0200")
+    assert risk.max_drawdown_fraction == Decimal("0.1000")
+    assert decision.status is OperationalSafetyStatus.CLEARED
+    assert decision.entry_permitted
+
+    forged_at_custom_limit = _replace_account_audit(
+        risk,
+        equity=Decimal(9800),
+        day_start=Decimal(10000),
+        peak=Decimal(10000),
+    )
+    blocked = _evaluate(forged_at_custom_limit)
+    assert forged_at_custom_limit.daily_loss_fraction == Decimal("0.02")
+    assert blocked.status is OperationalSafetyStatus.SAFE_MODE
+    assert OperationalSafetyReasonCode.RISK_DECISION_INCONSISTENT in blocked.reasons
 
 
 def test_forged_no_action_with_candidate_action_fails_closed() -> None:

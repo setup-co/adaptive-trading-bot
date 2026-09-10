@@ -205,8 +205,10 @@ class RiskDecision:
     peak_equity_quote: Decimal
     daily_loss_quote: Decimal
     daily_loss_fraction: Decimal
+    max_daily_loss_fraction: Decimal
     drawdown_quote: Decimal
     drawdown_fraction: Decimal
+    max_drawdown_fraction: Decimal
     current_open_risk_quote: Decimal
     simultaneous_risk_cap_quote: Decimal
     remaining_simultaneous_risk_quote: Decimal
@@ -457,8 +459,10 @@ class RiskManager:
             peak_equity_quote=snapshot.peak_equity_quote,
             daily_loss_quote=metrics.daily_loss_quote,
             daily_loss_fraction=metrics.daily_loss_fraction,
+            max_daily_loss_fraction=self.configuration.max_daily_loss_fraction,
             drawdown_quote=metrics.drawdown_quote,
             drawdown_fraction=metrics.drawdown_fraction,
+            max_drawdown_fraction=self.configuration.max_drawdown_fraction,
             current_open_risk_quote=metrics.current_open_risk_quote,
             simultaneous_risk_cap_quote=metrics.simultaneous_risk_cap_quote,
             remaining_simultaneous_risk_quote=metrics.remaining_simultaneous_risk_quote,

@@ -210,6 +210,8 @@ def test_valid_long_and_short_geometry_are_risk_sized(
     decision = _approve(_evaluation(action, reference=reference, invalidation=invalidation))
     assert decision.status is RiskDecisionStatus.APPROVED
     assert decision.risk_policy_version == "1.0.0"
+    assert decision.max_daily_loss_fraction == Decimal("0.0100")
+    assert decision.max_drawdown_fraction == Decimal("0.0500")
     assert decision.stop_distance == Decimal(10)
     assert decision.approved_quantity == expected_quantity
     assert decision.approved_notional_quote == Decimal(250)

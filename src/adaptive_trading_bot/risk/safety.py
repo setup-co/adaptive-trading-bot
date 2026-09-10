@@ -374,6 +374,8 @@ def _risk_decision_is_consistent(decision: RiskDecision) -> bool:
         return False
     if decision.risk_snapshot_observed_at != decision.observed_at:
         return False
+    if not _approved_account_audit_is_consistent(decision):
+        return False
     positive_fields = (
         decision.reference_price,
         decision.approved_risk_stop_basis,
@@ -420,9 +422,6 @@ def _risk_decision_is_consistent(decision: RiskDecision) -> bool:
         and decision.approved_risk_quote <= decision.per_trade_risk_budget_quote
         and decision.resulting_open_risk_quote <= decision.simultaneous_risk_cap_quote
         and decision.resulting_gross_exposure_quote <= decision.gross_exposure_cap_quote
-        and not decision.requires_halt_review
-        and RiskReasonCode.DAILY_LOSS_LIMIT_REACHED not in decision.reasons
-        and RiskReasonCode.DRAWDOWN_LIMIT_REACHED not in decision.reasons
     )
 
 
@@ -432,6 +431,51 @@ def _is_positive_decimal(value: object) -> bool:
 
 def _is_nonnegative_decimal(value: object) -> bool:
     return isinstance(value, Decimal) and value.is_finite() and value >= 0
+
+
+def _approved_account_audit_is_consistent(decision: RiskDecision) -> bool:
+    account_fields = (
+        decision.account_equity_quote,
+        decision.day_start_equity_quote,
+        decision.peak_equity_quote,
+        decision.max_daily_loss_fraction,
+        decision.max_drawdown_fraction,
+    )
+    audit_fields = (
+        decision.daily_loss_quote,
+        decision.daily_loss_fraction,
+        decision.drawdown_quote,
+        decision.drawdown_fraction,
+    )
+    if not all(_is_positive_decimal(value) for value in account_fields):
+        return False
+    if not all(_is_nonnegative_decimal(value) for value in audit_fields):
+        return False
+    if decision.max_daily_loss_fraction >= 1 or decision.max_drawdown_fraction >= 1:
+        return False
+    if (
+        decision.peak_equity_quote < decision.account_equity_quote
+        or decision.peak_equity_quote < decision.day_start_equity_quote
+    ):
+        return False
+
+    expected_daily_loss = max(
+        Decimal(0), decision.day_start_equity_quote - decision.account_equity_quote
+    )
+    expected_drawdown = max(Decimal(0), decision.peak_equity_quote - decision.account_equity_quote)
+    daily_limit_reached = decision.daily_loss_fraction >= decision.max_daily_loss_fraction
+    drawdown_limit_reached = decision.drawdown_fraction >= decision.max_drawdown_fraction
+    return (
+        decision.daily_loss_quote == expected_daily_loss
+        and decision.daily_loss_fraction == expected_daily_loss / decision.day_start_equity_quote
+        and decision.drawdown_quote == expected_drawdown
+        and decision.drawdown_fraction == expected_drawdown / decision.peak_equity_quote
+        and not daily_limit_reached
+        and not drawdown_limit_reached
+        and not decision.requires_halt_review
+        and RiskReasonCode.DAILY_LOSS_LIMIT_REACHED not in decision.reasons
+        and RiskReasonCode.DRAWDOWN_LIMIT_REACHED not in decision.reasons
+    )
 
 
 def _timedelta_exceeds_seconds(value: timedelta, seconds: int) -> bool:
