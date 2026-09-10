@@ -53,6 +53,7 @@ def _candidate(
     symbol: TradingSymbol = BTC,
     source_id: SourceId = SOURCE,
     strategy_id: str = "manual",
+    action: CandidateAction = CandidateAction.LONG_CANDIDATE,
     configuration: RiskManagerConfiguration | None = None,
     portfolio: RiskPortfolioSnapshot | None = None,
     reason: object = "reason",
@@ -62,8 +63,10 @@ def _candidate(
     evaluation = _manual_evaluation(
         context,
         strategy_id=strategy_id,
+        action=action,
         reason=reason,
         audit=audit,
+        invalidation=(Decimal(135) if action is CandidateAction.SHORT_CANDIDATE else Decimal(75)),
     )
     snapshot = portfolio or RiskPortfolioSnapshot(
         NOW, "USDT", Decimal(10000), Decimal(10000), Decimal(10000)
@@ -371,6 +374,78 @@ def test_same_symbol_multi_strategy_conflict_has_no_winner(opposite_side: bool) 
     assert all(
         item.reasons[-1] is PortfolioAdmissionReasonCode.STRATEGY_CONFLICT_NO_SELECTION
         for item in result.candidate_results
+    )
+
+
+def test_same_symbol_cross_source_same_side_conflict_has_no_winner() -> None:
+    first = _candidate(source_id=SourceId("source-a"), strategy_id="same-family")
+    second = _candidate(source_id=SourceId("source-b"), strategy_id="same-family")
+
+    result = _evaluate(first, second)
+
+    assert result.status is PortfolioAdmissionStatus.NO_ADMISSION
+    assert result.permits == ()
+    assert {item.decision_identity.source_id.value for item in result.candidate_results} == {
+        "source-a",
+        "source-b",
+    }
+    assert all(
+        item.reasons[-1] is PortfolioAdmissionReasonCode.STRATEGY_CONFLICT_NO_SELECTION
+        for item in result.candidate_results
+    )
+
+
+def test_same_symbol_cross_source_opposite_side_conflict_has_no_winner() -> None:
+    long_candidate = _candidate(source_id=SourceId("source-a"), strategy_id="same-family")
+    short_candidate = _candidate(
+        source_id=SourceId("source-b"),
+        strategy_id="same-family",
+        action=CandidateAction.SHORT_CANDIDATE,
+    )
+
+    result = _evaluate(short_candidate, long_candidate)
+
+    assert result.status is PortfolioAdmissionStatus.NO_ADMISSION
+    assert result.permits == ()
+    assert all(
+        item.reasons[-1] is PortfolioAdmissionReasonCode.STRATEGY_CONFLICT_NO_SELECTION
+        for item in result.candidate_results
+    )
+
+
+def test_cross_source_btc_conflict_contributes_zero_and_eth_admits_at_exact_caps() -> None:
+    configuration = RiskManagerConfiguration(
+        max_simultaneous_risk_fraction=Decimal("0.0025"),
+        max_gross_exposure_fraction=Decimal("0.00875"),
+    )
+    btc_a = _candidate(
+        source_id=SourceId("source-a"),
+        strategy_id="same-family",
+        configuration=configuration,
+    )
+    btc_b = _candidate(
+        source_id=SourceId("source-b"),
+        strategy_id="same-family",
+        configuration=configuration,
+    )
+    eth = _candidate(symbol=ETH, configuration=configuration)
+
+    result = _evaluate(btc_b, eth, btc_a)
+    permuted = _evaluate(eth, btc_a, btc_b)
+
+    assert result == permuted
+    assert result.status is PortfolioAdmissionStatus.ADMITTED
+    assert tuple(permit.symbol for permit in result.permits) == (ETH,)
+    assert result.permits[0].approved_risk_quote == Decimal(25)
+    assert result.permits[0].approved_notional_quote == Decimal("87.5")
+    assert PortfolioAdmissionReasonCode.COMBINED_SIMULTANEOUS_RISK_WITHIN_CAP in result.reasons
+    assert PortfolioAdmissionReasonCode.COMBINED_GROSS_EXPOSURE_WITHIN_CAP in result.reasons
+    assert (
+        sum(
+            item.status is PortfolioAdmissionStatus.NO_ADMISSION
+            for item in result.candidate_results
+        )
+        == 2
     )
 
 
