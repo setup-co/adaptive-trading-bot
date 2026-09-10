@@ -9,8 +9,27 @@ from adaptive_trading_bot.risk.core import (
     RiskPositionExposure,
     RiskReasonCode,
 )
+from adaptive_trading_bot.risk.safety import (
+    ExchangeApiHealthState,
+    FeedIntegrityState,
+    OperationalHealthSnapshot,
+    OperationalSafetyConfiguration,
+    OperationalSafetyDecision,
+    OperationalSafetyGate,
+    OperationalSafetyReasonCode,
+    OperationalSafetyStatus,
+    VolatilitySafetyState,
+)
 
 __all__ = [
+    "ExchangeApiHealthState",
+    "FeedIntegrityState",
+    "OperationalHealthSnapshot",
+    "OperationalSafetyConfiguration",
+    "OperationalSafetyDecision",
+    "OperationalSafetyGate",
+    "OperationalSafetyReasonCode",
+    "OperationalSafetyStatus",
     "RiskDecision",
     "RiskDecisionStatus",
     "RiskManager",
@@ -18,4 +37,5 @@ __all__ = [
     "RiskPortfolioSnapshot",
     "RiskPositionExposure",
     "RiskReasonCode",
+    "VolatilitySafetyState",
 ]
