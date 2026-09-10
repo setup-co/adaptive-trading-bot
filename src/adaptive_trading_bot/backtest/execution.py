@@ -9,22 +9,25 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol, align_timestamp
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.execution import (
+    InvalidSimulatedFillPriceError,
+    SimulatedExecutionCostConfiguration,
+    SimulatedExecutionSide,
+    price_simulated_market_fill,
+)
 from adaptive_trading_bot.storage import (
     HistoricalCandleStore,
     HistoricalCandleStoreError,
     IntegrityReport,
     SourceId,
 )
-
-_EXECUTION_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-_BASIS_POINTS = Decimal(10_000)
 
 
 class BacktestExecutionError(Exception):
@@ -62,11 +65,7 @@ class ExecutionSeries:
     timeframe: Timeframe
 
 
-class OrderSide(StrEnum):
-    """Supported V1 market-order directions."""
-
-    BUY = "BUY"
-    SELL = "SELL"
+OrderSide = SimulatedExecutionSide
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,29 +96,7 @@ class MarketOrderRequest:
         object.__setattr__(self, "created_at", require_utc(self.created_at, field="created_at"))
 
 
-@dataclass(frozen=True, slots=True)
-class ExecutionCostConfiguration:
-    """Explicit deterministic basis-point costs and non-negative order latency."""
-
-    spread_bps: Decimal = Decimal(0)
-    slippage_bps: Decimal = Decimal(0)
-    fee_bps: Decimal = Decimal(0)
-    latency: timedelta = timedelta(0)
-
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("spread_bps", self.spread_bps),
-            ("slippage_bps", self.slippage_bps),
-            ("fee_bps", self.fee_bps),
-        ):
-            if not isinstance(value, Decimal):
-                raise TypeError(f"{name} must be a Decimal")
-            if not value.is_finite() or value < 0:
-                raise ValueError(f"{name} must be finite and non-negative")
-        if not isinstance(self.latency, timedelta):
-            raise TypeError("latency must be a timedelta")
-        if self.latency < timedelta(0):
-            raise ValueError("latency must be non-negative")
+ExecutionCostConfiguration = SimulatedExecutionCostConfiguration
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,18 +296,15 @@ def _fill(
     series: ExecutionSeries,
     costs: ExecutionCostConfiguration,
 ) -> MarketFill:
-    with localcontext(_EXECUTION_DECIMAL_CONTEXT):
-        half_spread = costs.spread_bps / Decimal(2) / _BASIS_POINTS
-        slippage = costs.slippage_bps / _BASIS_POINTS
-        adjustment = half_spread + slippage
-        if order.side is OrderSide.BUY:
-            fill_price = candle.open * (Decimal(1) + adjustment)
-        else:
-            fill_price = candle.open * (Decimal(1) - adjustment)
-        if fill_price <= 0:
-            raise InvalidFillPriceError("configured execution costs produce non-positive price")
-        notional_quote = order.quantity * fill_price
-        fee_quote = abs(notional_quote) * costs.fee_bps / _BASIS_POINTS
+    try:
+        quote = price_simulated_market_fill(
+            side=order.side,
+            quantity=order.quantity,
+            reference_price=candle.open,
+            costs=costs,
+        )
+    except InvalidSimulatedFillPriceError as error:
+        raise InvalidFillPriceError(str(error)) from error
 
     return MarketFill(
         order_id=order.order_id,
@@ -344,9 +318,9 @@ def _fill(
         reference_open_price=candle.open,
         spread_bps=costs.spread_bps,
         slippage_bps=costs.slippage_bps,
-        fill_price=fill_price,
+        fill_price=quote.fill_price,
         fee_bps=costs.fee_bps,
-        fee_quote=fee_quote,
+        fee_quote=quote.fee_quote,
         source_id=series.source_id,
         execution_timeframe=series.timeframe,
     )
