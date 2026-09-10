@@ -30,6 +30,14 @@ from adaptive_trading_bot.strategies.range_context import (
     ValidatedRangeConfiguration,
     ValidatedRangeDetector,
 )
+from adaptive_trading_bot.strategies.range_mean_reversion import (
+    RangeContextDetector,
+    RangeMeanReversionConfiguration,
+    RangeMeanReversionReasonCode,
+    RangeMeanReversionRuleAudit,
+    RangeMeanReversionSide,
+    RangeMeanReversionStrategy,
+)
 from adaptive_trading_bot.strategies.trend_pullback import (
     StrategyReasonCode,
     TrendPullbackConfiguration,
@@ -46,8 +54,14 @@ __all__ = [
     "BreakoutRetestStrategy",
     "BreakoutSide",
     "CandidateAction",
+    "RangeContextDetector",
     "RangeContextSnapshot",
     "RangeDetectorSeriesState",
+    "RangeMeanReversionConfiguration",
+    "RangeMeanReversionReasonCode",
+    "RangeMeanReversionRuleAudit",
+    "RangeMeanReversionSide",
+    "RangeMeanReversionStrategy",
     "RangePivotIdentity",
     "RangePivotReference",
     "RangeReasonCode",
