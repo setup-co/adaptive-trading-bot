@@ -337,9 +337,9 @@ class PortfolioAdmissionGate:
                 candidates, observed_at, PortfolioAdmissionReasonCode.PORTFOLIO_BASELINE_MISMATCH
             )
 
-        groups: dict[tuple[str, TradingSymbol, datetime], list[_ValidatedCandidate]] = {}
+        groups: dict[tuple[TradingSymbol, datetime], list[_ValidatedCandidate]] = {}
         for item in ordered:
-            key = (item.intent.source_id.value, item.intent.symbol, item.intent.observed_at)
+            key = (item.intent.symbol, item.intent.observed_at)
             groups.setdefault(key, []).append(item)
         unique = tuple(
             item
@@ -541,9 +541,9 @@ def _baseline(entry: DecisionJournalEntry[object, object]) -> _PortfolioBaseline
     )
 
 
-def _arbitration_key(item: _ValidatedCandidate) -> tuple[str, TradingSymbol, datetime]:
+def _arbitration_key(item: _ValidatedCandidate) -> tuple[TradingSymbol, datetime]:
     intent = item.intent
-    return (intent.source_id.value, intent.symbol, intent.observed_at)
+    return (intent.symbol, intent.observed_at)
 
 
 def _intent_decimals_valid(intent: EntryOrderIntent) -> bool:
