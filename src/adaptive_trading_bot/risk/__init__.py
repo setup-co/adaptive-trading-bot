@@ -19,6 +19,7 @@ from adaptive_trading_bot.risk.safety import (
     OperationalSafetyReasonCode,
     OperationalSafetyStatus,
     VolatilitySafetyState,
+    risk_decision_is_internally_consistent,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "RiskPositionExposure",
     "RiskReasonCode",
     "VolatilitySafetyState",
+    "risk_decision_is_internally_consistent",
 ]
