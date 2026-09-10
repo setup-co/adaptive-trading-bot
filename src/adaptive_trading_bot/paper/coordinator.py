@@ -1,17 +1,20 @@
-"""Process-local atomic admission and start coordination for Paper intents.
-
-Active reservations intentionally remain pending forever in this phase. Observation,
-fills, release, positions, accounting, persistence, and Live behavior are deferred.
-"""
+"""Process-local atomic admission, Paper observation, and entry accounting."""
 
 from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 
+from adaptive_trading_bot.accounting import (
+    PositionAccountingCore,
+    PositionAccountingFill,
+    PositionAccountingFillBatch,
+    PositionAccountingState,
+    PositionAccountingTransition,
+)
 from adaptive_trading_bot.admission import (
     PendingPortfolioReservation,
     PendingReservationSnapshot,
@@ -32,8 +35,13 @@ from adaptive_trading_bot.orders import (
     EntrySide,
     OrderIntentAuthorizationStatus,
 )
+from adaptive_trading_bot.paper.accounting import (
+    paper_fill_to_position_accounting_fill as _paper_fill_to_position_accounting_fill,
+)
 from adaptive_trading_bot.paper.execution import (
     PaperAuthorizationSnapshot,
+    PaperExecutionObservation,
+    PaperMarketFill,
     PaperOrderIdentity,
     PaperOrderLifecycle,
     PaperOrderSimulator,
@@ -41,17 +49,24 @@ from adaptive_trading_bot.paper.execution import (
 )
 from adaptive_trading_bot.strategies.core import SourceIdentity
 
+_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
+_ZERO = Decimal(0)
+
 
 class PaperPortfolioCoordinatorError(Exception):
-    """Base error for invalid coordinator input, state, or staged starts."""
+    """Base error for invalid coordinator input, state, or staged transitions."""
 
 
 class PaperPortfolioBatchError(PaperPortfolioCoordinatorError):
-    """A batch is structurally invalid or violates finalized chronology."""
+    """A batch is structurally invalid or violates committed chronology."""
 
 
 class PaperPortfolioStartError(PaperPortfolioCoordinatorError):
     """Admitted Paper lifecycles could not all be staged consistently."""
+
+
+class PaperPortfolioObservationError(PaperPortfolioCoordinatorError):
+    """A Paper observation batch could not be staged and committed exactly."""
 
 
 class PaperPortfolioStartBatchStatus(StrEnum):
@@ -85,6 +100,33 @@ class PaperStartedIntentSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class PaperOpenPositionSnapshot:
+    """Detached entry authority and conservatively locked Paper capacity."""
+
+    paper_order_identity: PaperOrderIdentity
+    intent_identity: EntryOrderIntentIdentity
+    decision_identity: DecisionIdentity
+    source_id: SourceIdentity
+    symbol: TradingSymbol
+    side: EntrySide
+    quantity: Decimal
+    authorized_at: datetime
+    eligible_at: datetime
+    fill_at: datetime
+    reference_price: Decimal
+    fill_price: Decimal
+    fee_quote: Decimal
+    stop_basis: Decimal
+    approved_risk_quote: Decimal
+    approved_notional_quote: Decimal
+    locked_open_risk_quote: Decimal
+    locked_gross_exposure_quote: Decimal
+    risk_policy_version: str
+    safety_policy_version: str
+    accounting_fill_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class PaperPortfolioStartBatchResult:
     """Immutable audit of one finalized or integrity-rejected submission."""
 
@@ -96,12 +138,32 @@ class PaperPortfolioStartBatchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PaperPortfolioObservationBatchResult:
+    """Atomic Paper lifecycle, accounting, and capacity transition audit."""
+
+    observed_at: datetime
+    newly_filled: tuple[PaperOpenPositionSnapshot, ...]
+    still_pending: tuple[PaperStartedIntentSnapshot, ...]
+    active_pending_reservations: PendingReservationSnapshot
+    open_positions: tuple[PaperOpenPositionSnapshot, ...]
+    accounting_positions: tuple[tuple[TradingSymbol, PositionAccountingState], ...]
+    accounting_transitions: tuple[PositionAccountingTransition, ...]
+    locked_open_risk_quote: Decimal
+    locked_gross_exposure_quote: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class PaperPortfolioCoordinatorSnapshot:
     """Detached read-only view of process-local coordinator state."""
 
     last_finalized_at: datetime | None
     started: tuple[PaperStartedIntentSnapshot, ...]
     reservations: tuple[PendingPortfolioReservation, ...]
+    last_observed_at: datetime | None
+    open_positions: tuple[PaperOpenPositionSnapshot, ...]
+    accounting_positions: tuple[tuple[TradingSymbol, PositionAccountingState], ...]
+    locked_open_risk_quote: Decimal
+    locked_gross_exposure_quote: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,36 +172,46 @@ class _ActivePaperIntent:
     reservation: PendingPortfolioReservation
 
 
-class PaperPortfolioCoordinator:
-    """Own pending reservations and atomically start admitted Paper lifecycles."""
+@dataclass(frozen=True, slots=True)
+class _OpenPaperPosition:
+    lifecycle: PaperOrderLifecycle
+    accounting_fill: PositionAccountingFill
+    locked_open_risk_quote: Decimal
+    locked_gross_exposure_quote: Decimal
 
-    __slots__ = ("_active", "_costs", "_last_finalized_at")
+
+class PaperPortfolioCoordinator:
+    """Atomically coordinate admitted Paper entries through open positions."""
+
+    __slots__ = (
+        "_accounting",
+        "_active",
+        "_costs",
+        "_last_finalized_at",
+        "_last_observed_at",
+        "_open_positions",
+    )
 
     def __init__(self, costs: SimulatedExecutionCostConfiguration) -> None:
         if not isinstance(costs, SimulatedExecutionCostConfiguration):
             raise TypeError("costs must be a SimulatedExecutionCostConfiguration")
         costs.validate()
-        self._costs = SimulatedExecutionCostConfiguration(
-            spread_bps=costs.spread_bps,
-            slippage_bps=costs.slippage_bps,
-            fee_bps=costs.fee_bps,
-            latency=costs.latency,
-        )
+        self._costs = _copy_costs(costs)
         self._active: tuple[_ActivePaperIntent, ...] = ()
+        self._accounting = PositionAccountingCore()
+        self._open_positions: tuple[_OpenPaperPosition, ...] = ()
         self._last_finalized_at: datetime | None = None
+        self._last_observed_at: datetime | None = None
 
     def start_batch[ReasonT, AuditT](
         self,
         candidates: tuple[PortfolioAdmissionCandidate[ReasonT, AuditT], ...],
     ) -> PaperPortfolioStartBatchResult:
-        """Admit and stage one same-time batch, then commit all state at once.
-
-        Integrity-rejected admission results do not seal their timestamp, so a corrected
-        batch may be retried. STARTED and NO_START results do seal it.
-        """
+        """Admit and stage one same-time batch, then commit all state at once."""
 
         observed_at = self._validate_submission(candidates)
         self._validate_internal_state()
+        self._validate_candidate_open_baseline(candidates)
         pending = self._pending_snapshot(observed_at)
         admission = PortfolioAdmissionGate().evaluate_batch(candidates, pending)
         if admission.status is PortfolioAdmissionStatus.REJECTED_INCONSISTENT:
@@ -179,11 +251,7 @@ class PaperPortfolioCoordinator:
                     raise PaperPortfolioStartError(
                         "coordinator-owned authority diverged from admission permit"
                     )
-                lifecycle = simulator.start(
-                    owned_entry,
-                    owned_intent,
-                    self._costs,
-                )
+                lifecycle = simulator.start(owned_entry, owned_intent, self._costs)
                 reservation = _reservation_from_permit(permit)
                 _require_staged_authority(lifecycle, permit, reservation, self._costs)
                 staged.append(_ActivePaperIntent(lifecycle, reservation))
@@ -192,12 +260,7 @@ class PaperPortfolioCoordinator:
                 "every admitted Paper lifecycle must stage before commit"
             ) from error
 
-        next_active = tuple(
-            sorted(
-                (*self._active, *staged),
-                key=lambda item: item.reservation.intent_identity.decision_identity.sort_key,
-            )
-        )
+        next_active = _sort_active((*self._active, *staged))
         started = tuple(_started_snapshot(item.lifecycle) for item in staged)
         result = PaperPortfolioStartBatchResult(
             observed_at,
@@ -210,14 +273,121 @@ class PaperPortfolioCoordinator:
         self._last_finalized_at = observed_at
         return result
 
+    def observe_batch(
+        self,
+        observations: tuple[PaperExecutionObservation, ...],
+    ) -> PaperPortfolioObservationBatchResult:
+        """Atomically advance coordinator-owned lifecycles and account new fills."""
+
+        observed_at, ordered = self._validate_observations(observations)
+        self._validate_internal_state()
+        active_by_key = {
+            (item.reservation.source_id.value, item.reservation.symbol): item
+            for item in self._active
+        }
+        mapped: list[tuple[_ActivePaperIntent, PaperExecutionObservation]] = []
+        for observation in ordered:
+            item = active_by_key.get((observation.source_id.value, observation.symbol))
+            if item is None:
+                raise PaperPortfolioBatchError(
+                    "every observation must match one pending source and symbol"
+                )
+            mapped.append((item, _copy_observation(observation)))
+
+        simulator = PaperOrderSimulator()
+        staged_by_identity = {item.reservation.intent_identity: item for item in self._active}
+        newly_filled: list[tuple[PaperOrderLifecycle, PositionAccountingFill]] = []
+        try:
+            for prior, observation in mapped:
+                staged_lifecycle = simulator.clone(prior.lifecycle)
+                advanced = simulator.observe(staged_lifecycle, observation)
+                _require_observed_authority(prior, advanced, observation, self._costs)
+                if advanced.status is PaperOrderStatus.FILLED:
+                    if advanced.fill is None:
+                        raise PaperPortfolioObservationError("FILLED lifecycle has no fill")
+                    adapted = _paper_fill_to_position_accounting_fill(advanced.fill)
+                    newly_filled.append((advanced, adapted))
+                else:
+                    staged_by_identity[prior.reservation.intent_identity] = _ActivePaperIntent(
+                        advanced, prior.reservation
+                    )
+
+            staged_accounting = self._accounting.clone()
+            accounting_transitions: tuple[PositionAccountingTransition, ...] = ()
+            staged_new_open: list[_OpenPaperPosition] = []
+            if newly_filled:
+                for lifecycle, accounting_fill in newly_filled:
+                    if staged_accounting.position(lifecycle.accepted_authorization.symbol).quantity:
+                        raise PaperPortfolioObservationError(
+                            "entry accounting symbol must be flat before fill"
+                        )
+                    staged_new_open.append(_open_position(lifecycle, accounting_fill))
+                accounting_fills = tuple(item[1] for item in newly_filled)
+                accounting_batch = staged_accounting.process(
+                    PositionAccountingFillBatch(observed_at, accounting_fills)
+                )
+                accounting_transitions = accounting_batch.transitions
+                _require_entry_transitions(newly_filled, accounting_transitions, self._accounting)
+
+            filled_identities = {
+                lifecycle.identity.intent_identity for lifecycle, _ in newly_filled
+            }
+            next_active = _sort_active(
+                tuple(
+                    item
+                    for identity, item in staged_by_identity.items()
+                    if identity not in filled_identities
+                )
+            )
+            staged_open = list(self._open_positions)
+            staged_open.extend(staged_new_open)
+            next_open = _sort_open(tuple(staged_open))
+            _validate_staged_state(next_active, next_open, staged_accounting, self._costs)
+        except Exception as error:
+            if isinstance(error, PaperPortfolioObservationError):
+                raise
+            raise PaperPortfolioObservationError(
+                "Paper observation batch failed before atomic commit"
+            ) from error
+
+        newly_filled_snapshots = tuple(
+            _open_snapshot(item)
+            for item in next_open
+            if item.lifecycle.identity.intent_identity in filled_identities
+        )
+        open_snapshots = tuple(_open_snapshot(item) for item in next_open)
+        locked_risk, locked_gross = _locked_totals(next_open)
+        result = PaperPortfolioObservationBatchResult(
+            observed_at=observed_at,
+            newly_filled=newly_filled_snapshots,
+            still_pending=tuple(_started_snapshot(item.lifecycle) for item in next_active),
+            active_pending_reservations=_pending_snapshot_for(next_active, observed_at),
+            open_positions=open_snapshots,
+            accounting_positions=staged_accounting.positions(),
+            accounting_transitions=accounting_transitions,
+            locked_open_risk_quote=locked_risk,
+            locked_gross_exposure_quote=locked_gross,
+        )
+        self._active = next_active
+        self._open_positions = next_open
+        self._accounting = staged_accounting
+        self._last_observed_at = observed_at
+        return result
+
     def snapshot(self) -> PaperPortfolioCoordinatorSnapshot:
         """Return detached state that cannot mutate coordinator-owned authority."""
 
         self._validate_internal_state()
+        locked_risk, locked_gross = _locked_totals(self._open_positions)
         return PaperPortfolioCoordinatorSnapshot(
             self._last_finalized_at,
             tuple(_started_snapshot(item.lifecycle) for item in self._active),
             tuple(_copy_reservation(item.reservation) for item in self._active),
+            self._last_observed_at,
+            tuple(_open_snapshot(item) for item in self._open_positions),
+            self._accounting.positions(),
+            locked_risk,
+            locked_gross,
         )
 
     def _validate_submission[ReasonT, AuditT](
@@ -243,29 +413,82 @@ class PaperPortfolioCoordinator:
         observed_at = times[0]
         if any(value != observed_at for value in times[1:]):
             raise PaperPortfolioBatchError("every candidate must share one observed_at")
-        if self._last_finalized_at is not None and observed_at <= self._last_finalized_at:
+        latest = _latest_time(self._last_finalized_at, self._last_observed_at)
+        if latest is not None and observed_at <= latest:
             raise PaperPortfolioBatchError(
-                "batch observed_at must strictly advance after a finalized batch"
+                "batch observed_at must strictly advance after committed Paper state"
             )
         return observed_at
+
+    def _validate_observations(
+        self,
+        observations: tuple[PaperExecutionObservation, ...],
+    ) -> tuple[datetime, tuple[PaperExecutionObservation, ...]]:
+        if not isinstance(observations, tuple):
+            raise TypeError("observations must be an immutable tuple")
+        if not observations:
+            raise PaperPortfolioBatchError("Paper observation batch must be non-empty")
+        if not all(isinstance(item, PaperExecutionObservation) for item in observations):
+            raise TypeError("observations must contain PaperExecutionObservation values")
+        try:
+            for item in observations:
+                item.validate()
+            times = tuple(
+                require_utc(item.observed_at, field="Paper observation batch observed_at")
+                for item in observations
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise PaperPortfolioBatchError("Paper observation batch is malformed") from error
+        observed_at = times[0]
+        if any(value != observed_at for value in times[1:]):
+            raise PaperPortfolioBatchError("every observation must share one observed_at")
+        symbols = tuple(item.symbol for item in observations)
+        if len(set(symbols)) != len(symbols):
+            raise PaperPortfolioBatchError("at most one observation per symbol is allowed")
+        if self._last_observed_at is not None and observed_at <= self._last_observed_at:
+            raise PaperPortfolioBatchError("observation timestamps must strictly advance")
+        if self._last_finalized_at is not None and observed_at < self._last_finalized_at:
+            raise PaperPortfolioBatchError(
+                "observation cannot precede the latest finalized start batch"
+            )
+        ordered = tuple(
+            sorted(
+                observations,
+                key=lambda item: (str(item.symbol), item.source_id.value),
+            )
+        )
+        return observed_at, ordered
+
+    def _validate_candidate_open_baseline[ReasonT, AuditT](
+        self,
+        candidates: tuple[PortfolioAdmissionCandidate[ReasonT, AuditT], ...],
+    ) -> None:
+        locked_risk, locked_gross = _locked_totals(self._open_positions)
+        open_symbols = {
+            item.lifecycle.accepted_authorization.symbol for item in self._open_positions
+        }
+        try:
+            for candidate in candidates:
+                risk = candidate.journal_entry.risk_decision
+                if (
+                    risk.current_open_risk_quote != locked_risk
+                    or risk.current_gross_exposure_quote != locked_gross
+                ):
+                    raise PaperPortfolioStartError(
+                        "candidate RiskDecision baseline does not match Paper open capacity"
+                    )
+                if candidate.intent.symbol in open_symbols:
+                    raise PaperPortfolioStartError(
+                        "entry candidate targets an occupied Paper symbol"
+                    )
+        except AttributeError as error:
+            raise PaperPortfolioStartError("candidate open-capacity audit is malformed") from error
 
     def _pending_snapshot(self, observed_at: datetime) -> PendingReservationSnapshot:
         return _pending_snapshot_for(self._active, observed_at)
 
     def _validate_internal_state(self) -> None:
-        identities: set[EntryOrderIntentIdentity] = set()
-        symbols: set[TradingSymbol] = set()
-        for item in self._active:
-            if (
-                item.reservation.intent_identity in identities
-                or item.reservation.symbol in symbols
-                or not _lifecycle_matches_reservation(item, self._costs)
-            ):
-                raise PaperPortfolioCoordinatorError(
-                    "coordinator active reservation state is inconsistent"
-                )
-            identities.add(item.reservation.intent_identity)
-            symbols.add(item.reservation.symbol)
+        _validate_staged_state(self._active, self._open_positions, self._accounting, self._costs)
 
     def _validate_new_permits[ReasonT, AuditT](
         self,
@@ -279,6 +502,9 @@ class PaperPortfolioCoordinator:
             raise PaperPortfolioStartError("ADMITTED result must contain a permit")
         active_identities = {item.reservation.intent_identity for item in self._active}
         active_symbols = {item.reservation.symbol for item in self._active}
+        open_symbols = {
+            item.lifecycle.accepted_authorization.symbol for item in self._open_positions
+        }
         staged_identities: set[EntryOrderIntentIdentity] = set()
         staged_symbols: set[TradingSymbol] = set()
         for permit in permits:
@@ -290,10 +516,55 @@ class PaperPortfolioCoordinator:
                 or permit.intent_identity in staged_identities
                 or permit.symbol in active_symbols
                 or permit.symbol in staged_symbols
+                or permit.symbol in open_symbols
             ):
-                raise PaperPortfolioStartError("admission would duplicate active Paper authority")
+                raise PaperPortfolioStartError("admission would duplicate Paper authority")
             staged_identities.add(permit.intent_identity)
             staged_symbols.add(permit.symbol)
+
+
+def _latest_time(left: datetime | None, right: datetime | None) -> datetime | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
+
+
+def _sort_active(active: tuple[_ActivePaperIntent, ...]) -> tuple[_ActivePaperIntent, ...]:
+    return tuple(
+        sorted(
+            active,
+            key=lambda item: item.reservation.intent_identity.decision_identity.sort_key,
+        )
+    )
+
+
+def _sort_open(open_positions: tuple[_OpenPaperPosition, ...]) -> tuple[_OpenPaperPosition, ...]:
+    return tuple(
+        sorted(
+            open_positions,
+            key=lambda item: (
+                str(item.lifecycle.accepted_authorization.symbol),
+                item.accounting_fill.fill_id,
+            ),
+        )
+    )
+
+
+def _copy_costs(costs: SimulatedExecutionCostConfiguration) -> SimulatedExecutionCostConfiguration:
+    return SimulatedExecutionCostConfiguration(
+        costs.spread_bps, costs.slippage_bps, costs.fee_bps, costs.latency
+    )
+
+
+def _copy_observation(observation: PaperExecutionObservation) -> PaperExecutionObservation:
+    return PaperExecutionObservation(
+        deepcopy(observation.source_id),
+        TradingSymbol(observation.symbol.base, observation.symbol.quote),
+        observation.observed_at,
+        observation.reference_price,
+    )
 
 
 def _permit_matches_intent(permit: PortfolioAdmissionPermit, intent: EntryOrderIntent) -> bool:
@@ -392,6 +663,38 @@ def _started_snapshot(lifecycle: PaperOrderLifecycle) -> PaperStartedIntentSnaps
     )
 
 
+def _open_snapshot(item: _OpenPaperPosition) -> PaperOpenPositionSnapshot:
+    lifecycle = item.lifecycle
+    fill = lifecycle.fill
+    if fill is None:
+        raise PaperPortfolioCoordinatorError("open Paper position has no fill")
+    identity = _copy_intent_identity(lifecycle.identity.intent_identity)
+    decision = identity.decision_identity
+    return PaperOpenPositionSnapshot(
+        PaperOrderIdentity(identity),
+        identity,
+        decision,
+        decision.source_id,
+        decision.symbol,
+        fill.side,
+        fill.quantity,
+        fill.authorized_at,
+        fill.eligible_at,
+        fill.fill_at,
+        fill.reference_price,
+        fill.fill_price,
+        fill.fee_quote,
+        lifecycle.accepted_authorization.stop_basis,
+        lifecycle.accepted_authorization.approved_risk_quote,
+        lifecycle.accepted_authorization.approved_notional_quote,
+        item.locked_open_risk_quote,
+        item.locked_gross_exposure_quote,
+        fill.risk_policy_version,
+        fill.safety_policy_version,
+        item.accounting_fill.fill_id,
+    )
+
+
 def _require_staged_authority(
     lifecycle: PaperOrderLifecycle,
     permit: PortfolioAdmissionPermit,
@@ -437,6 +740,216 @@ def _authority_matches_permit(
     )
 
 
+def _require_observed_authority(
+    prior: _ActivePaperIntent,
+    advanced: PaperOrderLifecycle,
+    observation: PaperExecutionObservation,
+    costs: SimulatedExecutionCostConfiguration,
+) -> None:
+    before = prior.lifecycle
+    authority = before.accepted_authorization
+    try:
+        validated = PaperOrderSimulator().clone(advanced)
+    except Exception as error:
+        raise PaperPortfolioObservationError(
+            "observed lifecycle diverged from accepted authority"
+        ) from error
+    if (
+        type(advanced) is not PaperOrderLifecycle
+        or validated != advanced
+        or advanced.identity != before.identity
+        or advanced.accepted_authorization != authority
+        or advanced.costs != costs
+        or advanced.eligible_at != before.eligible_at
+        or advanced.last_observed_at != observation.observed_at
+        or advanced.status not in {PaperOrderStatus.PENDING, PaperOrderStatus.FILLED}
+    ):
+        raise PaperPortfolioObservationError("observed lifecycle changed accepted authority")
+    if advanced.status is PaperOrderStatus.PENDING:
+        if advanced.fill is not None or observation.observed_at >= advanced.eligible_at:
+            raise PaperPortfolioObservationError("pending observation result is inconsistent")
+        return
+    fill = advanced.fill
+    if fill is None or observation.observed_at < advanced.eligible_at:
+        raise PaperPortfolioObservationError("filled observation result is inconsistent")
+    if not _fill_matches_authority(fill, advanced, observation):
+        raise PaperPortfolioObservationError("Paper fill diverged from lifecycle authority")
+
+
+def _fill_matches_authority(
+    fill: PaperMarketFill,
+    lifecycle: PaperOrderLifecycle,
+    observation: PaperExecutionObservation,
+) -> bool:
+    authority = lifecycle.accepted_authorization
+    try:
+        return (
+            fill.intent_identity == lifecycle.identity.intent_identity
+            and fill.decision_identity == lifecycle.intent.decision_identity
+            and fill.source_id.value == authority.source_id_value
+            and fill.symbol == authority.symbol == observation.symbol
+            and fill.side is authority.side
+            and fill.quantity == authority.quantity
+            and fill.authorized_at == authority.authorized_at
+            and fill.eligible_at == lifecycle.eligible_at
+            and fill.fill_at == observation.observed_at
+            and fill.reference_price == observation.reference_price
+            and fill.spread_bps == lifecycle.costs.spread_bps
+            and fill.slippage_bps == lifecycle.costs.slippage_bps
+            and fill.fee_bps == lifecycle.costs.fee_bps
+            and fill.risk_policy_version == authority.risk_policy_version
+            and fill.safety_policy_version == authority.safety_policy_version
+        )
+    except AttributeError:
+        return False
+
+
+def _require_entry_transitions(
+    filled: list[tuple[PaperOrderLifecycle, PositionAccountingFill]],
+    transitions: tuple[PositionAccountingTransition, ...],
+    prior_core: PositionAccountingCore,
+) -> None:
+    expected = {item.fill_id: (lifecycle, item) for lifecycle, item in filled}
+    if len(transitions) != len(expected):
+        raise PaperPortfolioObservationError("accounting transition count is inconsistent")
+    for transition in transitions:
+        matched = expected.get(transition.fill.fill_id)
+        if matched is None:
+            raise PaperPortfolioObservationError("accounting returned an unknown fill")
+        lifecycle, fill = matched
+        prior = prior_core.position(fill.symbol)
+        with localcontext(_DECIMAL_CONTEXT):
+            expected_fees = prior.cumulative_fees + fill.fee_quote
+            signed = (
+                fill.quantity
+                if lifecycle.accepted_authorization.side is EntrySide.BUY
+                else -fill.quantity
+            )
+        if (
+            transition.fill != fill
+            or prior.quantity != 0
+            or transition.position_quantity_before != 0
+            or transition.position_quantity_after != signed
+            or transition.average_entry_before is not None
+            or transition.average_entry_after != fill.fill_price
+            or transition.closed_quantity != 0
+            or transition.gross_realized_pnl_delta != 0
+            or transition.cumulative_gross_realized_pnl != prior.cumulative_gross_realized_pnl
+            or transition.cumulative_fees != expected_fees
+        ):
+            raise PaperPortfolioObservationError("accounting entry transition is inconsistent")
+
+
+def _open_position(
+    lifecycle: PaperOrderLifecycle,
+    accounting_fill: PositionAccountingFill,
+) -> _OpenPaperPosition:
+    locked_risk, locked_gross = _locked_capacity(lifecycle)
+    return _OpenPaperPosition(
+        PaperOrderSimulator().clone(lifecycle),
+        PositionAccountingFill(
+            accounting_fill.fill_id,
+            TradingSymbol(accounting_fill.symbol.base, accounting_fill.symbol.quote),
+            accounting_fill.side,
+            accounting_fill.quantity,
+            accounting_fill.fill_at,
+            accounting_fill.fill_price,
+            accounting_fill.fee_quote,
+        ),
+        locked_risk,
+        locked_gross,
+    )
+
+
+def _locked_capacity(lifecycle: PaperOrderLifecycle) -> tuple[Decimal, Decimal]:
+    fill = lifecycle.fill
+    if fill is None:
+        raise PaperPortfolioObservationError("open position requires one Paper fill")
+    authority = lifecycle.accepted_authorization
+    if (authority.side is EntrySide.BUY and authority.stop_basis >= fill.fill_price) or (
+        authority.side is EntrySide.SELL and authority.stop_basis <= fill.fill_price
+    ):
+        raise PaperPortfolioObservationError("entry fill crossed or reached its stop basis")
+    with localcontext(_DECIMAL_CONTEXT):
+        actual_notional = fill.quantity * fill.fill_price
+        actual_stop_risk = fill.quantity * abs(fill.fill_price - authority.stop_basis)
+        locked_gross = max(authority.approved_notional_quote, actual_notional)
+        locked_risk = max(authority.approved_risk_quote, actual_stop_risk)
+    if not all(value.is_finite() and value > 0 for value in (locked_gross, locked_risk)):
+        raise PaperPortfolioObservationError("locked Paper capacity is invalid")
+    return locked_risk, locked_gross
+
+
+def _locked_totals(open_positions: tuple[_OpenPaperPosition, ...]) -> tuple[Decimal, Decimal]:
+    with localcontext(_DECIMAL_CONTEXT):
+        return (
+            sum((item.locked_open_risk_quote for item in open_positions), _ZERO),
+            sum((item.locked_gross_exposure_quote for item in open_positions), _ZERO),
+        )
+
+
+def _validate_staged_state(
+    active: tuple[_ActivePaperIntent, ...],
+    open_positions: tuple[_OpenPaperPosition, ...],
+    accounting: PositionAccountingCore,
+    costs: SimulatedExecutionCostConfiguration,
+) -> None:
+    pending_identities: set[EntryOrderIntentIdentity] = set()
+    symbols: set[TradingSymbol] = set()
+    for active_item in active:
+        if (
+            active_item.reservation.intent_identity in pending_identities
+            or active_item.reservation.symbol in symbols
+            or not _lifecycle_matches_reservation(active_item, costs)
+        ):
+            raise PaperPortfolioCoordinatorError(
+                "coordinator active reservation state is inconsistent"
+            )
+        pending_identities.add(active_item.reservation.intent_identity)
+        symbols.add(active_item.reservation.symbol)
+
+    fill_ids: set[str] = set()
+    for open_item in open_positions:
+        lifecycle = open_item.lifecycle
+        fill = lifecycle.fill
+        try:
+            cloned = PaperOrderSimulator().clone(lifecycle)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise PaperPortfolioCoordinatorError("open lifecycle is invalid") from error
+        if (
+            cloned != lifecycle
+            or lifecycle.status is not PaperOrderStatus.FILLED
+            or fill is None
+            or lifecycle.accepted_authorization.symbol in symbols
+            or open_item.accounting_fill.fill_id in fill_ids
+        ):
+            raise PaperPortfolioCoordinatorError("open Paper authority is inconsistent")
+        adapted = _paper_fill_to_position_accounting_fill(fill)
+        state = accounting.position(fill.symbol)
+        try:
+            expected_locked_risk, expected_locked_gross = _locked_capacity(lifecycle)
+        except PaperPortfolioObservationError as error:
+            raise PaperPortfolioCoordinatorError("open capacity is invalid") from error
+        with localcontext(_DECIMAL_CONTEXT):
+            expected_quantity = fill.quantity if fill.side is EntrySide.BUY else -fill.quantity
+        if (
+            adapted != open_item.accounting_fill
+            or state.quantity != expected_quantity
+            or state.average_entry_price != fill.fill_price
+            or state.cumulative_gross_realized_pnl != 0
+            or state.cumulative_fees != fill.fee_quote
+            or open_item.locked_open_risk_quote != expected_locked_risk
+            or open_item.locked_gross_exposure_quote != expected_locked_gross
+        ):
+            raise PaperPortfolioCoordinatorError("open position and accounting diverged")
+        symbols.add(fill.symbol)
+        fill_ids.add(open_item.accounting_fill.fill_id)
+    if {symbol for symbol, _ in accounting.positions()} != {
+        item.lifecycle.accepted_authorization.symbol for item in open_positions
+    }:
+        raise PaperPortfolioCoordinatorError("accounting contains unowned Paper symbols")
+
+
 def _lifecycle_matches_reservation(
     active: _ActivePaperIntent,
     costs: SimulatedExecutionCostConfiguration,
@@ -447,13 +960,17 @@ def _lifecycle_matches_reservation(
     try:
         reservation.validate()
         costs.validate()
-        lifecycle.costs.validate()
+        cloned = PaperOrderSimulator().clone(lifecycle)
     except (AttributeError, TypeError, ValueError):
         return False
+    last_observation_valid = lifecycle.last_observed_at is None or (
+        authority.authorized_at <= lifecycle.last_observed_at < lifecycle.eligible_at
+    )
     return (
-        lifecycle.status is PaperOrderStatus.PENDING
+        cloned == lifecycle
+        and lifecycle.status is PaperOrderStatus.PENDING
         and lifecycle.fill is None
-        and lifecycle.last_observed_at is None
+        and last_observation_valid
         and lifecycle.costs == costs
         and lifecycle.identity.intent_identity == reservation.intent_identity
         and authority.source_id_value == reservation.source_id.value

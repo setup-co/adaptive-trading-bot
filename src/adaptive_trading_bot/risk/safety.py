@@ -411,20 +411,24 @@ def _risk_decision_is_consistent(decision: RiskDecision) -> bool:
     assert isinstance(decision.approved_risk_quote, Decimal)
     assert isinstance(decision.resulting_open_risk_quote, Decimal)
     assert isinstance(decision.resulting_gross_exposure_quote, Decimal)
-    expected_distance = (
-        decision.reference_price - decision.approved_risk_stop_basis
-        if decision.strategy_candidate_action is CandidateAction.LONG_CANDIDATE
-        else decision.approved_risk_stop_basis - decision.reference_price
-    )
+    with localcontext(_DECIMAL_CONTEXT):
+        expected_distance = (
+            decision.reference_price - decision.approved_risk_stop_basis
+            if decision.strategy_candidate_action is CandidateAction.LONG_CANDIDATE
+            else decision.approved_risk_stop_basis - decision.reference_price
+        )
+        expected_notional = decision.approved_quantity * decision.reference_price
+        expected_risk = decision.approved_quantity * decision.stop_distance
+        expected_resulting_risk = decision.current_open_risk_quote + decision.approved_risk_quote
+        expected_resulting_exposure = (
+            decision.current_gross_exposure_quote + decision.approved_notional_quote
+        )
     return (
         expected_distance == decision.stop_distance
-        and decision.approved_notional_quote
-        == decision.approved_quantity * decision.reference_price
-        and decision.approved_risk_quote == decision.approved_quantity * decision.stop_distance
-        and decision.resulting_open_risk_quote
-        == decision.current_open_risk_quote + decision.approved_risk_quote
-        and decision.resulting_gross_exposure_quote
-        == decision.current_gross_exposure_quote + decision.approved_notional_quote
+        and decision.approved_notional_quote == expected_notional
+        and decision.approved_risk_quote == expected_risk
+        and decision.resulting_open_risk_quote == expected_resulting_risk
+        and decision.resulting_gross_exposure_quote == expected_resulting_exposure
         and decision.approved_risk_quote <= decision.per_trade_risk_budget_quote
         and decision.resulting_open_risk_quote <= decision.simultaneous_risk_cap_quote
         and decision.resulting_gross_exposure_quote <= decision.gross_exposure_cap_quote

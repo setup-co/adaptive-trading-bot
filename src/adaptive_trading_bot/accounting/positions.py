@@ -165,6 +165,21 @@ class PositionAccountingCore:
             for symbol in sorted(self._states, key=str)
         )
 
+    def clone(self) -> PositionAccountingCore:
+        """Return an independent deterministic fork for higher-level atomic staging."""
+
+        cloned = PositionAccountingCore()
+        cloned._states = {
+            TradingSymbol(symbol.base, symbol.quote): _copy_state(state)
+            for symbol, state in self._states.items()
+        }
+        cloned._seen_fill_ids = set(self._seen_fill_ids)
+        cloned._transitions = tuple(
+            _copy_transition(transition) for transition in self._transitions
+        )
+        cloned._last_fill_at = self._last_fill_at
+        return cloned
+
     def process(self, batch: PositionAccountingFillBatch) -> PositionAccountingTransitionBatch:
         """Validate every fill, then atomically commit the complete batch."""
 
