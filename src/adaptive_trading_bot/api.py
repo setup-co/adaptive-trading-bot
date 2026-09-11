@@ -10,21 +10,34 @@ from pydantic import BaseModel
 from adaptive_trading_bot.config import Settings, get_settings
 from adaptive_trading_bot.dashboard import (
     MAX_DASHBOARD_CHART_CANDLES,
+    MAX_DASHBOARD_JOURNAL_RECORDS,
     DashboardChartInvalidQueryResponse,
     DashboardChartProvider,
     DashboardChartQuery,
     DashboardChartSnapshot,
     DashboardChartSnapshotResponse,
+    DashboardDecisionPage,
+    DashboardDecisionPageResponse,
+    DashboardDecisionTradeQuery,
+    DashboardJournalInvalidQueryResponse,
+    DashboardJournalProvider,
     DashboardSnapshot,
     DashboardSnapshotProvider,
     DashboardSnapshotResponse,
+    DashboardTradePage,
+    DashboardTradePageResponse,
     DashboardUnavailableResponse,
     chart_response,
     dashboard_response,
+    decision_page_response,
+    trade_page_response,
 )
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
+from adaptive_trading_bot.journal import TradeOutcomeClassification
 from adaptive_trading_bot.logging import configure_logging
+from adaptive_trading_bot.risk import OperationalSafetyStatus, RiskDecisionStatus
 from adaptive_trading_bot.storage import SourceId
+from adaptive_trading_bot.strategies import CandidateAction
 
 
 class HealthResponse(BaseModel):
@@ -38,6 +51,7 @@ def create_app(
     settings: Settings | None = None,
     dashboard_provider: DashboardSnapshotProvider | None = None,
     chart_provider: DashboardChartProvider | None = None,
+    journal_provider: DashboardJournalProvider | None = None,
 ) -> FastAPI:
     """Build the API application without connecting to external services."""
 
@@ -113,6 +127,114 @@ def create_app(
             )
         return JSONResponse(response.model_dump(mode="json"))
 
+    @application.get(
+        "/api/v1/dashboard/decisions",
+        response_model=DashboardDecisionPageResponse,
+        responses={
+            400: {"model": DashboardJournalInvalidQueryResponse},
+            503: {"model": DashboardUnavailableResponse},
+        },
+        tags=["dashboard"],
+    )
+    async def dashboard_decisions(
+        start: str,
+        end: str,
+        source_id: str | None = None,
+        symbol: str | None = None,
+        strategy_id: str | None = None,
+        action: str | None = None,
+        risk_status: str | None = None,
+        safety_status: str | None = None,
+        limit: int = MAX_DASHBOARD_JOURNAL_RECORDS,
+    ) -> Response:
+        try:
+            query = _journal_query(
+                start,
+                end,
+                source_id=source_id,
+                symbol=symbol,
+                strategy_id=strategy_id,
+                action=CandidateAction(action) if action is not None else None,
+                risk_status=RiskDecisionStatus(risk_status) if risk_status is not None else None,
+                safety_status=(
+                    OperationalSafetyStatus(safety_status)
+                    if safety_status is not None
+                    else None
+                ),
+                limit=limit,
+            )
+        except (TypeError, ValueError):
+            return _dashboard_invalid_journal_query()
+        if journal_provider is None:
+            return _dashboard_unavailable(
+                "DASHBOARD_DECISION_PROVIDER_UNAVAILABLE",
+                "dashboard decision provider is not configured",
+            )
+        try:
+            page = journal_provider.decisions(query)
+            if not isinstance(page, DashboardDecisionPage):
+                raise TypeError("provider returned an invalid decision page")
+            page.validate()
+            response = decision_page_response(page)
+        except Exception:
+            return _dashboard_unavailable(
+                "DASHBOARD_DECISION_PROVIDER_FAILURE",
+                "dashboard decisions are temporarily unavailable",
+            )
+        return JSONResponse(response.model_dump(mode="json"))
+
+    @application.get(
+        "/api/v1/dashboard/trades",
+        response_model=DashboardTradePageResponse,
+        responses={
+            400: {"model": DashboardJournalInvalidQueryResponse},
+            503: {"model": DashboardUnavailableResponse},
+        },
+        tags=["dashboard"],
+    )
+    async def dashboard_trades(
+        start: str,
+        end: str,
+        source_id: str | None = None,
+        symbol: str | None = None,
+        strategy_id: str | None = None,
+        classification: str | None = None,
+        limit: int = MAX_DASHBOARD_JOURNAL_RECORDS,
+    ) -> Response:
+        try:
+            query = _journal_query(
+                start,
+                end,
+                source_id=source_id,
+                symbol=symbol,
+                strategy_id=strategy_id,
+                classification=(
+                    TradeOutcomeClassification(classification)
+                    if classification is not None
+                    else None
+                ),
+                limit=limit,
+            )
+        except (TypeError, ValueError):
+            return _dashboard_invalid_journal_query()
+        if journal_provider is None:
+            return _dashboard_unavailable(
+                "DASHBOARD_TRADE_PROVIDER_UNAVAILABLE",
+                "dashboard trade provider is not configured",
+            )
+        try:
+            page = journal_provider.trades(query)
+            if not isinstance(page, DashboardTradePage):
+                raise TypeError("provider returned an invalid trade page")
+            page.validate()
+            response = trade_page_response(page)
+        except Exception:
+            return _dashboard_unavailable(
+                "DASHBOARD_TRADE_PROVIDER_FAILURE",
+                "dashboard trades are temporarily unavailable",
+            )
+        return JSONResponse(response.model_dump(mode="json"))
+
     return application
 
 
@@ -123,6 +245,11 @@ def _dashboard_unavailable(code: str, message: str) -> JSONResponse:
 
 def _dashboard_invalid_chart_query() -> JSONResponse:
     response = DashboardChartInvalidQueryResponse()
+    return JSONResponse(status_code=400, content=response.model_dump(mode="json"))
+
+
+def _dashboard_invalid_journal_query() -> JSONResponse:
+    response = DashboardJournalInvalidQueryResponse()
     return JSONResponse(status_code=400, content=response.model_dump(mode="json"))
 
 
@@ -147,6 +274,34 @@ def _chart_query(
 def _parse_datetime(value: str) -> datetime:
     encoded = f"{value[:-1]}+00:00" if value.endswith("Z") else value
     return datetime.fromisoformat(encoded)
+
+
+def _journal_query(
+    start: str,
+    end: str,
+    *,
+    source_id: str | None,
+    symbol: str | None,
+    strategy_id: str | None,
+    action: CandidateAction | None = None,
+    risk_status: RiskDecisionStatus | None = None,
+    safety_status: OperationalSafetyStatus | None = None,
+    classification: TradeOutcomeClassification | None = None,
+    limit: int,
+) -> DashboardDecisionTradeQuery:
+    canonical_symbol = str(TradingSymbol.parse(symbol)) if symbol is not None else None
+    return DashboardDecisionTradeQuery(
+        _parse_datetime(start),
+        _parse_datetime(end),
+        source_id,
+        canonical_symbol,
+        strategy_id,
+        action,
+        risk_status,
+        safety_status,
+        classification,
+        limit,
+    )
 
 
 app = create_app()

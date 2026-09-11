@@ -27,6 +27,29 @@ from adaptive_trading_bot.dashboard.chart_provider import (
     DashboardChartProviderError,
     HistoricalDashboardChartProvider,
 )
+from adaptive_trading_bot.dashboard.journal_api_models import (
+    DashboardDecisionPageResponse,
+    DashboardJournalInvalidQueryResponse,
+    DashboardTradePageResponse,
+    decision_page_response,
+    trade_page_response,
+)
+from adaptive_trading_bot.dashboard.journal_models import (
+    MAX_DASHBOARD_JOURNAL_RECORDS,
+    DashboardCompletedTradeRecord,
+    DashboardDecisionIdentity,
+    DashboardDecisionPage,
+    DashboardDecisionQuery,
+    DashboardDecisionRecord,
+    DashboardDecisionTradeQuery,
+    DashboardTradePage,
+    DashboardTradeQuery,
+)
+from adaptive_trading_bot.dashboard.journal_provider import (
+    DashboardJournalProvider,
+    DashboardJournalProviderError,
+    SnapshotDashboardJournalProvider,
+)
 from adaptive_trading_bot.dashboard.models import (
     DashboardAvailability,
     DashboardCompletedTrade,
@@ -46,6 +69,7 @@ from adaptive_trading_bot.dashboard.provider import DashboardSnapshotProvider
 
 __all__ = [
     "MAX_DASHBOARD_CHART_CANDLES",
+    "MAX_DASHBOARD_JOURNAL_RECORDS",
     "DashboardAvailability",
     "DashboardChartCandle",
     "DashboardChartIntegrity",
@@ -61,6 +85,16 @@ __all__ = [
     "DashboardChartSnapshotResponse",
     "DashboardChartValidationError",
     "DashboardCompletedTrade",
+    "DashboardCompletedTradeRecord",
+    "DashboardDecisionIdentity",
+    "DashboardDecisionPage",
+    "DashboardDecisionPageResponse",
+    "DashboardDecisionQuery",
+    "DashboardDecisionRecord",
+    "DashboardDecisionTradeQuery",
+    "DashboardJournalInvalidQueryResponse",
+    "DashboardJournalProvider",
+    "DashboardJournalProviderError",
     "DashboardMarketSnapshot",
     "DashboardOpenPosition",
     "DashboardPaperAccountSnapshot",
@@ -70,10 +104,16 @@ __all__ = [
     "DashboardSnapshotResponse",
     "DashboardSourceSystemSnapshot",
     "DashboardSystemSnapshot",
+    "DashboardTradePage",
+    "DashboardTradePageResponse",
+    "DashboardTradeQuery",
     "DashboardUnavailableResponse",
     "DashboardValue",
     "HistoricalDashboardChartProvider",
+    "SnapshotDashboardJournalProvider",
     "chart_response",
     "dashboard_response",
+    "decision_page_response",
     "project_dashboard_snapshot",
+    "trade_page_response",
 ]
