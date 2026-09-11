@@ -9,6 +9,11 @@ from adaptive_trading_bot.risk.core import (
     RiskPositionExposure,
     RiskReasonCode,
 )
+from adaptive_trading_bot.risk.live_adapter import (
+    LiveOperationalHealthAssemblyError,
+    LiveOperationalHealthInputs,
+    operational_health_from_live_quote,
+)
 from adaptive_trading_bot.risk.safety import (
     ExchangeApiHealthState,
     FeedIntegrityState,
@@ -25,6 +30,8 @@ from adaptive_trading_bot.risk.safety import (
 __all__ = [
     "ExchangeApiHealthState",
     "FeedIntegrityState",
+    "LiveOperationalHealthAssemblyError",
+    "LiveOperationalHealthInputs",
     "OperationalHealthSnapshot",
     "OperationalSafetyConfiguration",
     "OperationalSafetyDecision",
@@ -39,5 +46,6 @@ __all__ = [
     "RiskPositionExposure",
     "RiskReasonCode",
     "VolatilitySafetyState",
+    "operational_health_from_live_quote",
     "risk_decision_is_internally_consistent",
 ]
