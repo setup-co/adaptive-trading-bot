@@ -46,6 +46,14 @@ from adaptive_trading_bot.orders.exit_intent import (
     _authorize_protective_stop_full_close,
     _copy_authoritative_exit_intent,
 )
+from adaptive_trading_bot.paper.account import (
+    PaperAccountConfiguration,
+    PaperAccountError,
+    PaperAccountSnapshot,
+    _advance_account,
+    _new_account_state,
+    _project_account,
+)
 from adaptive_trading_bot.paper.accounting import (
     paper_fill_to_position_accounting_fill as _paper_fill_to_position_accounting_fill,
 )
@@ -67,6 +75,7 @@ from adaptive_trading_bot.paper.exit_execution import (
     PaperProtectiveExitLifecycle,
     PaperProtectiveExitSimulator,
 )
+from adaptive_trading_bot.risk import RiskPortfolioSnapshot, RiskPositionExposure
 from adaptive_trading_bot.strategies.core import SourceIdentity
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
@@ -315,6 +324,7 @@ class PaperPortfolioCoordinator:
     """Atomically coordinate admitted Paper entries through open positions."""
 
     __slots__ = (
+        "_account",
         "_accounting",
         "_active",
         "_active_exit_intents",
@@ -324,17 +334,50 @@ class PaperPortfolioCoordinator:
         "_open_positions",
     )
 
-    def __init__(self, costs: SimulatedExecutionCostConfiguration) -> None:
+    def __init__(
+        self,
+        costs: SimulatedExecutionCostConfiguration,
+        account_configuration: PaperAccountConfiguration | None = None,
+    ) -> None:
         if not isinstance(costs, SimulatedExecutionCostConfiguration):
             raise TypeError("costs must be a SimulatedExecutionCostConfiguration")
         costs.validate()
         self._costs = _copy_costs(costs)
+        self._account = _new_account_state(
+            PaperAccountConfiguration() if account_configuration is None else account_configuration
+        )
         self._active: tuple[_ActivePaperIntent, ...] = ()
         self._accounting = PositionAccountingCore()
         self._open_positions: tuple[_OpenPaperPosition, ...] = ()
         self._active_exit_intents: tuple[_PendingProtectiveExit, ...] = ()
         self._last_finalized_at: datetime | None = None
         self._last_observed_at: datetime | None = None
+
+    def account_snapshot(self, observed_at: datetime) -> PaperAccountSnapshot:
+        """Return detached realized-only account facts without committing chronology."""
+
+        instant = self._validate_snapshot_time(observed_at)
+        self._validate_internal_state()
+        _, snapshot = _project_account(self._account, instant)
+        return snapshot
+
+    def risk_portfolio_snapshot(self, observed_at: datetime) -> RiskPortfolioSnapshot:
+        """Build authoritative Risk Manager facts from coordinator-owned Paper state."""
+
+        account = self.account_snapshot(observed_at)
+        if account.account_equity_quote <= 0:
+            raise PaperAccountError(
+                "non-positive Paper equity cannot produce a RiskPortfolioSnapshot"
+            )
+        positions = tuple(_risk_position(item) for item in self._open_positions)
+        return RiskPortfolioSnapshot(
+            account.observed_at,
+            account.quote_currency,
+            account.account_equity_quote,
+            account.day_start_equity_quote,
+            account.peak_equity_quote,
+            positions,
+        )
 
     def start_batch[ReasonT, AuditT](
         self,
@@ -356,6 +399,7 @@ class PaperPortfolioCoordinator:
                 self._pending_snapshot(observed_at),
             )
         if admission.status is PortfolioAdmissionStatus.NO_ADMISSION:
+            next_account, _ = _advance_account(self._account, observed_at)
             result = PaperPortfolioStartBatchResult(
                 observed_at,
                 PaperPortfolioStartBatchStatus.NO_START,
@@ -363,6 +407,7 @@ class PaperPortfolioCoordinator:
                 (),
                 self._pending_snapshot(observed_at),
             )
+            self._account = next_account
             self._last_finalized_at = observed_at
             return result
 
@@ -402,7 +447,9 @@ class PaperPortfolioCoordinator:
             tuple(sorted(started, key=lambda item: item.decision_identity.sort_key)),
             _pending_snapshot_for(next_active, observed_at),
         )
+        next_account, _ = _advance_account(self._account, observed_at)
         self._active = next_active
+        self._account = next_account
         self._last_finalized_at = observed_at
         return result
 
@@ -482,6 +529,12 @@ class PaperPortfolioCoordinator:
                 staged_accounting,
                 self._costs,
             )
+            entry_fees = _entry_fee_total(newly_filled)
+            staged_account, _ = _advance_account(
+                self._account,
+                observed_at,
+                entry_fees_quote=entry_fees,
+            )
         except Exception as error:
             if isinstance(error, PaperPortfolioObservationError):
                 raise
@@ -510,6 +563,7 @@ class PaperPortfolioCoordinator:
         self._active = next_active
         self._open_positions = next_open
         self._accounting = staged_accounting
+        self._account = staged_account
         self._last_observed_at = observed_at
         return result
 
@@ -621,6 +675,7 @@ class PaperPortfolioCoordinator:
                 self._accounting,
                 self._costs,
             )
+            staged_account, _ = _advance_account(self._account, observed_at)
         except Exception as error:
             if isinstance(error, PaperProtectiveExitAuthorizationError):
                 raise
@@ -643,6 +698,7 @@ class PaperPortfolioCoordinator:
             locked_gross,
         )
         self._active_exit_intents = next_exits
+        self._account = staged_account
         self._last_observed_at = observed_at
         return result
 
@@ -770,6 +826,16 @@ class PaperPortfolioCoordinator:
                 )
                 for _, advanced, accounting_fill, open_item in newly_filled
             )
+            gross_realized, exit_fees = _exit_account_totals(
+                newly_filled,
+                accounting_transitions,
+            )
+            staged_account, _ = _advance_account(
+                self._account,
+                observed_at,
+                exit_fees_quote=exit_fees,
+                gross_realized_pnl_quote=gross_realized,
+            )
         except Exception as error:
             if isinstance(error, PaperPortfolioExitExecutionError):
                 raise
@@ -794,6 +860,7 @@ class PaperPortfolioCoordinator:
         self._active_exit_intents = next_exits
         self._open_positions = next_open
         self._accounting = staged_accounting
+        self._account = staged_account
         self._last_observed_at = observed_at
         return result
 
@@ -892,22 +959,30 @@ class PaperPortfolioCoordinator:
         candidates: tuple[PortfolioAdmissionCandidate[ReasonT, AuditT], ...],
     ) -> None:
         locked_risk, locked_gross = _locked_totals(self._open_positions)
+        _, account = _project_account(
+            self._account,
+            candidates[0].journal_entry.identity.observed_at,
+        )
         open_symbols = {
             item.lifecycle.accepted_authorization.symbol for item in self._open_positions
         }
         try:
             for candidate in candidates:
-                risk = candidate.journal_entry.risk_decision
-                if (
-                    risk.current_open_risk_quote != locked_risk
-                    or risk.current_gross_exposure_quote != locked_gross
-                ):
-                    raise PaperPortfolioStartError(
-                        "candidate RiskDecision baseline does not match Paper open capacity"
-                    )
                 if candidate.intent.symbol in open_symbols:
                     raise PaperPortfolioStartError(
                         "entry candidate targets an occupied Paper symbol"
+                    )
+                risk = candidate.journal_entry.risk_decision
+                if (
+                    risk.account_equity_quote != account.account_equity_quote
+                    or risk.day_start_equity_quote != account.day_start_equity_quote
+                    or risk.peak_equity_quote != account.peak_equity_quote
+                    or risk.current_open_risk_quote != locked_risk
+                    or risk.current_gross_exposure_quote != locked_gross
+                    or risk.risk_snapshot_observed_at != account.observed_at
+                ):
+                    raise PaperPortfolioStartError(
+                        "candidate RiskDecision baseline does not match Paper account state"
                     )
         except AttributeError as error:
             raise PaperPortfolioStartError("candidate open-capacity audit is malformed") from error
@@ -986,6 +1061,23 @@ class PaperPortfolioCoordinator:
         return _pending_snapshot_for(self._active, observed_at)
 
     def _validate_internal_state(self) -> None:
+        latest = _latest_time(self._last_finalized_at, self._last_observed_at)
+        if latest is None:
+            if self._account != _new_account_state(self._account.configuration):
+                raise PaperPortfolioCoordinatorError(
+                    "uncommitted Paper account state is inconsistent"
+                )
+        else:
+            try:
+                if self._account.utc_day != latest.date():
+                    raise PaperAccountError(
+                        "Paper account UTC day does not match committed chronology"
+                    )
+                _project_account(self._account, latest)
+            except (TypeError, ValueError) as error:
+                raise PaperPortfolioCoordinatorError(
+                    "Paper account state is inconsistent"
+                ) from error
         _validate_staged_state(
             self._active,
             self._open_positions,
@@ -993,6 +1085,18 @@ class PaperPortfolioCoordinator:
             self._accounting,
             self._costs,
         )
+
+    def _validate_snapshot_time(self, observed_at: datetime) -> datetime:
+        try:
+            instant = require_utc(observed_at, field="Paper account snapshot observed_at")
+        except (TypeError, ValueError) as error:
+            raise PaperPortfolioBatchError("Paper account snapshot time is invalid") from error
+        latest = _latest_time(self._last_finalized_at, self._last_observed_at)
+        if latest is not None and instant < latest:
+            raise PaperPortfolioBatchError(
+                "Paper account snapshot cannot precede committed Paper chronology"
+            )
+        return instant
 
     def _validate_new_permits[ReasonT, AuditT](
         self,
@@ -1658,6 +1762,49 @@ def _locked_totals(open_positions: tuple[_OpenPaperPosition, ...]) -> tuple[Deci
             sum((item.locked_open_risk_quote for item in open_positions), _ZERO),
             sum((item.locked_gross_exposure_quote for item in open_positions), _ZERO),
         )
+
+
+def _risk_position(item: _OpenPaperPosition) -> RiskPositionExposure:
+    fill = item.lifecycle.fill
+    if fill is None:
+        raise PaperPortfolioCoordinatorError("open Paper position has no fill")
+    quantity = fill.quantity if fill.side is EntrySide.BUY else -fill.quantity
+    return RiskPositionExposure(
+        TradingSymbol(fill.symbol.base, fill.symbol.quote),
+        quantity,
+        item.locked_gross_exposure_quote,
+        item.locked_open_risk_quote,
+    )
+
+
+def _entry_fee_total(
+    filled: list[tuple[PaperOrderLifecycle, PositionAccountingFill]],
+) -> Decimal:
+    ordered = sorted(filled, key=lambda item: (str(item[1].symbol), item[1].fill_id))
+    with localcontext(_DECIMAL_CONTEXT):
+        return sum((item[1].fee_quote for item in ordered), _ZERO)
+
+
+def _exit_account_totals(
+    filled: list[
+        tuple[
+            _PendingProtectiveExit,
+            PaperProtectiveExitLifecycle,
+            PositionAccountingFill,
+            _OpenPaperPosition,
+        ]
+    ],
+    transitions: tuple[PositionAccountingTransition, ...],
+) -> tuple[Decimal, Decimal]:
+    transition_by_fill_id = {item.fill.fill_id: item for item in transitions}
+    ordered = sorted(filled, key=lambda item: (str(item[2].symbol), item[2].fill_id))
+    with localcontext(_DECIMAL_CONTEXT):
+        gross = sum(
+            (transition_by_fill_id[item[2].fill_id].gross_realized_pnl_delta for item in ordered),
+            _ZERO,
+        )
+        fees = sum((item[2].fee_quote for item in ordered), _ZERO)
+    return gross, fees
 
 
 def _validate_staged_state(

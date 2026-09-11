@@ -43,6 +43,8 @@ def candidate(
     source_id: SourceId = SOURCE,
     action: CandidateAction = CandidateAction.LONG_CANDIDATE,
     positions: tuple[RiskPositionExposure, ...] = (),
+    portfolio: RiskPortfolioSnapshot | None = None,
+    configuration: RiskManagerConfiguration | None = None,
 ) -> PortfolioAdmissionCandidate[object, object]:
     context = _context(source_id=source_id, symbol=symbol, observed_at=observed_at)
     evaluation = _manual_evaluation(
@@ -51,9 +53,10 @@ def candidate(
         action=action,
         invalidation=(Decimal(135) if action is CandidateAction.SHORT_CANDIDATE else Decimal(75)),
     )
-    risk = RiskManager(RiskManagerConfiguration()).evaluate(
+    risk = RiskManager(configuration or RiskManagerConfiguration()).evaluate(
         evaluation,
-        RiskPortfolioSnapshot(
+        portfolio
+        or RiskPortfolioSnapshot(
             observed_at,
             "USDT",
             Decimal(10000),

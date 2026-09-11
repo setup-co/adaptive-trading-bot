@@ -469,17 +469,22 @@ def _approved_account_audit_is_consistent(decision: RiskDecision) -> bool:
     ):
         return False
 
-    expected_daily_loss = max(
-        Decimal(0), decision.day_start_equity_quote - decision.account_equity_quote
-    )
-    expected_drawdown = max(Decimal(0), decision.peak_equity_quote - decision.account_equity_quote)
+    with localcontext(_DECIMAL_CONTEXT):
+        expected_daily_loss = max(
+            Decimal(0), decision.day_start_equity_quote - decision.account_equity_quote
+        )
+        expected_drawdown = max(
+            Decimal(0), decision.peak_equity_quote - decision.account_equity_quote
+        )
+        expected_daily_loss_fraction = expected_daily_loss / decision.day_start_equity_quote
+        expected_drawdown_fraction = expected_drawdown / decision.peak_equity_quote
     daily_limit_reached = decision.daily_loss_fraction >= decision.max_daily_loss_fraction
     drawdown_limit_reached = decision.drawdown_fraction >= decision.max_drawdown_fraction
     return (
         decision.daily_loss_quote == expected_daily_loss
-        and decision.daily_loss_fraction == expected_daily_loss / decision.day_start_equity_quote
+        and decision.daily_loss_fraction == expected_daily_loss_fraction
         and decision.drawdown_quote == expected_drawdown
-        and decision.drawdown_fraction == expected_drawdown / decision.peak_equity_quote
+        and decision.drawdown_fraction == expected_drawdown_fraction
         and not daily_limit_reached
         and not drawdown_limit_reached
         and not decision.requires_halt_review

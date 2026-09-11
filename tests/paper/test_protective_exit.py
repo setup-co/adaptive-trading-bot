@@ -248,10 +248,15 @@ def test_committed_stop_evaluation_seals_start_and_entry_observation_chronology(
     paper = coordinator(latency=timedelta(minutes=10))
     paper.start_batch((candidate(),))
     paper.observe_batch((observation(BTC, NOW + timedelta(minutes=10), Decimal(100)),))
-    opened = paper.snapshot().open_positions[0]
     eth_start = NOW + timedelta(minutes=15)
     paper.start_batch(
-        (candidate(observed_at=eth_start, symbol=ETH, positions=(risk_position(opened),)),)
+        (
+            candidate(
+                observed_at=eth_start,
+                symbol=ETH,
+                portfolio=paper.risk_portfolio_snapshot(eth_start),
+            ),
+        )
     )
     sealed_at = NOW + timedelta(minutes=16)
     paper.evaluate_protective_stops((observation(BTC, sealed_at, Decimal(80)),))

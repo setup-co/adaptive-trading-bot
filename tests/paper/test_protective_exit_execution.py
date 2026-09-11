@@ -540,7 +540,9 @@ def test_capacity_and_symbol_release_enable_exact_post_close_admission() -> None
     paper.observe_protective_exits((observation(BTC, at, Decimal(70)),))
     later = NOW + timedelta(minutes=15)
 
-    result = paper.start_batch((candidate(observed_at=later),))
+    result = paper.start_batch(
+        (candidate(observed_at=later, portfolio=paper.risk_portfolio_snapshot(later)),)
+    )
 
     assert result.status is PaperPortfolioStartBatchStatus.STARTED
     assert paper.snapshot().locked_open_risk_quote == 0
