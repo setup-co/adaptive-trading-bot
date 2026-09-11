@@ -92,6 +92,11 @@ alembic current
 `GET /health` is process liveness only. It deliberately does not report database or exchange
 readiness. Live trading is controlled by `ATB_LIVE_TRADING_ENABLED` and defaults to `false`.
 
+`GET /api/v1/dashboard/snapshot` is a strictly read-only observation endpoint. It serves only an
+injected authoritative dashboard snapshot provider; without one it returns a structured `503`
+instead of demo or inferred trading data. Decimal values are serialized losslessly as strings,
+and facts without an authoritative source are explicitly marked unavailable.
+
 ## Market-data domain conventions
 
 Internal symbols use normalized exchange-neutral `BASE/QUOTE` notation. V1 candle timeframes are
