@@ -114,10 +114,18 @@ def candle(index: int = 0) -> Candle:
     )
 
 
-def live_snapshot(item: Candle) -> LiveMarketFeedSnapshot:
+def live_snapshot(
+    *items: Candle,
+    received_at: datetime | None = None,
+) -> LiveMarketFeedSnapshot:
+    receipt = (
+        max(item.close_time for item in items) + timedelta(seconds=7)
+        if received_at is None
+        else received_at
+    )
     return LiveMarketFeedSnapshot(
-        item.close_time,
-        closed_candles=(LiveClosedCandleObservation(SOURCE, item, item.close_time),),
+        receipt,
+        closed_candles=tuple(LiveClosedCandleObservation(SOURCE, item, receipt) for item in items),
     )
 
 
@@ -167,15 +175,103 @@ def paper() -> PaperPortfolioCoordinator:
     )
 
 
-def test_live_and_replay_use_equal_feature_input_and_engine_results() -> None:
+def test_delayed_live_receipt_uses_actual_close_time_and_matches_replay_features() -> None:
     item = candle()
-    live_batch = observed_candles_from_live(live_snapshot(item))
+    snapshot = live_snapshot(item, received_at=item.close_time + timedelta(seconds=11))
+    live_batches = observed_candles_from_live(snapshot)
     replay_batch = observed_candles_from_replay(
         ReplayBatch(item.close_time, (ReplayEvent(SOURCE, item),))
     )
 
-    assert live_batch == replay_batch
-    assert FeatureEngine().process(live_batch) == FeatureEngine().process(replay_batch)
+    assert snapshot.observed_at == item.close_time + timedelta(seconds=11)
+    assert snapshot.closed_candles[0].observed_at == snapshot.observed_at
+    assert len(live_batches) == 1
+    assert live_batches[0].observed_at == item.close_time
+    assert live_batches[0] == replay_batch
+    assert FeatureEngine().process(live_batches[0]) == FeatureEngine().process(replay_batch)
+
+
+def test_delayed_poll_emits_every_catch_up_candle_in_chronological_batches() -> None:
+    items = tuple(candle(index) for index in range(4))
+    receipt = items[-1].close_time + timedelta(seconds=23)
+
+    batches = observed_candles_from_live(live_snapshot(*items, received_at=receipt))
+    engine = FeatureEngine()
+    results = tuple(engine.process(batch) for batch in batches)
+
+    assert tuple(batch.observed_at for batch in batches) == tuple(item.close_time for item in items)
+    assert tuple(batch.events[0].candle for batch in batches) == items
+    assert tuple(result.snapshots[0].bars_seen for result in results) == (1, 2, 3, 4)
+    assert all(batch.observed_at < receipt for batch in batches)
+
+
+def test_multi_timeframe_candles_group_by_equal_close_time_and_not_receipt() -> None:
+    prior_15m = candle(-1)
+    current_15m = candle()
+    one_hour = Candle(
+        BTC,
+        Timeframe.HOUR_1,
+        NOW - timedelta(hours=1),
+        NOW,
+        Decimal(90),
+        Decimal(110),
+        Decimal(85),
+        Decimal(101),
+        Decimal(20),
+    )
+    four_hours = Candle(
+        BTC,
+        Timeframe.HOURS_4,
+        NOW - timedelta(hours=4),
+        NOW,
+        Decimal(80),
+        Decimal(115),
+        Decimal(75),
+        Decimal(101),
+        Decimal(30),
+    )
+    receipt = NOW + timedelta(seconds=19)
+
+    snapshot = live_snapshot(
+        four_hours,
+        current_15m,
+        prior_15m,
+        one_hour,
+        received_at=receipt,
+    )
+    batches = observed_candles_from_live(snapshot)
+
+    assert tuple(batch.observed_at for batch in batches) == (
+        prior_15m.close_time,
+        NOW,
+    )
+    assert tuple(event.series.timeframe for event in batches[0].events) == (Timeframe.MINUTES_15,)
+    assert tuple(event.series.timeframe for event in batches[1].events) == (
+        Timeframe.MINUTES_15,
+        Timeframe.HOUR_1,
+        Timeframe.HOURS_4,
+    )
+    assert all(observation.observed_at == receipt for observation in snapshot.closed_candles)
+
+
+def test_live_and_replay_feature_parity_holds_at_every_catch_up_close_time() -> None:
+    items = tuple(candle(index) for index in range(3))
+    receipt = items[-1].close_time + timedelta(seconds=31)
+    snapshot = live_snapshot(*items, received_at=receipt)
+    live_batches = observed_candles_from_live(snapshot)
+    replay_batches = tuple(
+        observed_candles_from_replay(ReplayBatch(item.close_time, (ReplayEvent(SOURCE, item),)))
+        for item in items
+    )
+    live_engine = FeatureEngine()
+    replay_engine = FeatureEngine()
+
+    assert live_batches == replay_batches
+    assert tuple(live_engine.process(batch) for batch in live_batches) == tuple(
+        replay_engine.process(batch) for batch in replay_batches
+    )
+    assert snapshot.observed_at == receipt
+    assert all(observation.observed_at == receipt for observation in snapshot.closed_candles)
 
 
 def test_empty_live_candle_snapshot_fails_without_fabricating_feature_event() -> None:
@@ -186,7 +282,9 @@ def test_empty_live_candle_snapshot_fails_without_fabricating_feature_event() ->
 def test_malformed_live_candle_fails_before_feature_state_advances() -> None:
     engine = FeatureEngine()
     assert (
-        engine.process(observed_candles_from_live(live_snapshot(candle()))).snapshots[0].bars_seen
+        engine.process(observed_candles_from_live(live_snapshot(candle()))[0])
+        .snapshots[0]
+        .bars_seen
         == 1
     )
     malformed = live_snapshot(candle(1))
@@ -195,7 +293,7 @@ def test_malformed_live_candle_fails_before_feature_state_advances() -> None:
     with pytest.raises(LiveMarketDataValidationError, match="changed"):
         observed_candles_from_live(malformed)
 
-    valid_result = engine.process(observed_candles_from_live(live_snapshot(candle(1))))
+    valid_result = engine.process(observed_candles_from_live(live_snapshot(candle(1)))[0])
     assert valid_result.snapshots[0].bars_seen == 2
 
 
@@ -205,8 +303,8 @@ def test_feature_translation_is_detached_from_later_caller_mutation() -> None:
     object.__setattr__(snapshot.closed_candles[0].source_id, "value", "forged")
     object.__setattr__(snapshot.closed_candles[0].candle, "close", Decimal(999))
 
-    assert translated.events[0].series.source_id == SOURCE
-    assert translated.events[0].candle.close == Decimal(101)
+    assert translated[0].events[0].series.source_id == SOURCE
+    assert translated[0].events[0].candle.close == Decimal(101)
 
 
 def test_quote_maps_exact_midpoint_to_detached_paper_observation() -> None:
