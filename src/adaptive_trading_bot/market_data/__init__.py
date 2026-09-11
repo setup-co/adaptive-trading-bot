@@ -1,4 +1,4 @@
-"""Public historical market-data acquisition."""
+"""Public historical acquisition and live polling boundaries."""
 
 from adaptive_trading_bot.market_data.acquisition import (
     BoundedOHLCVImporter,
@@ -6,30 +6,58 @@ from adaptive_trading_bot.market_data.acquisition import (
     ImportResult,
     InvalidImportRequestError,
     MalformedSourceRowError,
+    MalformedTickerError,
     MarketDataAcquisitionError,
     OHLCVUnsupportedError,
     PaginationError,
     PublicOHLCVSource,
     SourceRequestError,
     SymbolUnsupportedError,
+    TickerUnsupportedError,
     TimeframeUnsupportedError,
     UnsupportedExchangeError,
 )
-from adaptive_trading_bot.market_data.ccxt_public import CcxtPublicOHLCVSource
+from adaptive_trading_bot.market_data.ccxt_public import (
+    CcxtPublicLiveMarketSource,
+    CcxtPublicOHLCVSource,
+)
+from adaptive_trading_bot.market_data.live import (
+    ConflictingLiveCandleError,
+    DuplicateLiveCandleError,
+    LiveClosedCandleObservation,
+    LiveMarketDataValidationError,
+    LiveMarketFeedSnapshot,
+    LiveMarketQuote,
+    LiveMarketRequestError,
+    LiveMarketRequestKind,
+    PublicLiveMarketSource,
+)
 
 __all__ = [
     "BoundedOHLCVImporter",
+    "CcxtPublicLiveMarketSource",
     "CcxtPublicOHLCVSource",
+    "ConflictingLiveCandleError",
     "ConflictingSourceCandleError",
+    "DuplicateLiveCandleError",
     "ImportResult",
     "InvalidImportRequestError",
+    "LiveClosedCandleObservation",
+    "LiveMarketDataValidationError",
+    "LiveMarketFeedSnapshot",
+    "LiveMarketQuote",
+    "LiveMarketRequestError",
+    "LiveMarketRequestKind",
     "MalformedSourceRowError",
+    "MalformedTickerError",
     "MarketDataAcquisitionError",
     "OHLCVUnsupportedError",
     "PaginationError",
+    "PublicLiveMarketSource",
     "PublicOHLCVSource",
     "SourceRequestError",
     "SymbolUnsupportedError",
+    "TickerUnsupportedError",
     "TimeframeUnsupportedError",
     "UnsupportedExchangeError",
 ]

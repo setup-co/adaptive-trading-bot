@@ -29,6 +29,10 @@ class OHLCVUnsupportedError(MarketDataAcquisitionError):
     """The source does not support public OHLCV retrieval."""
 
 
+class TickerUnsupportedError(MarketDataAcquisitionError):
+    """The source does not support public ticker retrieval."""
+
+
 class SymbolUnsupportedError(MarketDataAcquisitionError):
     """The requested spot symbol is not supported."""
 
@@ -39,6 +43,10 @@ class TimeframeUnsupportedError(MarketDataAcquisitionError):
 
 class MalformedSourceRowError(MarketDataAcquisitionError):
     """A source returned a row that cannot become a canonical Candle."""
+
+
+class MalformedTickerError(MarketDataAcquisitionError):
+    """A public ticker cannot become a canonical live quote."""
 
 
 class SourceRequestError(MarketDataAcquisitionError):
