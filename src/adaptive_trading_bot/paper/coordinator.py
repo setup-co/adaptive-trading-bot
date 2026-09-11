@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
+from typing import cast
 
 from adaptive_trading_bot.accounting import (
     PositionAccountingCore,
@@ -30,7 +31,17 @@ from adaptive_trading_bot.execution import (
     SimulatedExecutionCostConfiguration,
     SimulatedExecutionSide,
 )
-from adaptive_trading_bot.journal import DecisionIdentity
+from adaptive_trading_bot.journal import (
+    CompletedTradeIdentity,
+    CompletedTradeJournalBatch,
+    CompletedTradeJournalEntry,
+    CompletedTradeJournalSnapshot,
+    DecisionIdentity,
+    DecisionJournalEntry,
+    InMemoryCompletedTradeJournal,
+    TradeExitReason,
+    TradeOutcomeClassification,
+)
 from adaptive_trading_bot.orders import (
     EntryOrderIntent,
     EntryOrderIntentAuthorizer,
@@ -52,6 +63,7 @@ from adaptive_trading_bot.paper.account import (
     PaperAccountSnapshot,
     _advance_account,
     _new_account_state,
+    _PaperAccountState,
     _project_account,
 )
 from adaptive_trading_bot.paper.accounting import (
@@ -282,6 +294,7 @@ class PaperProtectiveExitExecutionBatchResult:
     accounting_transitions: tuple[PositionAccountingTransition, ...]
     locked_open_risk_quote: Decimal
     locked_gross_exposure_quote: Decimal
+    completed_trade_journal_entries: tuple[CompletedTradeJournalEntry, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +317,7 @@ class PaperPortfolioCoordinatorSnapshot:
 class _ActivePaperIntent:
     lifecycle: PaperOrderLifecycle
     reservation: PendingPortfolioReservation
+    journal_entry: DecisionJournalEntry[object, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +326,7 @@ class _OpenPaperPosition:
     accounting_fill: PositionAccountingFill
     locked_open_risk_quote: Decimal
     locked_gross_exposure_quote: Decimal
+    journal_entry: DecisionJournalEntry[object, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +343,7 @@ class PaperPortfolioCoordinator:
         "_accounting",
         "_active",
         "_active_exit_intents",
+        "_completed_trade_journal",
         "_costs",
         "_last_finalized_at",
         "_last_observed_at",
@@ -343,6 +359,7 @@ class PaperPortfolioCoordinator:
             raise TypeError("costs must be a SimulatedExecutionCostConfiguration")
         costs.validate()
         self._costs = _copy_costs(costs)
+        self._completed_trade_journal = InMemoryCompletedTradeJournal()
         self._account = _new_account_state(
             PaperAccountConfiguration() if account_configuration is None else account_configuration
         )
@@ -352,6 +369,12 @@ class PaperPortfolioCoordinator:
         self._active_exit_intents: tuple[_PendingProtectiveExit, ...] = ()
         self._last_finalized_at: datetime | None = None
         self._last_observed_at: datetime | None = None
+
+    def completed_trade_journal_snapshot(self) -> CompletedTradeJournalSnapshot:
+        """Return detached append-only completed Paper trade audit state."""
+
+        self._validate_internal_state()
+        return self._completed_trade_journal.snapshot()
 
     def account_snapshot(self, observed_at: datetime) -> PaperAccountSnapshot:
         """Return detached realized-only account facts without committing chronology."""
@@ -432,7 +455,13 @@ class PaperPortfolioCoordinator:
                 lifecycle = simulator.start(owned_entry, owned_intent, self._costs)
                 reservation = _reservation_from_permit(permit)
                 _require_staged_authority(lifecycle, permit, reservation, self._costs)
-                staged.append(_ActivePaperIntent(lifecycle, reservation))
+                staged.append(
+                    _ActivePaperIntent(
+                        lifecycle,
+                        reservation,
+                        _copy_decision_journal_entry(owned_entry),
+                    )
+                )
         except Exception as error:
             raise PaperPortfolioStartError(
                 "every admitted Paper lifecycle must stage before commit"
@@ -477,6 +506,9 @@ class PaperPortfolioCoordinator:
         simulator = PaperOrderSimulator()
         staged_by_identity = {item.reservation.intent_identity: item for item in self._active}
         newly_filled: list[tuple[PaperOrderLifecycle, PositionAccountingFill]] = []
+        journal_by_identity: dict[
+            EntryOrderIntentIdentity, DecisionJournalEntry[object, object]
+        ] = {}
         try:
             for prior, observation in mapped:
                 staged_lifecycle = simulator.clone(prior.lifecycle)
@@ -487,9 +519,14 @@ class PaperPortfolioCoordinator:
                         raise PaperPortfolioObservationError("FILLED lifecycle has no fill")
                     adapted = _paper_fill_to_position_accounting_fill(advanced.fill)
                     newly_filled.append((advanced, adapted))
+                    journal_by_identity[advanced.identity.intent_identity] = (
+                        _copy_decision_journal_entry(prior.journal_entry)
+                    )
                 else:
                     staged_by_identity[prior.reservation.intent_identity] = _ActivePaperIntent(
-                        advanced, prior.reservation
+                        advanced,
+                        prior.reservation,
+                        _copy_decision_journal_entry(prior.journal_entry),
                     )
 
             staged_accounting = self._accounting.clone()
@@ -501,7 +538,13 @@ class PaperPortfolioCoordinator:
                         raise PaperPortfolioObservationError(
                             "entry accounting symbol must be flat before fill"
                         )
-                    staged_new_open.append(_open_position(lifecycle, accounting_fill))
+                    staged_new_open.append(
+                        _open_position(
+                            lifecycle,
+                            accounting_fill,
+                            journal_by_identity[lifecycle.identity.intent_identity],
+                        )
+                    )
                 accounting_fills = tuple(item[1] for item in newly_filled)
                 accounting_batch = staged_accounting.process(
                     PositionAccountingFillBatch(observed_at, accounting_fills)
@@ -836,6 +879,30 @@ class PaperPortfolioCoordinator:
                 exit_fees_quote=exit_fees,
                 gross_realized_pnl_quote=gross_realized,
             )
+            _require_closed_account_effects(
+                self._account,
+                staged_account,
+                gross_realized,
+                exit_fees,
+            )
+            journal_entries = tuple(
+                _completed_trade_entry(closed_item, filled_item[3])
+                for closed_item, filled_item in zip(closed, newly_filled, strict=True)
+            )
+            staged_journal = self._completed_trade_journal.clone()
+            if journal_entries:
+                staged_journal.append_batch(
+                    CompletedTradeJournalBatch(observed_at, journal_entries)
+                )
+            staged_journal_snapshot = staged_journal.snapshot()
+            _require_journal_account_consistency(
+                staged_journal_snapshot,
+                staged_account,
+                next_open,
+            )
+            newly_journaled = (
+                staged_journal_snapshot.entries[-len(journal_entries) :] if journal_entries else ()
+            )
         except Exception as error:
             if isinstance(error, PaperPortfolioExitExecutionError):
                 raise
@@ -856,11 +923,13 @@ class PaperPortfolioCoordinator:
             accounting_transitions,
             locked_risk,
             locked_gross,
+            newly_journaled,
         )
         self._active_exit_intents = next_exits
         self._open_positions = next_open
         self._accounting = staged_accounting
         self._account = staged_account
+        self._completed_trade_journal = staged_journal
         self._last_observed_at = observed_at
         return result
 
@@ -1078,6 +1147,17 @@ class PaperPortfolioCoordinator:
                 raise PaperPortfolioCoordinatorError(
                     "Paper account state is inconsistent"
                 ) from error
+        try:
+            completed_journal = self._completed_trade_journal.clone().snapshot()
+            _require_journal_account_consistency(
+                completed_journal,
+                self._account,
+                self._open_positions,
+            )
+        except (TypeError, ValueError) as error:
+            raise PaperPortfolioCoordinatorError(
+                "completed trade journal state is inconsistent"
+            ) from error
         _validate_staged_state(
             self._active,
             self._open_positions,
@@ -1571,6 +1651,155 @@ def _closed_trade_snapshot(
     )
 
 
+def _completed_trade_entry(
+    closed: PaperClosedTradeSnapshot,
+    open_item: _OpenPaperPosition,
+) -> CompletedTradeJournalEntry:
+    entry_fill = open_item.lifecycle.fill
+    exit_fill = closed.exit_fill
+    authority = open_item.lifecycle.accepted_authorization
+    if entry_fill is None:
+        raise PaperPortfolioExitExecutionError(
+            "completed journal entry requires an authoritative entry fill"
+        )
+    if not _journal_matches_lifecycle(open_item.journal_entry, open_item.lifecycle):
+        raise PaperPortfolioExitExecutionError("completed journal pre-trade provenance is invalid")
+    with localcontext(_DECIMAL_CONTEXT):
+        realized_r = closed.net_realized_pnl / authority.approved_risk_quote
+    classification = (
+        TradeOutcomeClassification.PROFIT
+        if closed.net_realized_pnl > 0
+        else TradeOutcomeClassification.LOSS
+        if closed.net_realized_pnl < 0
+        else TradeOutcomeClassification.BREAKEVEN
+    )
+    identity = CompletedTradeIdentity(
+        closed.originating_decision_identity,
+        closed.originating_entry_intent_identity,
+        closed.originating_paper_order_identity,
+        closed.protective_exit_intent_identity,
+    )
+    return CompletedTradeJournalEntry(
+        identity=identity,
+        pre_trade_decision=_copy_decision_journal_entry(open_item.journal_entry),
+        source_id=closed.source_id,
+        symbol=closed.symbol,
+        strategy_id=closed.originating_decision_identity.strategy_id,
+        strategy_version=closed.originating_decision_identity.strategy_version,
+        entry_side=closed.position_side,
+        exit_side=exit_fill.side,
+        quantity=closed.quantity,
+        approved_notional_quote=authority.approved_notional_quote,
+        approved_risk_quote=authority.approved_risk_quote,
+        stop_basis=closed.stop_basis,
+        approved_reference_price=authority.reference_price,
+        entry_authorized_at=entry_fill.authorized_at,
+        entry_reference_price=entry_fill.reference_price,
+        entry_fill_at=closed.entry_fill_at,
+        entry_fill_price=closed.entry_fill_price,
+        entry_spread_bps=entry_fill.spread_bps,
+        entry_slippage_bps=entry_fill.slippage_bps,
+        entry_fee_bps=entry_fill.fee_bps,
+        entry_fee_quote=closed.entry_fee_quote,
+        exit_reason=TradeExitReason.PROTECTIVE_STOP,
+        trigger_observed_at=closed.trigger_observed_at,
+        trigger_reference_price=closed.trigger_reference_price,
+        exit_authorized_at=exit_fill.authorized_at,
+        exit_reference_price=closed.exit_reference_price,
+        exit_fill_at=closed.exit_fill_at,
+        exit_fill_price=closed.exit_fill_price,
+        exit_spread_bps=exit_fill.spread_bps,
+        exit_slippage_bps=exit_fill.slippage_bps,
+        exit_fee_bps=exit_fill.fee_bps,
+        exit_fee_quote=closed.exit_fee_quote,
+        gross_realized_pnl=closed.gross_realized_pnl,
+        total_trade_fees_quote=closed.trade_fees_quote,
+        net_realized_pnl=closed.net_realized_pnl,
+        realized_r_net=realized_r,
+        duration=closed.exit_fill_at - closed.entry_fill_at,
+        risk_policy_version=closed.risk_policy_version,
+        safety_policy_version=closed.safety_policy_version,
+        accounting_entry_fill_id=open_item.accounting_fill.fill_id,
+        accounting_exit_fill_id=closed.accounting_exit_fill_id,
+        outcome_classification=classification,
+    )
+
+
+def _require_closed_account_effects(
+    prior: _PaperAccountState,
+    staged: _PaperAccountState,
+    gross_realized: Decimal,
+    exit_fees: Decimal,
+) -> None:
+    with localcontext(_DECIMAL_CONTEXT):
+        expected_gross = prior.realized_gross_pnl_quote + gross_realized
+        expected_exit_fees = prior.cumulative_exit_fees_quote + exit_fees
+        expected_fees = prior.cumulative_entry_fees_quote + expected_exit_fees
+        expected_net = expected_gross - expected_fees
+        expected_equity = prior.configuration.initial_equity_quote + expected_net
+    if (
+        staged.configuration != prior.configuration
+        or staged.realized_gross_pnl_quote != expected_gross
+        or staged.cumulative_entry_fees_quote != prior.cumulative_entry_fees_quote
+        or staged.cumulative_exit_fees_quote != expected_exit_fees
+        or staged.account_equity_quote != expected_equity
+    ):
+        raise PaperPortfolioExitExecutionError("completed trade account effects are inconsistent")
+
+
+def _require_journal_account_consistency(
+    journal: CompletedTradeJournalSnapshot,
+    account: _PaperAccountState,
+    open_positions: tuple[_OpenPaperPosition, ...],
+) -> None:
+    with localcontext(_DECIMAL_CONTEXT):
+        journal_gross = sum((entry.gross_realized_pnl for entry in journal.entries), Decimal(0))
+        journal_entry_fees = sum((entry.entry_fee_quote for entry in journal.entries), Decimal(0))
+        journal_exit_fees = sum((entry.exit_fee_quote for entry in journal.entries), Decimal(0))
+        open_entry_fees = sum(
+            (
+                item.lifecycle.fill.fee_quote
+                for item in open_positions
+                if item.lifecycle.fill is not None
+            ),
+            Decimal(0),
+        )
+        expected_entry_fees = journal_entry_fees + open_entry_fees
+    if (
+        journal_gross != account.realized_gross_pnl_quote
+        or expected_entry_fees != account.cumulative_entry_fees_quote
+        or journal_exit_fees != account.cumulative_exit_fees_quote
+    ):
+        raise PaperPortfolioCoordinatorError(
+            "completed trade journal and Paper account state are inconsistent"
+        )
+
+
+def _copy_decision_journal_entry[ReasonT, AuditT](
+    entry: DecisionJournalEntry[ReasonT, AuditT],
+) -> DecisionJournalEntry[object, object]:
+    owned = cast(DecisionJournalEntry[object, object], deepcopy(entry))
+    owned.validate()
+    return owned
+
+
+def _journal_matches_lifecycle(
+    entry: DecisionJournalEntry[object, object],
+    lifecycle: PaperOrderLifecycle,
+) -> bool:
+    try:
+        owned = _copy_decision_journal_entry(entry)
+        authorization = EntryOrderIntentAuthorizer().authorize(owned)
+        return (
+            authorization.status is OrderIntentAuthorizationStatus.AUTHORIZED
+            and authorization.intent is not None
+            and authorization.intent == lifecycle.intent
+            and owned.identity == lifecycle.identity.intent_identity.decision_identity
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _require_staged_authority(
     lifecycle: PaperOrderLifecycle,
     permit: PortfolioAdmissionPermit,
@@ -1719,6 +1948,7 @@ def _require_entry_transitions(
 def _open_position(
     lifecycle: PaperOrderLifecycle,
     accounting_fill: PositionAccountingFill,
+    journal_entry: DecisionJournalEntry[object, object],
 ) -> _OpenPaperPosition:
     locked_risk, locked_gross = _locked_capacity(lifecycle)
     return _OpenPaperPosition(
@@ -1734,6 +1964,7 @@ def _open_position(
         ),
         locked_risk,
         locked_gross,
+        _copy_decision_journal_entry(journal_entry),
     )
 
 
@@ -1821,6 +2052,7 @@ def _validate_staged_state(
             active_item.reservation.intent_identity in pending_identities
             or active_item.reservation.symbol in symbols
             or not _lifecycle_matches_reservation(active_item, costs)
+            or not _journal_matches_lifecycle(active_item.journal_entry, active_item.lifecycle)
         ):
             raise PaperPortfolioCoordinatorError(
                 "coordinator active reservation state is inconsistent"
@@ -1842,6 +2074,7 @@ def _validate_staged_state(
             or fill is None
             or lifecycle.accepted_authorization.symbol in symbols
             or open_item.accounting_fill.fill_id in fill_ids
+            or not _journal_matches_lifecycle(open_item.journal_entry, lifecycle)
         ):
             raise PaperPortfolioCoordinatorError("open Paper authority is inconsistent")
         adapted = _paper_fill_to_position_accounting_fill(fill)
