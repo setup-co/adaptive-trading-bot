@@ -1,11 +1,12 @@
 import inspect
 import runpy
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import cast
 
+import pytest
 from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
 
@@ -15,6 +16,7 @@ from adaptive_trading_bot.config import Settings
 from adaptive_trading_bot.dashboard import (
     DashboardAvailability,
     DashboardSnapshot,
+    DashboardValue,
     dashboard_response,
     project_dashboard_snapshot,
 )
@@ -36,6 +38,8 @@ candidate = _HELPERS["candidate"]
 coordinator = _HELPERS["coordinator"]
 observation = _HELPERS["observation"]
 health_for = _HELPERS["_health"]
+NAIVE_TIME = NOW.replace(tzinfo=None)
+NON_UTC_TIME = NOW.astimezone(timezone(timedelta(hours=3, minutes=30)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +298,110 @@ def test_projection_orders_market_collections_canonically() -> None:
     )
 
     assert tuple(item.symbol for item in snapshot.markets) == ("BTC/USDT", "ETH/USDT")
+
+
+@pytest.mark.parametrize("malformed", (NAIVE_TIME, NON_UTC_TIME))
+def test_available_dashboard_datetime_requires_utc(malformed: datetime) -> None:
+    with pytest.raises(ValueError, match="UTC"):
+        DashboardValue.available(malformed)
+
+
+def test_every_nested_read_model_rejects_non_utc_construction() -> None:
+    _, snapshot, _, _, _, _, _, _ = _dashboard_fixture()
+    malformed = NON_UTC_TIME
+
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.markets[0], observed_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.account, observed_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.open_positions[0], authorized_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.open_positions[0], eligible_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.open_positions[0], entry_fill_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.recent_completed_trades[0], entry_fill_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.recent_completed_trades[0], exit_fill_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.system.sources[0], observed_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.system.sources[0], market_data_observed_at=malformed)
+    with pytest.raises(ValueError, match="UTC"):
+        replace(snapshot.system, observed_at=malformed)
+
+
+@pytest.mark.parametrize("malformed", (NAIVE_TIME, NON_UTC_TIME))
+@pytest.mark.parametrize(
+    "target",
+    (
+        "market_observed_at",
+        "market_source_timestamp",
+        "account_observed_at",
+        "position_authorized_at",
+        "position_eligible_at",
+        "position_entry_fill_at",
+        "trade_entry_fill_at",
+        "trade_exit_fill_at",
+        "source_system_observed_at",
+        "source_system_market_data_observed_at",
+        "system_observed_at",
+        "system_last_news_update",
+    ),
+)
+async def test_malformed_nested_timestamp_fails_closed_at_api_boundary(
+    target: str,
+    malformed: datetime,
+) -> None:
+    _, snapshot, _, _, _, _, _, _ = _dashboard_fixture()
+    _corrupt_nested_timestamp(snapshot, target, malformed)
+    app = create_app(Settings(_env_file=None), _StaticProvider(snapshot))  # type: ignore[call-arg]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/dashboard/snapshot")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "code": "DASHBOARD_PROVIDER_FAILURE",
+        "message": "dashboard snapshot is temporarily unavailable",
+    }
+
+
+def _corrupt_nested_timestamp(
+    snapshot: DashboardSnapshot,
+    target: str,
+    malformed: datetime,
+) -> None:
+    if target == "market_observed_at":
+        object.__setattr__(snapshot.markets[0], "observed_at", malformed)
+    elif target == "market_source_timestamp":
+        object.__setattr__(snapshot.markets[0].source_timestamp, "value", malformed)
+    elif target == "account_observed_at":
+        object.__setattr__(snapshot.account, "observed_at", malformed)
+    elif target.startswith("position_"):
+        object.__setattr__(snapshot.open_positions[0], target.removeprefix("position_"), malformed)
+    elif target.startswith("trade_"):
+        object.__setattr__(
+            snapshot.recent_completed_trades[0],
+            target.removeprefix("trade_"),
+            malformed,
+        )
+    elif target.startswith("source_system_"):
+        object.__setattr__(
+            snapshot.system.sources[0],
+            target.removeprefix("source_system_"),
+            malformed,
+        )
+    elif target == "system_observed_at":
+        object.__setattr__(snapshot.system, "observed_at", malformed)
+    elif target == "system_last_news_update":
+        available_news_time = DashboardValue.available(NOW)
+        object.__setattr__(snapshot.system, "last_news_update", available_news_time)
+        object.__setattr__(available_news_time, "value", malformed)
+    else:
+        raise AssertionError(f"unknown corruption target: {target}")
 
 
 def test_dashboard_modules_do_not_contain_trading_or_formula_authorities() -> None:

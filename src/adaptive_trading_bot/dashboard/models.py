@@ -32,9 +32,16 @@ class DashboardValue[T]:
         return cls(DashboardAvailability.UNAVAILABLE, None, reason)
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate availability and any datetime carried across a boundary."""
+
         if self.availability is DashboardAvailability.AVAILABLE:
             if self.value is None or self.reason is not None:
                 raise ValueError("available dashboard values require only a value")
+            if isinstance(self.value, datetime):
+                require_utc(self.value, field="available dashboard datetime")
         elif self.value is not None or not self.reason:
             raise ValueError("unavailable dashboard values require only a reason")
 
@@ -53,6 +60,18 @@ class DashboardMarketSnapshot:
     fundamental_score: DashboardValue[Decimal]
     experience_metrics: DashboardValue[str]
 
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Require UTC market and optional source provenance timestamps."""
+
+        require_utc(self.observed_at, field="dashboard market observed_at")
+        _validate_datetime_value(
+            self.source_timestamp,
+            field="dashboard market source_timestamp",
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DashboardPaperAccountSnapshot:
@@ -68,6 +87,14 @@ class DashboardPaperAccountSnapshot:
     locked_open_risk: Decimal
     locked_gross_exposure: Decimal
     account_policy_version: str
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Require a UTC account observation timestamp."""
+
+        require_utc(self.observed_at, field="dashboard account observed_at")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +118,16 @@ class DashboardOpenPosition:
     lifecycle_state: str
     risk_policy_version: str
     safety_policy_version: str
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Require UTC timestamps throughout the entry lifecycle."""
+
+        require_utc(self.authorized_at, field="dashboard position authorized_at")
+        require_utc(self.eligible_at, field="dashboard position eligible_at")
+        require_utc(self.entry_fill_at, field="dashboard position entry_fill_at")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +156,15 @@ class DashboardCompletedTrade:
     mae: DashboardValue[Decimal]
     process_score: DashboardValue[Decimal]
 
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Require UTC timestamps for both authoritative fills."""
+
+        require_utc(self.entry_fill_at, field="dashboard trade entry_fill_at")
+        require_utc(self.exit_fill_at, field="dashboard trade exit_fill_at")
+
 
 @dataclass(frozen=True, slots=True)
 class DashboardSourceSystemSnapshot:
@@ -136,6 +182,18 @@ class DashboardSourceSystemSnapshot:
     safety_status: DashboardValue[str]
     safety_reasons: DashboardValue[tuple[str, ...]]
 
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Require UTC system-observation and source-data timestamps."""
+
+        require_utc(self.observed_at, field="dashboard source-system observed_at")
+        require_utc(
+            self.market_data_observed_at,
+            field="dashboard source-system market_data_observed_at",
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DashboardSystemSnapshot:
@@ -145,6 +203,20 @@ class DashboardSystemSnapshot:
     last_error: DashboardValue[str]
     last_news_update: DashboardValue[datetime]
     live_trading_enabled: bool
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate UTC across system facts and optional news provenance."""
+
+        require_utc(self.observed_at, field="dashboard system observed_at")
+        for source in self.sources:
+            source.validate()
+        _validate_datetime_value(
+            self.last_news_update,
+            field="dashboard system last_news_update",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,13 +229,34 @@ class DashboardSnapshot:
     system: DashboardSystemSnapshot
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "observed_at",
-            require_utc(self.observed_at, field="dashboard observed_at"),
-        )
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate the complete detached Dashboard graph before serving it."""
+
+        require_utc(self.observed_at, field="dashboard observed_at")
+        for market in self.markets:
+            market.validate()
+        self.account.validate()
+        for position in self.open_positions:
+            position.validate()
+        for trade in self.recent_completed_trades:
+            trade.validate()
+        self.system.validate()
         if (
             self.account.observed_at != self.observed_at
             or self.system.observed_at != self.observed_at
         ):
             raise ValueError("dashboard account and system times must match observed_at")
+
+
+def _validate_datetime_value(
+    value: DashboardValue[datetime],
+    *,
+    field: str,
+) -> None:
+    value.validate()
+    if value.availability is DashboardAvailability.AVAILABLE:
+        if not isinstance(value.value, datetime):
+            raise TypeError(f"{field} must carry a datetime when available")
+        require_utc(value.value, field=field)

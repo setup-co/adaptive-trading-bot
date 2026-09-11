@@ -54,6 +54,7 @@ def create_app(
             snapshot = dashboard_provider.snapshot()
             if not isinstance(snapshot, DashboardSnapshot):
                 raise TypeError("provider returned an invalid dashboard snapshot")
+            snapshot.validate()
             response = dashboard_response(snapshot)
         except Exception:
             return _dashboard_unavailable(
