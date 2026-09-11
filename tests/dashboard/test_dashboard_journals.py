@@ -258,7 +258,10 @@ async def test_api_fails_closed_on_non_finite_projected_fact() -> None:
             return real.trades(query)
 
     app = create_app(
-        Settings(_env_file=None), None, None, MalformedProvider()  # type: ignore[arg-type,call-arg]
+        Settings(_env_file=None),
+        None,
+        None,
+        MalformedProvider(),  # type: ignore[arg-type,call-arg]
     )
     params = {"start": NOW.isoformat(), "end": (NOW + timedelta(minutes=5)).isoformat()}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

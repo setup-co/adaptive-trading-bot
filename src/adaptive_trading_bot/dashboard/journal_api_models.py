@@ -40,9 +40,7 @@ class DashboardTradePageResponse(DashboardJournalApiModel):
 class DashboardJournalInvalidQueryResponse(DashboardJournalApiModel):
     status: Literal["invalid_request"] = "invalid_request"
     code: Literal["DASHBOARD_JOURNAL_INVALID_QUERY"] = "DASHBOARD_JOURNAL_INVALID_QUERY"
-    message: Literal["dashboard journal query is invalid"] = (
-        "dashboard journal query is invalid"
-    )
+    message: Literal["dashboard journal query is invalid"] = "dashboard journal query is invalid"
 
 
 def decision_page_response(page: DashboardDecisionPage) -> DashboardDecisionPageResponse:

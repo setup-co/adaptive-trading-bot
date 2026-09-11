@@ -157,9 +157,7 @@ def create_app(
                 action=CandidateAction(action) if action is not None else None,
                 risk_status=RiskDecisionStatus(risk_status) if risk_status is not None else None,
                 safety_status=(
-                    OperationalSafetyStatus(safety_status)
-                    if safety_status is not None
-                    else None
+                    OperationalSafetyStatus(safety_status) if safety_status is not None else None
                 ),
                 limit=limit,
             )

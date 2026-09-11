@@ -67,11 +67,7 @@ class SnapshotDashboardJournalProvider:
         query.validate()
         decisions = self._validated_decisions()
         outcomes = self._validated_outcomes()
-        matched = tuple(
-            entry
-            for entry in decisions
-            if _decision_matches(query, entry)
-        )
+        matched = tuple(entry for entry in decisions if _decision_matches(query, entry))
         projected = tuple(
             _project_decision(entry, outcomes.get(entry.identity))
             for entry in matched[: query.limit]
@@ -93,9 +89,7 @@ class SnapshotDashboardJournalProvider:
             raise TypeError("query must be a DashboardDecisionTradeQuery")
         query.validate()
         outcomes = tuple(
-            entry
-            for entry in self._validated_completed_entries()
-            if _trade_matches(query, entry)
+            entry for entry in self._validated_completed_entries() if _trade_matches(query, entry)
         )
         projected = tuple(_project_trade(entry) for entry in outcomes[: query.limit])
         page = DashboardTradePage(
@@ -188,10 +182,7 @@ def _trade_matches(query: DashboardDecisionTradeQuery, entry: CompletedTradeJour
         and (query.source_id is None or entry.source_id.value == query.source_id)
         and (query.symbol is None or str(entry.symbol) == query.symbol)
         and (query.strategy_id is None or entry.strategy_id == query.strategy_id)
-        and (
-            query.classification is None
-            or entry.outcome_classification is query.classification
-        )
+        and (query.classification is None or entry.outcome_classification is query.classification)
     )
 
 
