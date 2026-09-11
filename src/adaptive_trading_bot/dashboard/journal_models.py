@@ -439,6 +439,12 @@ class DashboardDecisionPage:
             raise DashboardJournalValidationError("decision page count is invalid")
         if self.returned_count != len(self.records):
             raise DashboardJournalValidationError("decision page count is inconsistent")
+        if self.returned_count > self.limit:
+            raise DashboardJournalValidationError("decision page exceeds the requested limit")
+        if self.total_matched < self.returned_count:
+            raise DashboardJournalValidationError(
+                "decision page reports fewer matches than returned records"
+            )
         if self.truncated is not (self.total_matched > self.returned_count):
             raise DashboardJournalValidationError("decision page truncation is inconsistent")
         for record in self.records:
@@ -480,6 +486,12 @@ class DashboardTradePage:
             raise DashboardJournalValidationError("trade page count is invalid")
         if self.returned_count != len(self.records):
             raise DashboardJournalValidationError("trade page count is inconsistent")
+        if self.returned_count > self.limit:
+            raise DashboardJournalValidationError("trade page exceeds the requested limit")
+        if self.total_matched < self.returned_count:
+            raise DashboardJournalValidationError(
+                "trade page reports fewer matches than returned records"
+            )
         if self.truncated is not (self.total_matched > self.returned_count):
             raise DashboardJournalValidationError("trade page truncation is inconsistent")
         for record in self.records:

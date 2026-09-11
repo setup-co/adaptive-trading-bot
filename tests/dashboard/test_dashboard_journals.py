@@ -15,8 +15,10 @@ from adaptive_trading_bot.api import create_app
 from adaptive_trading_bot.config import Settings
 from adaptive_trading_bot.dashboard import (
     DashboardAvailability,
+    DashboardDecisionPage,
     DashboardDecisionTradeQuery,
     DashboardJournalProviderError,
+    DashboardTradePage,
     DashboardValue,
     SnapshotDashboardJournalProvider,
 )
@@ -63,6 +65,23 @@ def _query(**changes: object) -> DashboardDecisionTradeQuery:
     }
     values.update(changes)
     return DashboardDecisionTradeQuery(**values)  # type: ignore[arg-type]
+
+
+def _two_record_pages() -> tuple[DashboardDecisionPage, DashboardTradePage]:
+    first_decisions, first_trades = _snapshots()
+    second_decisions, second_trades = _snapshots(observed_at=NOW + timedelta(minutes=15))
+    provider = SnapshotDashboardJournalProvider(
+        DecisionJournalSnapshot(
+            (first_decisions.entries[0], second_decisions.entries[0]),
+            second_decisions.last_observed_at,
+        ),
+        CompletedTradeJournalSnapshot(
+            (first_trades.entries[0], second_trades.entries[0]),
+            second_trades.last_closed_at,
+        ),
+    )
+    query = _query(end=NOW + timedelta(minutes=20))
+    return provider.decisions(query), provider.trades(query)
 
 
 def test_provider_projects_separate_authoritative_layers_and_exact_outcome() -> None:
@@ -220,6 +239,22 @@ def test_read_model_pages_reject_out_of_range_and_noncanonical_records() -> None
         replace(page, start=NOW + timedelta(microseconds=1)).validate()
     with pytest.raises(ValueError, match="canonical unique order"):
         replace(page, records=tuple(reversed(page.records))).validate()
+
+
+@pytest.mark.parametrize("page_index", (0, 1))
+def test_read_model_pages_reject_more_returned_records_than_limit(page_index: int) -> None:
+    page = _two_record_pages()[page_index]
+
+    with pytest.raises(ValueError, match="exceeds the requested limit"):
+        replace(page, limit=1).validate()
+
+
+@pytest.mark.parametrize("page_index", (0, 1))
+def test_read_model_pages_reject_fewer_matches_than_returned(page_index: int) -> None:
+    page = _two_record_pages()[page_index]
+
+    with pytest.raises(ValueError, match="fewer matches than returned records"):
+        replace(page, total_matched=1).validate()
 
 
 def test_projection_is_detached_and_queries_do_not_mutate_snapshots() -> None:
@@ -380,6 +415,47 @@ async def test_api_fails_closed_on_mismatched_linked_outcome_graph() -> None:
         "status": "unavailable",
         "code": "DASHBOARD_DECISION_PROVIDER_FAILURE",
         "message": "dashboard decisions are temporarily unavailable",
+    }
+
+
+async def test_api_fails_closed_on_malformed_provider_page_counts() -> None:
+    decision_page, trade_page = _two_record_pages()
+    oversized_decisions = replace(decision_page, limit=1)
+    understated_trades = replace(trade_page, total_matched=1)
+
+    class MalformedCountProvider:
+        def decisions(self, query: DashboardDecisionTradeQuery) -> object:
+            return oversized_decisions
+
+        def trades(self, query: DashboardDecisionTradeQuery) -> object:
+            return understated_trades
+
+    app = create_app(
+        Settings(_env_file=None),  # type: ignore[call-arg]
+        None,
+        None,
+        MalformedCountProvider(),  # type: ignore[arg-type]
+    )
+    params = {
+        "start": NOW.isoformat(),
+        "end": (NOW + timedelta(minutes=20)).isoformat(),
+        "limit": "1",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        decisions = await client.get("/api/v1/dashboard/decisions", params=params)
+        trades = await client.get("/api/v1/dashboard/trades", params=params)
+
+    assert decisions.status_code == 503
+    assert decisions.json() == {
+        "status": "unavailable",
+        "code": "DASHBOARD_DECISION_PROVIDER_FAILURE",
+        "message": "dashboard decisions are temporarily unavailable",
+    }
+    assert trades.status_code == 503
+    assert trades.json() == {
+        "status": "unavailable",
+        "code": "DASHBOARD_TRADE_PROVIDER_FAILURE",
+        "message": "dashboard trades are temporarily unavailable",
     }
 
 
