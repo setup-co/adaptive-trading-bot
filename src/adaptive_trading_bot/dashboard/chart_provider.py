@@ -13,6 +13,7 @@ from adaptive_trading_bot.dashboard.chart_models import (
     DashboardChartSnapshot,
 )
 from adaptive_trading_bot.dashboard.models import DashboardValue
+from adaptive_trading_bot.domain import Candle
 from adaptive_trading_bot.journal import CompletedTradeJournalSnapshot
 from adaptive_trading_bot.paper import PaperPortfolioCoordinatorSnapshot
 from adaptive_trading_bot.storage import (
@@ -84,6 +85,7 @@ class HistoricalDashboardChartProvider:
             end=query.end,
         )
         _validate_report_identity(query, report)
+        _validate_returned_candles(query, candles)
         if any(issue.kind in _UNSAFE_INTEGRITY_KINDS for issue in report.issues):
             raise DashboardChartProviderError("historical storage cannot be read safely")
         if len(candles) > query.limit:
@@ -147,6 +149,39 @@ def _validate_report_identity(query: DashboardChartQuery, report: IntegrityRepor
         or report.end != query.end
     ):
         raise DashboardChartProviderError("historical integrity report does not match query")
+
+
+def _validate_returned_candles(
+    query: DashboardChartQuery,
+    candles: tuple[Candle, ...],
+) -> None:
+    """Reapply the existing domain contract before dropping candle identity fields."""
+
+    if not isinstance(candles, tuple):
+        raise DashboardChartProviderError("historical store returned an invalid candle collection")
+    for candle in candles:
+        if not isinstance(candle, Candle):
+            raise DashboardChartProviderError("historical store returned an invalid candle")
+        if candle.symbol != query.symbol or candle.timeframe != query.timeframe:
+            raise DashboardChartProviderError(
+                "historical candle identity does not match the chart query"
+            )
+        try:
+            Candle(
+                candle.symbol,
+                candle.timeframe,
+                candle.open_time,
+                candle.close_time,
+                candle.open,
+                candle.high,
+                candle.low,
+                candle.close,
+                candle.volume,
+            )
+        except (TypeError, ValueError) as exc:
+            raise DashboardChartProviderError(
+                "historical store returned a candle that violates the domain contract"
+            ) from exc
 
 
 def _project_integrity_issue(issue: IntegrityIssue) -> DashboardChartIntegrityIssue:

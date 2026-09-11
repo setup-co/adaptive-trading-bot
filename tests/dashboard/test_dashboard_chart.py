@@ -20,6 +20,7 @@ from adaptive_trading_bot.dashboard import (
     DashboardChartIntegrityIssue,
     DashboardChartMarker,
     DashboardChartMarkerKind,
+    DashboardChartProviderError,
     DashboardChartQuery,
     DashboardChartSnapshot,
     DashboardChartValidationError,
@@ -203,6 +204,58 @@ def test_provider_uses_exact_half_open_range_for_read_and_integrity(tmp_path: Pa
     assert tuple(item.open_time for item in snapshot.candles) == (second.open_time,)
     assert snapshot.integrity.is_clean
     assert snapshot.integrity.rows_scanned == 1
+
+
+@pytest.mark.parametrize(
+    "returned",
+    (
+        Candle(
+            ETH,
+            Timeframe.MINUTES_15,
+            NOW,
+            NOW + Timeframe.MINUTES_15.duration,
+            Decimal(100),
+            Decimal(110),
+            Decimal(90),
+            Decimal(101),
+            Decimal(10),
+        ),
+        _candle(NOW, timeframe=Timeframe.HOUR_1),
+    ),
+    ids=("wrong-symbol", "wrong-timeframe"),
+)
+async def test_mismatched_returned_candle_identity_fails_provider_and_api(
+    returned: Candle,
+) -> None:
+    query = _query()
+    provider = HistoricalDashboardChartProvider(
+        _RecordingStore((returned,), _report(query, rows_scanned=1))
+    )
+
+    with pytest.raises(DashboardChartProviderError, match="identity does not match"):
+        provider.chart(query)
+
+    app = create_app(Settings(_env_file=None), chart_provider=provider)  # type: ignore[call-arg]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/dashboard/chart", params=_params(query))
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "DASHBOARD_CHART_PROVIDER_FAILURE"
+    assert "candles" not in response.json()
+    assert str(returned.symbol) not in response.text
+    assert returned.timeframe.value not in response.text
+
+
+def test_returned_candle_domain_interval_is_revalidated_before_projection() -> None:
+    query = _query()
+    malformed = _candle(NOW)
+    object.__setattr__(malformed, "close_time", NOW + timedelta(minutes=30))
+    provider = HistoricalDashboardChartProvider(
+        _RecordingStore((malformed,), _report(query, rows_scanned=1))
+    )
+
+    with pytest.raises(DashboardChartProviderError, match="domain contract"):
+        provider.chart(query)
 
 
 def test_gap_is_visible_without_interpolation(tmp_path: Path) -> None:
