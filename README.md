@@ -97,6 +97,14 @@ injected authoritative dashboard snapshot provider; without one it returns a str
 instead of demo or inferred trading data. Decimal values are serialized losslessly as strings,
 and facts without an authoritative source are explicitly marked unavailable.
 
+`GET /api/v1/dashboard/chart` provides bounded, read-only native `15m`, `1h`, or `4h` history
+when an authoritative chart provider is injected. Requests are strict UTC and limited to at most
+2,000 candles; an excessive range is rejected rather than truncated. Historical integrity
+findings remain visible without interpolation, while unsafe storage failures return a structured
+`503`; indicator history without an authoritative source is explicitly unavailable. Candle opens
+and authoritative Paper/Journal marker events use `[start, end)` filtering. The open-position stop
+level is anchored to its recorded entry-fill time and is never inferred as a trailing series.
+
 ## Market-data domain conventions
 
 Internal symbols use normalized exchange-neutral `BASE/QUOTE` notation. V1 candle timeframes are

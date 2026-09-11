@@ -146,14 +146,14 @@ def dashboard_response(snapshot: DashboardSnapshot) -> DashboardSnapshotResponse
                 source_id=item.source_id,
                 symbol=item.symbol,
                 observed_at=item.observed_at,
-                source_timestamp=_value(item.source_timestamp),
+                source_timestamp=dashboard_value_response(item.source_timestamp),
                 midpoint=str(item.midpoint),
                 spread_bps=str(item.spread_bps),
-                regime=_value(item.regime),
-                volatility=_value(item.volatility),
-                technical_score=_value(item.technical_score),
-                fundamental_score=_value(item.fundamental_score),
-                experience_metrics=_value(item.experience_metrics),
+                regime=dashboard_value_response(item.regime),
+                volatility=dashboard_value_response(item.volatility),
+                technical_score=dashboard_value_response(item.technical_score),
+                fundamental_score=dashboard_value_response(item.fundamental_score),
+                experience_metrics=dashboard_value_response(item.experience_metrics),
             )
             for item in snapshot.markets
         ),
@@ -217,9 +217,9 @@ def dashboard_response(snapshot: DashboardSnapshot) -> DashboardSnapshotResponse
                 realized_r=str(item.realized_r),
                 duration=str(item.duration),
                 outcome_classification=item.outcome_classification,
-                mfe=_value(item.mfe),
-                mae=_value(item.mae),
-                process_score=_value(item.process_score),
+                mfe=dashboard_value_response(item.mfe),
+                mae=dashboard_value_response(item.mae),
+                process_score=dashboard_value_response(item.process_score),
             )
             for item in snapshot.recent_completed_trades
         ),
@@ -238,20 +238,20 @@ def dashboard_response(snapshot: DashboardSnapshot) -> DashboardSnapshotResponse
                     volatility_safety_state=item.volatility_safety_state,
                     suspicious_price_anomaly=item.suspicious_price_anomaly,
                     consecutive_order_rejections=item.consecutive_order_rejections,
-                    safety_status=_value(item.safety_status),
-                    safety_reasons=_value(item.safety_reasons),
+                    safety_status=dashboard_value_response(item.safety_status),
+                    safety_reasons=dashboard_value_response(item.safety_reasons),
                 )
                 for item in snapshot.system.sources
             ),
-            global_safety_status=_value(snapshot.system.global_safety_status),
-            last_error=_value(snapshot.system.last_error),
-            last_news_update=_value(snapshot.system.last_news_update),
+            global_safety_status=dashboard_value_response(snapshot.system.global_safety_status),
+            last_error=dashboard_value_response(snapshot.system.last_error),
+            last_news_update=dashboard_value_response(snapshot.system.last_news_update),
             live_trading_enabled=snapshot.system.live_trading_enabled,
         ),
     )
 
 
-def _value[T](value: DashboardValue[T]) -> DashboardValueResponse:
+def dashboard_value_response[T](value: DashboardValue[T]) -> DashboardValueResponse:
     raw = value.value
     encoded: str | int | bool | list[str] | None
     if isinstance(raw, datetime):
