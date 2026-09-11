@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field, fields
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, Self, cast, runtime_checkable
 
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
@@ -29,6 +29,7 @@ from adaptive_trading_bot.strategies.core import CandidateAction, SourceIdentity
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _JOURNAL_SCHEMA_VERSION = "1.0.0"
 _PAPER_SIMULATION_SCHEMA_VERSION = "1.0.0"
+_COMPLETED_TRADE_ENTRY_TOKEN = object()
 
 
 class CompletedTradeJournalValidationError(ValueError):
@@ -126,10 +127,46 @@ class CompletedTradeJournalEntry:
     accounting_entry_fill_id: str
     accounting_exit_fill_id: str
     outcome_classification: TradeOutcomeClassification
+    _creation_token: InitVar[object] = None
     journal_schema_version: str = field(init=False, default=_JOURNAL_SCHEMA_VERSION)
+    _creation_seal: object = field(init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        if args or kwargs.get("_creation_token") is not _COMPLETED_TRADE_ENTRY_TOKEN:
+            raise TypeError(
+                "CompletedTradeJournalEntry can only be created from an authoritative close"
+            )
+        return object.__new__(cls)
+
+    def __post_init__(self, _creation_token: object) -> None:
+        if _creation_token is not _COMPLETED_TRADE_ENTRY_TOKEN:
+            raise TypeError("completed trade creation authority is invalid")
+        object.__setattr__(self, "_creation_seal", _COMPLETED_TRADE_ENTRY_TOKEN)
         self.validate()
+
+    @classmethod
+    def _from_authoritative_close(cls, **values: object) -> Self:
+        """Create a sealed record for the coordinator's validated close path."""
+
+        constructor = cast(Any, cls)
+        return cast(
+            Self,
+            constructor(**values, _creation_token=_COMPLETED_TRADE_ENTRY_TOKEN),
+        )
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Self:
+        """Copy a sealed record without exposing its creation authority."""
+
+        copied = object.__new__(type(self))
+        memo[id(self)] = copied
+        for value_field in fields(self):
+            value = (
+                _COMPLETED_TRADE_ENTRY_TOKEN
+                if value_field.name == "_creation_seal"
+                else deepcopy(getattr(self, value_field.name), memo)
+            )
+            object.__setattr__(copied, value_field.name, value)
+        return copied
 
     def validate(self) -> None:
         """Revalidate every authoritative link before append or snapshot copy."""
@@ -255,6 +292,8 @@ class InMemoryCompletedTradeJournal:
 
 
 def _validate_identity_and_decision(entry: CompletedTradeJournalEntry) -> None:
+    if entry._creation_seal is not _COMPLETED_TRADE_ENTRY_TOKEN:
+        raise CompletedTradeJournalValidationError("completed trade creation seal is invalid")
     if entry.journal_schema_version != _JOURNAL_SCHEMA_VERSION:
         raise CompletedTradeJournalValidationError("completed journal schema mismatch")
     if not isinstance(entry.identity, CompletedTradeIdentity):
@@ -414,13 +453,8 @@ def _validate_execution_and_accounting(entry: CompletedTradeJournalEntry) -> Non
         ),
     )
     with localcontext(_DECIMAL_CONTEXT):
-        expected_gross = (
-            (entry.exit_fill_price - entry.entry_fill_price) * entry.quantity
-            if entry.entry_side is EntrySide.BUY
-            else (entry.entry_fill_price - entry.exit_fill_price) * entry.quantity
-        )
         expected_fees = entry.entry_fee_quote + entry.exit_fee_quote
-        expected_net = expected_gross - expected_fees
+        expected_net = entry.gross_realized_pnl - expected_fees
         expected_r = expected_net / entry.approved_risk_quote
     expected_classification = (
         TradeOutcomeClassification.PROFIT
@@ -434,7 +468,6 @@ def _validate_execution_and_accounting(entry: CompletedTradeJournalEntry) -> Non
         or entry.entry_fee_quote != entry_quote.fee_quote
         or entry.exit_fill_price != exit_quote.fill_price
         or entry.exit_fee_quote != exit_quote.fee_quote
-        or entry.gross_realized_pnl != expected_gross
         or entry.total_trade_fees_quote != expected_fees
         or entry.net_realized_pnl != expected_net
         or entry.realized_r_net != expected_r

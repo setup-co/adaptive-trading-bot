@@ -889,6 +889,15 @@ class PaperPortfolioCoordinator:
                 _completed_trade_entry(closed_item, filled_item[3])
                 for closed_item, filled_item in zip(closed, newly_filled, strict=True)
             )
+            for journal_entry, closed_item, filled_item in zip(
+                journal_entries, closed, newly_filled, strict=True
+            ):
+                _require_completed_trade_matches_authorities(
+                    journal_entry,
+                    closed_item,
+                    transition_by_fill_id[filled_item[2].fill_id],
+                    filled_item[3],
+                )
             staged_journal = self._completed_trade_journal.clone()
             if journal_entries:
                 staged_journal.append_batch(
@@ -1679,7 +1688,7 @@ def _completed_trade_entry(
         closed.originating_paper_order_identity,
         closed.protective_exit_intent_identity,
     )
-    return CompletedTradeJournalEntry(
+    return CompletedTradeJournalEntry._from_authoritative_close(
         identity=identity,
         pre_trade_decision=_copy_decision_journal_entry(open_item.journal_entry),
         source_id=closed.source_id,
@@ -1745,6 +1754,62 @@ def _require_closed_account_effects(
         or staged.account_equity_quote != expected_equity
     ):
         raise PaperPortfolioExitExecutionError("completed trade account effects are inconsistent")
+
+
+def _require_completed_trade_matches_authorities(
+    entry: CompletedTradeJournalEntry,
+    closed: PaperClosedTradeSnapshot,
+    transition: PositionAccountingTransition,
+    open_item: _OpenPaperPosition,
+) -> None:
+    """Audit the journal copy against shared accounting and owned close facts."""
+
+    entry.validate()
+    exit_fill = closed.exit_fill
+    entry_fill = open_item.lifecycle.fill
+    if entry_fill is None:
+        raise PaperPortfolioExitExecutionError("completed trade has no authoritative entry fill")
+    if (
+        entry.identity.originating_decision_identity != closed.originating_decision_identity
+        or entry.identity.entry_intent_identity != closed.originating_entry_intent_identity
+        or entry.identity.paper_order_identity != closed.originating_paper_order_identity
+        or entry.identity.exit_intent_identity != closed.protective_exit_intent_identity
+        or entry.source_id != closed.source_id
+        or entry.symbol != closed.symbol
+        or entry.entry_side is not closed.position_side
+        or entry.exit_side is not exit_fill.side
+        or entry.quantity != closed.quantity
+        or entry.entry_authorized_at != entry_fill.authorized_at
+        or entry.entry_reference_price != entry_fill.reference_price
+        or entry.entry_fill_at != closed.entry_fill_at
+        or entry.entry_fill_price != closed.entry_fill_price
+        or entry.entry_spread_bps != entry_fill.spread_bps
+        or entry.entry_slippage_bps != entry_fill.slippage_bps
+        or entry.entry_fee_bps != entry_fill.fee_bps
+        or entry.entry_fee_quote != closed.entry_fee_quote
+        or entry.stop_basis != closed.stop_basis
+        or entry.trigger_observed_at != closed.trigger_observed_at
+        or entry.trigger_reference_price != closed.trigger_reference_price
+        or entry.exit_authorized_at != exit_fill.authorized_at
+        or entry.exit_reference_price != closed.exit_reference_price
+        or entry.exit_fill_at != closed.exit_fill_at
+        or entry.exit_fill_price != closed.exit_fill_price
+        or entry.exit_spread_bps != exit_fill.spread_bps
+        or entry.exit_slippage_bps != exit_fill.slippage_bps
+        or entry.exit_fee_bps != exit_fill.fee_bps
+        or entry.exit_fee_quote != closed.exit_fee_quote
+        or entry.gross_realized_pnl != transition.gross_realized_pnl_delta
+        or entry.gross_realized_pnl != closed.gross_realized_pnl
+        or entry.total_trade_fees_quote != closed.trade_fees_quote
+        or entry.net_realized_pnl != closed.net_realized_pnl
+        or entry.risk_policy_version != closed.risk_policy_version
+        or entry.safety_policy_version != closed.safety_policy_version
+        or entry.accounting_entry_fill_id != open_item.accounting_fill.fill_id
+        or entry.accounting_exit_fill_id != transition.fill.fill_id
+    ):
+        raise PaperPortfolioExitExecutionError(
+            "completed trade diverged from accounting or closed-trade authority"
+        )
 
 
 def _require_journal_account_consistency(

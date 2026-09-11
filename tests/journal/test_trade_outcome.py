@@ -1,4 +1,5 @@
 import ast
+import inspect
 import runpy
 from copy import deepcopy
 from dataclasses import fields
@@ -283,6 +284,82 @@ def test_journal_failure_rolls_back_close_and_all_state(
     assert paper.snapshot() == before
     assert paper.account_snapshot(fill_at) == before_account
     assert paper.completed_trade_journal_snapshot() == before_journal
+
+
+def test_gross_pnl_is_opaque_locally_and_checked_against_accounting_before_append(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validation_source = inspect.getsource(outcome_module._validate_execution_and_accounting)
+    assert "exit_fill_price - entry.entry_fill_price" not in validation_source
+    assert "entry.entry_fill_price - entry.exit_fill_price" not in validation_source
+
+    paper = _paper()
+    item = candidate()
+    paper.start_batch((item,))
+    paper.observe_batch((observation(BTC, NOW, Decimal(100)),))
+    trigger_at = NOW + timedelta(minutes=1)
+    paper.evaluate_protective_stops((observation(BTC, trigger_at, Decimal(75)),))
+    fill_at = trigger_at + timedelta(microseconds=1)
+    before = paper.snapshot()
+    before_account = paper.account_snapshot(fill_at)
+    before_journal = paper.completed_trade_journal_snapshot()
+    real_builder = coordinator_module._completed_trade_entry
+    append_calls = 0
+
+    def forged_builder(*args: object) -> CompletedTradeJournalEntry:
+        forged = real_builder(*args)  # type: ignore[arg-type]
+        with localcontext(_DECIMAL_CONTEXT):
+            forged_gross = forged.gross_realized_pnl + Decimal(1)
+            forged_net = forged_gross - forged.total_trade_fees_quote
+            forged_r = forged_net / forged.approved_risk_quote
+        classification = (
+            TradeOutcomeClassification.PROFIT
+            if forged_net > 0
+            else TradeOutcomeClassification.LOSS
+            if forged_net < 0
+            else TradeOutcomeClassification.BREAKEVEN
+        )
+        object.__setattr__(forged, "gross_realized_pnl", forged_gross)
+        object.__setattr__(forged, "net_realized_pnl", forged_net)
+        object.__setattr__(forged, "realized_r_net", forged_r)
+        object.__setattr__(forged, "outcome_classification", classification)
+        forged.validate()
+        return forged
+
+    real_append = InMemoryCompletedTradeJournal.append_batch
+
+    def counted_append(
+        self: InMemoryCompletedTradeJournal, batch: CompletedTradeJournalBatch
+    ) -> object:
+        nonlocal append_calls
+        append_calls += 1
+        return real_append(self, batch)
+
+    monkeypatch.setattr(coordinator_module, "_completed_trade_entry", forged_builder)
+    monkeypatch.setattr(InMemoryCompletedTradeJournal, "append_batch", counted_append)
+
+    with pytest.raises(
+        PaperPortfolioExitExecutionError,
+        match="accounting or closed-trade authority",
+    ):
+        paper.observe_protective_exits((observation(BTC, fill_at, Decimal(70)),))
+
+    assert append_calls == 0
+    assert paper.snapshot() == before
+    assert paper.account_snapshot(fill_at) == before_account
+    assert paper.completed_trade_journal_snapshot() == before_journal
+
+
+def test_completed_trade_entry_direct_construction_is_not_supported() -> None:
+    _, _, valid = _complete()
+    constructor_values = {
+        value_field.name: getattr(valid, value_field.name)
+        for value_field in fields(CompletedTradeJournalEntry)
+        if value_field.init
+    }
+
+    with pytest.raises(TypeError, match="authoritative close"):
+        CompletedTradeJournalEntry(**constructor_values)
 
 
 @pytest.mark.parametrize(
