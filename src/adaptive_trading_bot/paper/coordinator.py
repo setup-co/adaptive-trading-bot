@@ -1,4 +1,4 @@
-"""Process-local atomic admission, Paper observation, and entry accounting."""
+"""Process-local atomic Paper admission, execution, and shared accounting."""
 
 from __future__ import annotations
 
@@ -26,7 +26,10 @@ from adaptive_trading_bot.admission import (
 )
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
-from adaptive_trading_bot.execution import SimulatedExecutionCostConfiguration
+from adaptive_trading_bot.execution import (
+    SimulatedExecutionCostConfiguration,
+    SimulatedExecutionSide,
+)
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders import (
     EntryOrderIntent,
@@ -34,6 +37,7 @@ from adaptive_trading_bot.orders import (
     EntryOrderIntentIdentity,
     EntrySide,
     ExitOrderIntent,
+    ExitOrderIntentIdentity,
     ExitSide,
     OrderIntentAuthorizationStatus,
     exit_order_intent_is_authoritative,
@@ -53,6 +57,15 @@ from adaptive_trading_bot.paper.execution import (
     PaperOrderLifecycle,
     PaperOrderSimulator,
     PaperOrderStatus,
+)
+from adaptive_trading_bot.paper.exit_accounting import (
+    paper_exit_fill_to_position_accounting_fill as _paper_exit_fill_to_position_accounting_fill,
+)
+from adaptive_trading_bot.paper.exit_execution import (
+    PaperExitMarketFill,
+    PaperExitOrderStatus,
+    PaperProtectiveExitLifecycle,
+    PaperProtectiveExitSimulator,
 )
 from adaptive_trading_bot.strategies.core import SourceIdentity
 
@@ -78,6 +91,10 @@ class PaperPortfolioObservationError(PaperPortfolioCoordinatorError):
 
 class PaperProtectiveExitAuthorizationError(PaperPortfolioCoordinatorError):
     """Protective exit authority could not be staged and committed exactly."""
+
+
+class PaperPortfolioExitExecutionError(PaperPortfolioCoordinatorError):
+    """Protective exit execution could not be staged and committed exactly."""
 
 
 class PaperPortfolioStartBatchStatus(StrEnum):
@@ -202,6 +219,63 @@ class PaperProtectiveExitBatchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PaperPendingProtectiveExitSnapshot:
+    """Detached audit of one active protective exit execution lifecycle."""
+
+    intent: ExitOrderIntent
+    eligible_at: datetime
+    last_observed_at: datetime | None
+    status: PaperExitOrderStatus
+    fill: PaperExitMarketFill | None
+
+
+@dataclass(frozen=True, slots=True)
+class PaperClosedTradeSnapshot:
+    """Detached exact audit of one completed protective-stop Paper trade."""
+
+    originating_entry_intent_identity: EntryOrderIntentIdentity
+    originating_decision_identity: DecisionIdentity
+    originating_paper_order_identity: PaperOrderIdentity
+    protective_exit_intent_identity: ExitOrderIntentIdentity
+    source_id: SourceIdentity
+    symbol: TradingSymbol
+    position_side: EntrySide
+    quantity: Decimal
+    entry_fill_at: datetime
+    entry_fill_price: Decimal
+    entry_fee_quote: Decimal
+    stop_basis: Decimal
+    trigger_observed_at: datetime
+    trigger_reference_price: Decimal
+    exit_reference_price: Decimal
+    exit_fill_at: datetime
+    exit_fill_price: Decimal
+    exit_fee_quote: Decimal
+    gross_realized_pnl: Decimal
+    trade_fees_quote: Decimal
+    net_realized_pnl: Decimal
+    risk_policy_version: str
+    safety_policy_version: str
+    accounting_exit_fill_id: str
+    exit_fill: PaperExitMarketFill
+
+
+@dataclass(frozen=True, slots=True)
+class PaperProtectiveExitExecutionBatchResult:
+    """Atomic protective-exit lifecycle, accounting, and capacity audit."""
+
+    observed_at: datetime
+    newly_closed: tuple[PaperClosedTradeSnapshot, ...]
+    still_pending_exits: tuple[PaperPendingProtectiveExitSnapshot, ...]
+    active_exit_intents: tuple[ExitOrderIntent, ...]
+    open_positions: tuple[PaperOpenPositionSnapshot, ...]
+    accounting_positions: tuple[tuple[TradingSymbol, PositionAccountingState], ...]
+    accounting_transitions: tuple[PositionAccountingTransition, ...]
+    locked_open_risk_quote: Decimal
+    locked_gross_exposure_quote: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class PaperPortfolioCoordinatorSnapshot:
     """Detached read-only view of process-local coordinator state."""
 
@@ -214,6 +288,7 @@ class PaperPortfolioCoordinatorSnapshot:
     locked_open_risk_quote: Decimal
     locked_gross_exposure_quote: Decimal
     active_exit_intents: tuple[ExitOrderIntent, ...]
+    active_exit_lifecycles: tuple[PaperPendingProtectiveExitSnapshot, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +308,7 @@ class _OpenPaperPosition:
 @dataclass(frozen=True, slots=True)
 class _PendingProtectiveExit:
     open_identity: PaperOrderIdentity
-    intent: ExitOrderIntent
+    lifecycle: PaperProtectiveExitLifecycle
 
 
 class PaperPortfolioCoordinator:
@@ -481,7 +556,7 @@ class PaperPortfolioCoordinator:
                             open_item,
                             observation,
                             PaperProtectiveStopStatus.ALREADY_PENDING,
-                            existing.intent,
+                            existing.lifecycle.intent,
                         )
                     )
                     continue
@@ -521,8 +596,11 @@ class PaperPortfolioCoordinator:
                     safety_policy_version=authority.safety_policy_version,
                 )
                 _require_exit_matches_open(intent, open_item, self._accounting)
-                owned = _copy_authoritative_exit_intent(intent)
-                pending = _PendingProtectiveExit(lifecycle.identity, owned)
+                exit_lifecycle = PaperProtectiveExitSimulator().start(intent, self._costs)
+                _require_exit_lifecycle_matches_open(
+                    exit_lifecycle, open_item, self._accounting, self._costs
+                )
+                pending = _PendingProtectiveExit(lifecycle.identity, exit_lifecycle)
                 staged.append(pending)
                 pending_by_identity[lifecycle.identity] = pending
                 newly_triggered.append(intent)
@@ -558,13 +636,164 @@ class PaperPortfolioCoordinator:
                 _copy_authoritative_exit_intent(item)
                 for item in sorted(newly_triggered, key=_exit_order_key)
             ),
-            tuple(_copy_authoritative_exit_intent(item.intent) for item in next_exits),
+            tuple(_copy_authoritative_exit_intent(item.lifecycle.intent) for item in next_exits),
             tuple(_open_snapshot(item) for item in self._open_positions),
             self._accounting.positions(),
             locked_risk,
             locked_gross,
         )
         self._active_exit_intents = next_exits
+        self._last_observed_at = observed_at
+        return result
+
+    def observe_protective_exits(
+        self,
+        observations: tuple[PaperExecutionObservation, ...],
+    ) -> PaperProtectiveExitExecutionBatchResult:
+        """Causally fill owned exits and atomically close shared positions."""
+
+        observed_at, ordered = self._validate_exit_execution_observations(observations)
+        self._validate_internal_state()
+        exit_by_key = {
+            (
+                item.lifecycle.accepted_authority.source_id_value,
+                item.lifecycle.accepted_authority.symbol,
+            ): item
+            for item in self._active_exit_intents
+        }
+        open_by_identity = {item.lifecycle.identity: item for item in self._open_positions}
+        mapped: list[
+            tuple[
+                _PendingProtectiveExit,
+                _OpenPaperPosition,
+                PaperExecutionObservation,
+            ]
+        ] = []
+        for observation in ordered:
+            pending = exit_by_key.get((observation.source_id.value, observation.symbol))
+            if pending is None:
+                raise PaperPortfolioBatchError(
+                    "every exit observation must match one active source and symbol"
+                )
+            open_item = open_by_identity.get(pending.open_identity)
+            if open_item is None:
+                raise PaperPortfolioExitExecutionError(
+                    "active exit has no coordinator-owned open position"
+                )
+            mapped.append((pending, open_item, _copy_observation(observation)))
+
+        staged_by_identity = {item.open_identity: item for item in self._active_exit_intents}
+        newly_filled: list[
+            tuple[
+                _PendingProtectiveExit,
+                PaperProtectiveExitLifecycle,
+                PositionAccountingFill,
+                _OpenPaperPosition,
+            ]
+        ] = []
+        simulator = PaperProtectiveExitSimulator()
+        try:
+            for prior, open_item, observation in mapped:
+                _require_exit_lifecycle_matches_open(
+                    prior.lifecycle, open_item, self._accounting, self._costs
+                )
+                staged_lifecycle = simulator.clone(prior.lifecycle)
+                advanced = simulator.observe(staged_lifecycle, observation)
+                _require_advanced_exit_lifecycle(
+                    prior.lifecycle,
+                    advanced,
+                    open_item,
+                    observation,
+                    self._accounting,
+                    self._costs,
+                )
+                if advanced.status is PaperExitOrderStatus.FILLED:
+                    if advanced.fill is None:
+                        raise PaperPortfolioExitExecutionError("FILLED protective exit has no fill")
+                    adapted = _paper_exit_fill_to_position_accounting_fill(
+                        advanced.fill, self._costs
+                    )
+                    _require_adapted_exit_fill(advanced.fill, adapted)
+                    newly_filled.append((prior, advanced, adapted, open_item))
+                else:
+                    staged_by_identity[prior.open_identity] = _PendingProtectiveExit(
+                        prior.open_identity, advanced
+                    )
+
+            staged_accounting = self._accounting.clone()
+            accounting_transitions: tuple[PositionAccountingTransition, ...] = ()
+            if newly_filled:
+                for _, _, accounting_fill, _ in newly_filled:
+                    if staged_accounting.position(accounting_fill.symbol).quantity == 0:
+                        raise PaperPortfolioExitExecutionError(
+                            "exit accounting target must be non-flat"
+                        )
+                accounting_batch = staged_accounting.process(
+                    PositionAccountingFillBatch(
+                        observed_at,
+                        tuple(item[2] for item in newly_filled),
+                    )
+                )
+                accounting_transitions = accounting_batch.transitions
+                _require_close_transitions(newly_filled, accounting_transitions, self._accounting)
+
+            filled_identities = {item[0].open_identity for item in newly_filled}
+            next_exits = _sort_pending_exits(
+                tuple(
+                    item
+                    for identity, item in staged_by_identity.items()
+                    if identity not in filled_identities
+                )
+            )
+            next_open = _sort_open(
+                tuple(
+                    item
+                    for item in self._open_positions
+                    if item.lifecycle.identity not in filled_identities
+                )
+            )
+            _validate_staged_state(
+                self._active,
+                next_open,
+                next_exits,
+                staged_accounting,
+                self._costs,
+            )
+            transition_by_fill_id = {
+                transition.fill.fill_id: transition for transition in accounting_transitions
+            }
+            closed = tuple(
+                _closed_trade_snapshot(
+                    advanced,
+                    open_item,
+                    transition_by_fill_id[accounting_fill.fill_id],
+                )
+                for _, advanced, accounting_fill, open_item in newly_filled
+            )
+        except Exception as error:
+            if isinstance(error, PaperPortfolioExitExecutionError):
+                raise
+            raise PaperPortfolioExitExecutionError(
+                "protective exit execution batch failed before atomic commit"
+            ) from error
+
+        locked_risk, locked_gross = _locked_totals(next_open)
+        result = PaperProtectiveExitExecutionBatchResult(
+            observed_at,
+            tuple(
+                sorted(closed, key=lambda item: (str(item.symbol), item.accounting_exit_fill_id))
+            ),
+            tuple(_pending_exit_snapshot(item.lifecycle) for item in next_exits),
+            tuple(_copy_authoritative_exit_intent(item.lifecycle.intent) for item in next_exits),
+            tuple(_open_snapshot(item) for item in next_open),
+            staged_accounting.positions(),
+            accounting_transitions,
+            locked_risk,
+            locked_gross,
+        )
+        self._active_exit_intents = next_exits
+        self._open_positions = next_open
+        self._accounting = staged_accounting
         self._last_observed_at = observed_at
         return result
 
@@ -583,8 +812,10 @@ class PaperPortfolioCoordinator:
             locked_risk,
             locked_gross,
             tuple(
-                _copy_authoritative_exit_intent(item.intent) for item in self._active_exit_intents
+                _copy_authoritative_exit_intent(item.lifecycle.intent)
+                for item in self._active_exit_intents
             ),
+            tuple(_pending_exit_snapshot(item.lifecycle) for item in self._active_exit_intents),
         )
 
     def _validate_submission[ReasonT, AuditT](
@@ -717,6 +948,40 @@ class PaperPortfolioCoordinator:
             sorted(observations, key=lambda item: (str(item.symbol), item.source_id.value))
         )
 
+    def _validate_exit_execution_observations(
+        self,
+        observations: tuple[PaperExecutionObservation, ...],
+    ) -> tuple[datetime, tuple[PaperExecutionObservation, ...]]:
+        if not isinstance(observations, tuple):
+            raise TypeError("observations must be an immutable tuple")
+        if not observations:
+            raise PaperPortfolioBatchError("exit observation batch must be non-empty")
+        if not all(isinstance(item, PaperExecutionObservation) for item in observations):
+            raise TypeError("observations must contain PaperExecutionObservation values")
+        try:
+            for item in observations:
+                item.validate()
+            times = tuple(
+                require_utc(item.observed_at, field="exit execution observed_at")
+                for item in observations
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise PaperPortfolioBatchError("exit observation batch is malformed") from error
+        observed_at = times[0]
+        if any(value != observed_at for value in times[1:]):
+            raise PaperPortfolioBatchError("every observation must share one observed_at")
+        symbols = tuple(item.symbol for item in observations)
+        if len(set(symbols)) != len(symbols):
+            raise PaperPortfolioBatchError("at most one observation per symbol is allowed")
+        latest = _latest_time(self._last_finalized_at, self._last_observed_at)
+        if latest is not None and observed_at <= latest:
+            raise PaperPortfolioBatchError(
+                "exit execution observed_at must strictly advance Paper chronology"
+            )
+        return observed_at, tuple(
+            sorted(observations, key=lambda item: (str(item.symbol), item.source_id.value))
+        )
+
     def _pending_snapshot(self, observed_at: datetime) -> PendingReservationSnapshot:
         return _pending_snapshot_for(self._active, observed_at)
 
@@ -798,7 +1063,7 @@ def _exit_order_key(intent: ExitOrderIntent) -> tuple[str, tuple[object, ...]]:
 def _sort_pending_exits(
     exits: tuple[_PendingProtectiveExit, ...],
 ) -> tuple[_PendingProtectiveExit, ...]:
-    return tuple(sorted(exits, key=lambda item: _exit_order_key(item.intent)))
+    return tuple(sorted(exits, key=lambda item: _exit_order_key(item.lifecycle.intent)))
 
 
 def _copy_costs(costs: SimulatedExecutionCostConfiguration) -> SimulatedExecutionCostConfiguration:
@@ -968,6 +1233,19 @@ def _protective_evaluation(
     )
 
 
+def _pending_exit_snapshot(
+    lifecycle: PaperProtectiveExitLifecycle,
+) -> PaperPendingProtectiveExitSnapshot:
+    copied = PaperProtectiveExitSimulator().clone(lifecycle)
+    return PaperPendingProtectiveExitSnapshot(
+        _copy_authoritative_exit_intent(copied.intent),
+        copied.eligible_at,
+        copied.last_observed_at,
+        copied.status,
+        copied.fill,
+    )
+
+
 def _require_exit_matches_open(
     intent: ExitOrderIntent,
     item: _OpenPaperPosition,
@@ -1008,6 +1286,185 @@ def _require_exit_matches_open(
         raise PaperProtectiveExitAuthorizationError(
             "protective exit diverged from coordinator-owned open authority"
         )
+
+
+def _require_exit_lifecycle_matches_open(
+    lifecycle: PaperProtectiveExitLifecycle,
+    item: _OpenPaperPosition,
+    accounting: PositionAccountingCore,
+    costs: SimulatedExecutionCostConfiguration,
+) -> None:
+    try:
+        cloned = PaperProtectiveExitSimulator().clone(lifecycle)
+        _require_exit_matches_open(cloned.intent, item, accounting)
+    except Exception as error:
+        raise PaperPortfolioExitExecutionError(
+            "protective exit lifecycle is not authoritative"
+        ) from error
+    if (
+        cloned != lifecycle
+        or lifecycle.costs != costs
+        or lifecycle.eligible_at != lifecycle.intent.authorized_at + costs.latency
+        or lifecycle.status not in {PaperExitOrderStatus.PENDING, PaperExitOrderStatus.FILLED}
+    ):
+        raise PaperPortfolioExitExecutionError(
+            "protective exit lifecycle diverged from coordinator authority"
+        )
+
+
+def _require_advanced_exit_lifecycle(
+    prior: PaperProtectiveExitLifecycle,
+    advanced: PaperProtectiveExitLifecycle,
+    open_item: _OpenPaperPosition,
+    observation: PaperExecutionObservation,
+    accounting: PositionAccountingCore,
+    costs: SimulatedExecutionCostConfiguration,
+) -> None:
+    _require_exit_lifecycle_matches_open(advanced, open_item, accounting, costs)
+    if (
+        advanced.intent != prior.intent
+        or advanced.accepted_authority != prior.accepted_authority
+        or advanced.costs != prior.costs
+        or advanced.eligible_at != prior.eligible_at
+        or advanced.last_observed_at != observation.observed_at
+    ):
+        raise PaperPortfolioExitExecutionError("advanced exit lifecycle changed accepted authority")
+    if advanced.status is PaperExitOrderStatus.PENDING:
+        if advanced.fill is not None or observation.observed_at >= advanced.eligible_at:
+            raise PaperPortfolioExitExecutionError(
+                "pending exit observation result is inconsistent"
+            )
+        return
+    fill = advanced.fill
+    if fill is None or observation.observed_at < advanced.eligible_at:
+        raise PaperPortfolioExitExecutionError("filled exit observation result is inconsistent")
+    if (
+        fill.fill_at != observation.observed_at
+        or fill.reference_price != observation.reference_price
+        or fill.source_id != observation.source_id
+        or fill.symbol != observation.symbol
+    ):
+        raise PaperPortfolioExitExecutionError(
+            "protective exit fill diverged from supplied observation"
+        )
+
+
+def _require_adapted_exit_fill(
+    fill: PaperExitMarketFill,
+    adapted: PositionAccountingFill,
+) -> None:
+    expected_side = (
+        SimulatedExecutionSide.BUY if fill.side is ExitSide.BUY else SimulatedExecutionSide.SELL
+    )
+    if (
+        adapted.symbol != fill.symbol
+        or adapted.side is not expected_side
+        or adapted.quantity != fill.quantity
+        or adapted.fill_at != fill.fill_at
+        or adapted.fill_price != fill.fill_price
+        or adapted.fee_quote != fill.fee_quote
+    ):
+        raise PaperPortfolioExitExecutionError(
+            "exit accounting fill changed authoritative execution values"
+        )
+
+
+def _require_close_transitions(
+    filled: list[
+        tuple[
+            _PendingProtectiveExit,
+            PaperProtectiveExitLifecycle,
+            PositionAccountingFill,
+            _OpenPaperPosition,
+        ]
+    ],
+    transitions: tuple[PositionAccountingTransition, ...],
+    prior_core: PositionAccountingCore,
+) -> None:
+    expected = {item[2].fill_id: item for item in filled}
+    if len(transitions) != len(expected):
+        raise PaperPortfolioExitExecutionError("exit accounting transition count is inconsistent")
+    for transition in transitions:
+        matched = expected.get(transition.fill.fill_id)
+        if matched is None:
+            raise PaperPortfolioExitExecutionError("exit accounting returned an unknown fill")
+        _, lifecycle, accounting_fill, open_item = matched
+        entry_fill = open_item.lifecycle.fill
+        exit_fill = lifecycle.fill
+        if entry_fill is None or exit_fill is None:
+            raise PaperPortfolioExitExecutionError("close transition has no fill authority")
+        prior = prior_core.position(accounting_fill.symbol)
+        with localcontext(_DECIMAL_CONTEXT):
+            expected_quantity = (
+                entry_fill.quantity if entry_fill.side is EntrySide.BUY else -entry_fill.quantity
+            )
+            expected_closed = abs(expected_quantity)
+            expected_fees = prior.cumulative_fees + accounting_fill.fee_quote
+            expected_gross = (
+                prior.cumulative_gross_realized_pnl + transition.gross_realized_pnl_delta
+            )
+            expected_net = expected_gross - expected_fees
+        if (
+            transition.fill != accounting_fill
+            or prior.quantity != expected_quantity
+            or transition.position_quantity_before != expected_quantity
+            or transition.position_quantity_after != 0
+            or transition.average_entry_before != entry_fill.fill_price
+            or transition.average_entry_after is not None
+            or transition.closed_quantity != expected_closed
+            or transition.cumulative_gross_realized_pnl != expected_gross
+            or transition.cumulative_fees != expected_fees
+            or transition.cumulative_net_realized_pnl != expected_net
+        ):
+            raise PaperPortfolioExitExecutionError(
+                "shared accounting did not produce an exact full close"
+            )
+
+
+def _closed_trade_snapshot(
+    lifecycle: PaperProtectiveExitLifecycle,
+    open_item: _OpenPaperPosition,
+    transition: PositionAccountingTransition,
+) -> PaperClosedTradeSnapshot:
+    exit_fill = lifecycle.fill
+    entry_fill = open_item.lifecycle.fill
+    if exit_fill is None or entry_fill is None:
+        raise PaperPortfolioExitExecutionError("closed-trade audit requires both fills")
+    with localcontext(_DECIMAL_CONTEXT):
+        trade_fees = entry_fill.fee_quote + exit_fill.fee_quote
+        net_pnl = transition.gross_realized_pnl_delta - trade_fees
+    detached_exit_fill = PaperProtectiveExitSimulator().clone(lifecycle).fill
+    if detached_exit_fill is None:
+        raise PaperPortfolioExitExecutionError("closed-trade exit fill copy is missing")
+    entry_identity = _copy_intent_identity(lifecycle.intent.originating_entry_intent_identity)
+    decision = entry_identity.decision_identity
+    return PaperClosedTradeSnapshot(
+        entry_identity,
+        decision,
+        PaperOrderIdentity(entry_identity),
+        ExitOrderIntentIdentity(entry_identity, lifecycle.intent.trigger_observed_at),
+        deepcopy(decision.source_id),
+        TradingSymbol(decision.symbol.base, decision.symbol.quote),
+        entry_fill.side,
+        entry_fill.quantity,
+        entry_fill.fill_at,
+        entry_fill.fill_price,
+        entry_fill.fee_quote,
+        lifecycle.intent.stop_basis,
+        lifecycle.intent.trigger_observed_at,
+        lifecycle.intent.trigger_reference_price,
+        exit_fill.reference_price,
+        exit_fill.fill_at,
+        exit_fill.fill_price,
+        exit_fill.fee_quote,
+        transition.gross_realized_pnl_delta,
+        trade_fees,
+        net_pnl,
+        lifecycle.intent.risk_policy_version,
+        lifecycle.intent.safety_policy_version,
+        transition.fill.fill_id,
+        detached_exit_fill,
+    )
 
 
 def _require_staged_authority(
@@ -1252,18 +1709,20 @@ def _validate_staged_state(
             adapted != open_item.accounting_fill
             or state.quantity != expected_quantity
             or state.average_entry_price != fill.fill_price
-            or state.cumulative_gross_realized_pnl != 0
-            or state.cumulative_fees != fill.fee_quote
             or open_item.locked_open_risk_quote != expected_locked_risk
             or open_item.locked_gross_exposure_quote != expected_locked_gross
         ):
             raise PaperPortfolioCoordinatorError("open position and accounting diverged")
         symbols.add(fill.symbol)
         fill_ids.add(open_item.accounting_fill.fill_id)
-    if {symbol for symbol, _ in accounting.positions()} != {
-        item.lifecycle.accepted_authorization.symbol for item in open_positions
-    }:
-        raise PaperPortfolioCoordinatorError("accounting contains unowned Paper symbols")
+    open_symbols = {item.lifecycle.accepted_authorization.symbol for item in open_positions}
+    for symbol, state in accounting.positions():
+        if symbol not in open_symbols and (
+            state.quantity != 0 or state.average_entry_price is not None
+        ):
+            raise PaperPortfolioCoordinatorError(
+                "accounting contains an unowned non-flat Paper symbol"
+            )
 
     open_by_identity = {item.lifecycle.identity: item for item in open_positions}
     seen_exit_identities: set[PaperOrderIdentity] = set()
@@ -1272,11 +1731,15 @@ def _validate_staged_state(
         if (
             pending_open is None
             or pending_exit.open_identity in seen_exit_identities
-            or not exit_order_intent_is_authoritative(pending_exit.intent)
+            or pending_exit.lifecycle.status is not PaperExitOrderStatus.PENDING
+            or pending_exit.lifecycle.fill is not None
+            or not exit_order_intent_is_authoritative(pending_exit.lifecycle.intent)
         ):
             raise PaperPortfolioCoordinatorError("active protective exit state is inconsistent")
         try:
-            _require_exit_matches_open(pending_exit.intent, pending_open, accounting)
+            _require_exit_lifecycle_matches_open(
+                pending_exit.lifecycle, pending_open, accounting, costs
+            )
         except PaperProtectiveExitAuthorizationError as error:
             raise PaperPortfolioCoordinatorError(
                 "active protective exit diverged from open authority"
