@@ -5,6 +5,28 @@ from adaptive_trading_bot.dashboard.api_models import (
     DashboardUnavailableResponse,
     dashboard_response,
 )
+from adaptive_trading_bot.dashboard.chart_api_models import (
+    DashboardChartInvalidQueryResponse,
+    DashboardChartSnapshotResponse,
+    chart_response,
+)
+from adaptive_trading_bot.dashboard.chart_models import (
+    MAX_DASHBOARD_CHART_CANDLES,
+    DashboardChartCandle,
+    DashboardChartIntegrity,
+    DashboardChartIntegrityIssue,
+    DashboardChartMarker,
+    DashboardChartMarkerKind,
+    DashboardChartOverlays,
+    DashboardChartQuery,
+    DashboardChartSnapshot,
+    DashboardChartValidationError,
+)
+from adaptive_trading_bot.dashboard.chart_provider import (
+    DashboardChartProvider,
+    DashboardChartProviderError,
+    HistoricalDashboardChartProvider,
+)
 from adaptive_trading_bot.dashboard.models import (
     DashboardAvailability,
     DashboardCompletedTrade,
@@ -23,7 +45,21 @@ from adaptive_trading_bot.dashboard.projection import (
 from adaptive_trading_bot.dashboard.provider import DashboardSnapshotProvider
 
 __all__ = [
+    "MAX_DASHBOARD_CHART_CANDLES",
     "DashboardAvailability",
+    "DashboardChartCandle",
+    "DashboardChartIntegrity",
+    "DashboardChartIntegrityIssue",
+    "DashboardChartInvalidQueryResponse",
+    "DashboardChartMarker",
+    "DashboardChartMarkerKind",
+    "DashboardChartOverlays",
+    "DashboardChartProvider",
+    "DashboardChartProviderError",
+    "DashboardChartQuery",
+    "DashboardChartSnapshot",
+    "DashboardChartSnapshotResponse",
+    "DashboardChartValidationError",
     "DashboardCompletedTrade",
     "DashboardMarketSnapshot",
     "DashboardOpenPosition",
@@ -36,6 +72,8 @@ __all__ = [
     "DashboardSystemSnapshot",
     "DashboardUnavailableResponse",
     "DashboardValue",
+    "HistoricalDashboardChartProvider",
+    "chart_response",
     "dashboard_response",
     "project_dashboard_snapshot",
 ]

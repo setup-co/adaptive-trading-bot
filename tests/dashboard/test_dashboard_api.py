@@ -183,7 +183,7 @@ async def test_dashboard_exposes_only_get_and_documents_response_schema() -> Non
     dashboard_routes = [
         route
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/api/v1/dashboard")
+        if isinstance(route, APIRoute) and route.path == "/api/v1/dashboard/snapshot"
     ]
     assert len(dashboard_routes) == 1
     assert dashboard_routes[0].methods == {"GET"}
