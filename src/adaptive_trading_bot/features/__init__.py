@@ -11,6 +11,7 @@ from adaptive_trading_bot.features.core import (
     ObservedCandle,
     ObservedCandleBatch,
 )
+from adaptive_trading_bot.features.live_adapter import observed_candles_from_live
 from adaptive_trading_bot.features.market_structure import (
     ConfirmedPivot,
     MarketStructureEngine,
@@ -45,5 +46,6 @@ __all__ = [
     "StructureRelation",
     "StructureSeriesError",
     "StructureSnapshot",
+    "observed_candles_from_live",
     "observed_candles_from_replay",
 ]

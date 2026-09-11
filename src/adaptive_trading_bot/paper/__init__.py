@@ -55,8 +55,13 @@ from adaptive_trading_bot.paper.exit_execution import (
     PaperProtectiveExitLifecycle,
     PaperProtectiveExitSimulator,
 )
+from adaptive_trading_bot.paper.live_adapter import (
+    LivePaperObservationAssemblyError,
+    paper_observation_from_live_quote,
+)
 
 __all__ = [
+    "LivePaperObservationAssemblyError",
     "PaperAccountConfiguration",
     "PaperAccountError",
     "PaperAccountSnapshot",
@@ -100,4 +105,5 @@ __all__ = [
     "PaperStartedIntentSnapshot",
     "paper_exit_fill_to_position_accounting_fill",
     "paper_fill_to_position_accounting_fill",
+    "paper_observation_from_live_quote",
 ]

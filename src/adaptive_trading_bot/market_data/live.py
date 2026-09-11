@@ -100,6 +100,7 @@ class LiveMarketQuote:
     last: Decimal | None
     midpoint: Decimal = field(init=False)
     spread_bps: Decimal = field(init=False)
+    _integrity_fingerprint: tuple[object, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, SourceId):
@@ -129,6 +130,7 @@ class LiveMarketQuote:
         midpoint, spread_bps = _quote_arithmetic(self.bid, self.ask)
         object.__setattr__(self, "midpoint", midpoint)
         object.__setattr__(self, "spread_bps", spread_bps)
+        object.__setattr__(self, "_integrity_fingerprint", _quote_fingerprint(self))
 
     def validate(self) -> None:
         """Revalidate a quote after crossing a caller-controlled boundary."""
@@ -152,6 +154,8 @@ class LiveMarketQuote:
             raise LiveMarketDataValidationError(
                 "live quote midpoint or spread arithmetic is inconsistent"
             )
+        if self._integrity_fingerprint != _quote_fingerprint(self):
+            raise LiveMarketDataValidationError("live quote facts changed after validation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +165,7 @@ class LiveClosedCandleObservation:
     source_id: SourceId
     candle: Candle
     observed_at: datetime
+    _integrity_fingerprint: tuple[object, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, SourceId):
@@ -175,6 +180,7 @@ class LiveClosedCandleObservation:
             "observed_at",
             require_utc(self.observed_at, field="live candle observed_at"),
         )
+        object.__setattr__(self, "_integrity_fingerprint", _live_candle_fingerprint(self))
         self.validate()
 
     @property
@@ -202,6 +208,8 @@ class LiveClosedCandleObservation:
             raise LiveMarketDataValidationError(
                 "forming candle cannot be emitted as a closed observation"
             )
+        if self._integrity_fingerprint != _live_candle_fingerprint(self):
+            raise LiveMarketDataValidationError("live candle facts changed after validation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +219,7 @@ class LiveMarketFeedSnapshot:
     observed_at: datetime
     quotes: tuple[LiveMarketQuote, ...] = ()
     closed_candles: tuple[LiveClosedCandleObservation, ...] = ()
+    _integrity_fingerprint: tuple[object, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         observed_at = require_utc(self.observed_at, field="live market snapshot observed_at")
@@ -278,6 +287,26 @@ class LiveMarketFeedSnapshot:
                 )
             ),
         )
+        object.__setattr__(self, "_integrity_fingerprint", _snapshot_fingerprint(self))
+
+    def validate(self) -> None:
+        """Revalidate the complete detached polling snapshot after a raw boundary crossing."""
+
+        require_utc(self.observed_at, field="live market snapshot observed_at")
+        if not isinstance(self.quotes, tuple) or not isinstance(self.closed_candles, tuple):
+            raise TypeError("live market snapshot observations must be immutable tuples")
+        for quote in self.quotes:
+            quote.validate()
+            if quote.observed_at != self.observed_at:
+                raise LiveMarketDataValidationError("snapshot quote receipt time changed")
+        for observation in self.closed_candles:
+            observation.validate()
+            if observation.observed_at != self.observed_at:
+                raise LiveMarketDataValidationError("snapshot candle receipt time changed")
+        if self._integrity_fingerprint != _snapshot_fingerprint(self):
+            raise LiveMarketDataValidationError(
+                "live market snapshot facts changed after validation"
+            )
 
 
 def _require_v1_live_symbol(symbol: TradingSymbol) -> None:
@@ -297,3 +326,46 @@ def _quote_arithmetic(bid: Decimal, ask: Decimal) -> tuple[Decimal, Decimal]:
         midpoint = (bid + ask) / Decimal(2)
         spread_bps = (ask - bid) / midpoint * Decimal(10_000)
     return midpoint, spread_bps
+
+
+def _quote_fingerprint(quote: LiveMarketQuote) -> tuple[object, ...]:
+    return (
+        quote.source_id.value,
+        quote.symbol.base,
+        quote.symbol.quote,
+        quote.observed_at,
+        quote.source_timestamp,
+        quote.bid,
+        quote.ask,
+        quote.last,
+        quote.midpoint,
+        quote.spread_bps,
+    )
+
+
+def _live_candle_fingerprint(
+    observation: LiveClosedCandleObservation,
+) -> tuple[object, ...]:
+    candle = observation.candle
+    return (
+        observation.source_id.value,
+        candle.symbol.base,
+        candle.symbol.quote,
+        candle.timeframe,
+        candle.open_time,
+        candle.close_time,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume,
+        observation.observed_at,
+    )
+
+
+def _snapshot_fingerprint(snapshot: LiveMarketFeedSnapshot) -> tuple[object, ...]:
+    return (
+        snapshot.observed_at,
+        tuple(_quote_fingerprint(quote) for quote in snapshot.quotes),
+        tuple(_live_candle_fingerprint(item) for item in snapshot.closed_candles),
+    )
