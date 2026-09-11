@@ -15,6 +15,10 @@ from adaptive_trading_bot.paper.coordinator import (
     PaperPortfolioStartBatchResult,
     PaperPortfolioStartBatchStatus,
     PaperPortfolioStartError,
+    PaperProtectiveExitAuthorizationError,
+    PaperProtectiveExitBatchResult,
+    PaperProtectiveStopEvaluation,
+    PaperProtectiveStopStatus,
     PaperStartedIntentSnapshot,
 )
 from adaptive_trading_bot.paper.execution import (
@@ -54,6 +58,10 @@ __all__ = [
     "PaperPortfolioStartBatchResult",
     "PaperPortfolioStartBatchStatus",
     "PaperPortfolioStartError",
+    "PaperProtectiveExitAuthorizationError",
+    "PaperProtectiveExitBatchResult",
+    "PaperProtectiveStopEvaluation",
+    "PaperProtectiveStopStatus",
     "PaperStartedIntentSnapshot",
     "paper_fill_to_position_accounting_fill",
 ]

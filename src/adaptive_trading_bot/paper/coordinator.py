@@ -33,7 +33,14 @@ from adaptive_trading_bot.orders import (
     EntryOrderIntentAuthorizer,
     EntryOrderIntentIdentity,
     EntrySide,
+    ExitOrderIntent,
+    ExitSide,
     OrderIntentAuthorizationStatus,
+    exit_order_intent_is_authoritative,
+)
+from adaptive_trading_bot.orders.exit_intent import (
+    _authorize_protective_stop_full_close,
+    _copy_authoritative_exit_intent,
 )
 from adaptive_trading_bot.paper.accounting import (
     paper_fill_to_position_accounting_fill as _paper_fill_to_position_accounting_fill,
@@ -69,12 +76,24 @@ class PaperPortfolioObservationError(PaperPortfolioCoordinatorError):
     """A Paper observation batch could not be staged and committed exactly."""
 
 
+class PaperProtectiveExitAuthorizationError(PaperPortfolioCoordinatorError):
+    """Protective exit authority could not be staged and committed exactly."""
+
+
 class PaperPortfolioStartBatchStatus(StrEnum):
     """Outcome of one coordinator submission."""
 
     STARTED = "STARTED"
     NO_START = "NO_START"
     REJECTED_INCONSISTENT = "REJECTED_INCONSISTENT"
+
+
+class PaperProtectiveStopStatus(StrEnum):
+    """Outcome for one open position in a stop-evaluation batch."""
+
+    TRIGGERED = "TRIGGERED"
+    NOT_TRIGGERED = "NOT_TRIGGERED"
+    ALREADY_PENDING = "ALREADY_PENDING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +172,36 @@ class PaperPortfolioObservationBatchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PaperProtectiveStopEvaluation:
+    """Detached audit for one coordinator-owned open position observation."""
+
+    paper_order_identity: PaperOrderIdentity
+    originating_entry_intent_identity: EntryOrderIntentIdentity
+    originating_decision_identity: DecisionIdentity
+    source_id: SourceIdentity
+    symbol: TradingSymbol
+    observed_at: datetime
+    reference_price: Decimal
+    stop_basis: Decimal
+    status: PaperProtectiveStopStatus
+    exit_intent: ExitOrderIntent | None
+
+
+@dataclass(frozen=True, slots=True)
+class PaperProtectiveExitBatchResult:
+    """Immutable authorization audit; no exit execution has occurred."""
+
+    observed_at: datetime
+    evaluations: tuple[PaperProtectiveStopEvaluation, ...]
+    triggered: tuple[ExitOrderIntent, ...]
+    active_exit_intents: tuple[ExitOrderIntent, ...]
+    open_positions: tuple[PaperOpenPositionSnapshot, ...]
+    accounting_positions: tuple[tuple[TradingSymbol, PositionAccountingState], ...]
+    locked_open_risk_quote: Decimal
+    locked_gross_exposure_quote: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class PaperPortfolioCoordinatorSnapshot:
     """Detached read-only view of process-local coordinator state."""
 
@@ -164,6 +213,7 @@ class PaperPortfolioCoordinatorSnapshot:
     accounting_positions: tuple[tuple[TradingSymbol, PositionAccountingState], ...]
     locked_open_risk_quote: Decimal
     locked_gross_exposure_quote: Decimal
+    active_exit_intents: tuple[ExitOrderIntent, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,12 +230,19 @@ class _OpenPaperPosition:
     locked_gross_exposure_quote: Decimal
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingProtectiveExit:
+    open_identity: PaperOrderIdentity
+    intent: ExitOrderIntent
+
+
 class PaperPortfolioCoordinator:
     """Atomically coordinate admitted Paper entries through open positions."""
 
     __slots__ = (
         "_accounting",
         "_active",
+        "_active_exit_intents",
         "_costs",
         "_last_finalized_at",
         "_last_observed_at",
@@ -200,6 +257,7 @@ class PaperPortfolioCoordinator:
         self._active: tuple[_ActivePaperIntent, ...] = ()
         self._accounting = PositionAccountingCore()
         self._open_positions: tuple[_OpenPaperPosition, ...] = ()
+        self._active_exit_intents: tuple[_PendingProtectiveExit, ...] = ()
         self._last_finalized_at: datetime | None = None
         self._last_observed_at: datetime | None = None
 
@@ -342,7 +400,13 @@ class PaperPortfolioCoordinator:
             staged_open = list(self._open_positions)
             staged_open.extend(staged_new_open)
             next_open = _sort_open(tuple(staged_open))
-            _validate_staged_state(next_active, next_open, staged_accounting, self._costs)
+            _validate_staged_state(
+                next_active,
+                next_open,
+                self._active_exit_intents,
+                staged_accounting,
+                self._costs,
+            )
         except Exception as error:
             if isinstance(error, PaperPortfolioObservationError):
                 raise
@@ -374,6 +438,136 @@ class PaperPortfolioCoordinator:
         self._last_observed_at = observed_at
         return result
 
+    def evaluate_protective_stops(
+        self,
+        observations: tuple[PaperExecutionObservation, ...],
+    ) -> PaperProtectiveExitBatchResult:
+        """Authorize full-close stop exits from coordinator-owned open state only."""
+
+        observed_at, ordered = self._validate_protective_observations(observations)
+        self._validate_internal_state()
+        open_by_key = {
+            (
+                item.lifecycle.accepted_authorization.source_id_value,
+                item.lifecycle.accepted_authorization.symbol,
+            ): item
+            for item in self._open_positions
+        }
+        mapped: list[tuple[_OpenPaperPosition, PaperExecutionObservation]] = []
+        for observation in ordered:
+            item = open_by_key.get((observation.source_id.value, observation.symbol))
+            if item is None:
+                raise PaperPortfolioBatchError(
+                    "every protective-stop observation must match one open source and symbol"
+                )
+            mapped.append((item, _copy_observation(observation)))
+
+        pending_by_identity = {item.open_identity: item for item in self._active_exit_intents}
+        staged = list(self._active_exit_intents)
+        evaluations: list[PaperProtectiveStopEvaluation] = []
+        newly_triggered: list[ExitOrderIntent] = []
+        try:
+            for open_item, observation in mapped:
+                lifecycle = open_item.lifecycle
+                fill = lifecycle.fill
+                if fill is None or observation.observed_at <= fill.fill_at:
+                    raise PaperProtectiveExitAuthorizationError(
+                        "protective-stop observation must strictly follow entry fill"
+                    )
+                existing = pending_by_identity.get(lifecycle.identity)
+                if existing is not None:
+                    evaluations.append(
+                        _protective_evaluation(
+                            open_item,
+                            observation,
+                            PaperProtectiveStopStatus.ALREADY_PENDING,
+                            existing.intent,
+                        )
+                    )
+                    continue
+
+                authority = lifecycle.accepted_authorization
+                triggered = (
+                    authority.side is EntrySide.BUY
+                    and observation.reference_price <= authority.stop_basis
+                ) or (
+                    authority.side is EntrySide.SELL
+                    and observation.reference_price >= authority.stop_basis
+                )
+                if not triggered:
+                    evaluations.append(
+                        _protective_evaluation(
+                            open_item,
+                            observation,
+                            PaperProtectiveStopStatus.NOT_TRIGGERED,
+                            None,
+                        )
+                    )
+                    continue
+
+                intent = _authorize_protective_stop_full_close(
+                    originating_entry_intent_identity=lifecycle.identity.intent_identity,
+                    originating_decision_identity=(
+                        lifecycle.identity.intent_identity.decision_identity
+                    ),
+                    source_id=fill.source_id,
+                    symbol=fill.symbol,
+                    trigger_observed_at=observation.observed_at,
+                    side=ExitSide.SELL if authority.side is EntrySide.BUY else ExitSide.BUY,
+                    quantity=fill.quantity,
+                    stop_basis=authority.stop_basis,
+                    trigger_reference_price=observation.reference_price,
+                    risk_policy_version=authority.risk_policy_version,
+                    safety_policy_version=authority.safety_policy_version,
+                )
+                _require_exit_matches_open(intent, open_item, self._accounting)
+                owned = _copy_authoritative_exit_intent(intent)
+                pending = _PendingProtectiveExit(lifecycle.identity, owned)
+                staged.append(pending)
+                pending_by_identity[lifecycle.identity] = pending
+                newly_triggered.append(intent)
+                evaluations.append(
+                    _protective_evaluation(
+                        open_item,
+                        observation,
+                        PaperProtectiveStopStatus.TRIGGERED,
+                        intent,
+                    )
+                )
+
+            next_exits = _sort_pending_exits(tuple(staged))
+            _validate_staged_state(
+                self._active,
+                self._open_positions,
+                next_exits,
+                self._accounting,
+                self._costs,
+            )
+        except Exception as error:
+            if isinstance(error, PaperProtectiveExitAuthorizationError):
+                raise
+            raise PaperProtectiveExitAuthorizationError(
+                "protective exit batch failed before atomic commit"
+            ) from error
+
+        locked_risk, locked_gross = _locked_totals(self._open_positions)
+        result = PaperProtectiveExitBatchResult(
+            observed_at,
+            tuple(sorted(evaluations, key=lambda item: (str(item.symbol), item.source_id.value))),
+            tuple(
+                _copy_authoritative_exit_intent(item)
+                for item in sorted(newly_triggered, key=_exit_order_key)
+            ),
+            tuple(_copy_authoritative_exit_intent(item.intent) for item in next_exits),
+            tuple(_open_snapshot(item) for item in self._open_positions),
+            self._accounting.positions(),
+            locked_risk,
+            locked_gross,
+        )
+        self._active_exit_intents = next_exits
+        self._last_observed_at = observed_at
+        return result
+
     def snapshot(self) -> PaperPortfolioCoordinatorSnapshot:
         """Return detached state that cannot mutate coordinator-owned authority."""
 
@@ -388,6 +582,9 @@ class PaperPortfolioCoordinator:
             self._accounting.positions(),
             locked_risk,
             locked_gross,
+            tuple(
+                _copy_authoritative_exit_intent(item.intent) for item in self._active_exit_intents
+            ),
         )
 
     def _validate_submission[ReasonT, AuditT](
@@ -484,11 +681,53 @@ class PaperPortfolioCoordinator:
         except AttributeError as error:
             raise PaperPortfolioStartError("candidate open-capacity audit is malformed") from error
 
+    def _validate_protective_observations(
+        self,
+        observations: tuple[PaperExecutionObservation, ...],
+    ) -> tuple[datetime, tuple[PaperExecutionObservation, ...]]:
+        if not isinstance(observations, tuple):
+            raise TypeError("observations must be an immutable tuple")
+        if not observations:
+            raise PaperPortfolioBatchError("protective-stop observation batch must be non-empty")
+        if not all(isinstance(item, PaperExecutionObservation) for item in observations):
+            raise TypeError("observations must contain PaperExecutionObservation values")
+        try:
+            for item in observations:
+                item.validate()
+            times = tuple(
+                require_utc(item.observed_at, field="protective-stop observed_at")
+                for item in observations
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise PaperPortfolioBatchError(
+                "protective-stop observation batch is malformed"
+            ) from error
+        observed_at = times[0]
+        if any(value != observed_at for value in times[1:]):
+            raise PaperPortfolioBatchError("every observation must share one observed_at")
+        symbols = tuple(item.symbol for item in observations)
+        if len(set(symbols)) != len(symbols):
+            raise PaperPortfolioBatchError("at most one observation per symbol is allowed")
+        latest = _latest_time(self._last_finalized_at, self._last_observed_at)
+        if latest is not None and observed_at <= latest:
+            raise PaperPortfolioBatchError(
+                "protective-stop observed_at must strictly advance Paper chronology"
+            )
+        return observed_at, tuple(
+            sorted(observations, key=lambda item: (str(item.symbol), item.source_id.value))
+        )
+
     def _pending_snapshot(self, observed_at: datetime) -> PendingReservationSnapshot:
         return _pending_snapshot_for(self._active, observed_at)
 
     def _validate_internal_state(self) -> None:
-        _validate_staged_state(self._active, self._open_positions, self._accounting, self._costs)
+        _validate_staged_state(
+            self._active,
+            self._open_positions,
+            self._active_exit_intents,
+            self._accounting,
+            self._costs,
+        )
 
     def _validate_new_permits[ReasonT, AuditT](
         self,
@@ -550,6 +789,16 @@ def _sort_open(open_positions: tuple[_OpenPaperPosition, ...]) -> tuple[_OpenPap
             ),
         )
     )
+
+
+def _exit_order_key(intent: ExitOrderIntent) -> tuple[str, tuple[object, ...]]:
+    return str(intent.symbol), intent.originating_decision_identity.sort_key
+
+
+def _sort_pending_exits(
+    exits: tuple[_PendingProtectiveExit, ...],
+) -> tuple[_PendingProtectiveExit, ...]:
+    return tuple(sorted(exits, key=lambda item: _exit_order_key(item.intent)))
 
 
 def _copy_costs(costs: SimulatedExecutionCostConfiguration) -> SimulatedExecutionCostConfiguration:
@@ -693,6 +942,72 @@ def _open_snapshot(item: _OpenPaperPosition) -> PaperOpenPositionSnapshot:
         fill.safety_policy_version,
         item.accounting_fill.fill_id,
     )
+
+
+def _protective_evaluation(
+    item: _OpenPaperPosition,
+    observation: PaperExecutionObservation,
+    status: PaperProtectiveStopStatus,
+    intent: ExitOrderIntent | None,
+) -> PaperProtectiveStopEvaluation:
+    lifecycle = item.lifecycle
+    authority = lifecycle.accepted_authorization
+    identity = _copy_intent_identity(lifecycle.identity.intent_identity)
+    decision = identity.decision_identity
+    return PaperProtectiveStopEvaluation(
+        PaperOrderIdentity(identity),
+        identity,
+        decision,
+        deepcopy(decision.source_id),
+        TradingSymbol(decision.symbol.base, decision.symbol.quote),
+        observation.observed_at,
+        observation.reference_price,
+        authority.stop_basis,
+        status,
+        None if intent is None else _copy_authoritative_exit_intent(intent),
+    )
+
+
+def _require_exit_matches_open(
+    intent: ExitOrderIntent,
+    item: _OpenPaperPosition,
+    accounting: PositionAccountingCore,
+) -> None:
+    lifecycle = item.lifecycle
+    authority = lifecycle.accepted_authorization
+    fill = lifecycle.fill
+    if fill is None:
+        raise PaperProtectiveExitAuthorizationError("exit authority requires an open fill")
+    state = accounting.position(fill.symbol)
+    with localcontext(_DECIMAL_CONTEXT):
+        expected_quantity = fill.quantity if fill.side is EntrySide.BUY else -fill.quantity
+    expected_side = ExitSide.SELL if fill.side is EntrySide.BUY else ExitSide.BUY
+    triggered = (
+        fill.side is EntrySide.BUY and intent.trigger_reference_price <= authority.stop_basis
+    ) or (fill.side is EntrySide.SELL and intent.trigger_reference_price >= authority.stop_basis)
+    if (
+        not exit_order_intent_is_authoritative(intent)
+        or lifecycle.status is not PaperOrderStatus.FILLED
+        or intent.identity.originating_entry_intent_identity != lifecycle.identity.intent_identity
+        or intent.originating_entry_intent_identity != lifecycle.identity.intent_identity
+        or intent.originating_decision_identity
+        != lifecycle.identity.intent_identity.decision_identity
+        or intent.source_id != fill.source_id
+        or intent.symbol != fill.symbol
+        or intent.trigger_observed_at <= fill.fill_at
+        or intent.authorized_at != intent.trigger_observed_at
+        or intent.side is not expected_side
+        or intent.quantity != fill.quantity
+        or intent.stop_basis != authority.stop_basis
+        or intent.risk_policy_version != authority.risk_policy_version
+        or intent.safety_policy_version != authority.safety_policy_version
+        or state.quantity != expected_quantity
+        or state.average_entry_price != fill.fill_price
+        or not triggered
+    ):
+        raise PaperProtectiveExitAuthorizationError(
+            "protective exit diverged from coordinator-owned open authority"
+        )
 
 
 def _require_staged_authority(
@@ -891,6 +1206,7 @@ def _locked_totals(open_positions: tuple[_OpenPaperPosition, ...]) -> tuple[Deci
 def _validate_staged_state(
     active: tuple[_ActivePaperIntent, ...],
     open_positions: tuple[_OpenPaperPosition, ...],
+    active_exit_intents: tuple[_PendingProtectiveExit, ...],
     accounting: PositionAccountingCore,
     costs: SimulatedExecutionCostConfiguration,
 ) -> None:
@@ -948,6 +1264,24 @@ def _validate_staged_state(
         item.lifecycle.accepted_authorization.symbol for item in open_positions
     }:
         raise PaperPortfolioCoordinatorError("accounting contains unowned Paper symbols")
+
+    open_by_identity = {item.lifecycle.identity: item for item in open_positions}
+    seen_exit_identities: set[PaperOrderIdentity] = set()
+    for pending_exit in active_exit_intents:
+        pending_open = open_by_identity.get(pending_exit.open_identity)
+        if (
+            pending_open is None
+            or pending_exit.open_identity in seen_exit_identities
+            or not exit_order_intent_is_authoritative(pending_exit.intent)
+        ):
+            raise PaperPortfolioCoordinatorError("active protective exit state is inconsistent")
+        try:
+            _require_exit_matches_open(pending_exit.intent, pending_open, accounting)
+        except PaperProtectiveExitAuthorizationError as error:
+            raise PaperPortfolioCoordinatorError(
+                "active protective exit diverged from open authority"
+            ) from error
+        seen_exit_identities.add(pending_exit.open_identity)
 
 
 def _lifecycle_matches_reservation(
