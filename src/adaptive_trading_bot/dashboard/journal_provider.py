@@ -66,7 +66,7 @@ class SnapshotDashboardJournalProvider:
             raise TypeError("query must be a DashboardDecisionTradeQuery")
         query.validate()
         decisions = self._validated_decisions()
-        outcomes = self._validated_outcomes()
+        outcomes = self._validated_outcomes(decisions)
         matched = tuple(entry for entry in decisions if _decision_matches(query, entry))
         projected = tuple(
             _project_decision(entry, outcomes.get(entry.identity))
@@ -88,8 +88,11 @@ class SnapshotDashboardJournalProvider:
         if not isinstance(query, DashboardDecisionTradeQuery):
             raise TypeError("query must be a DashboardDecisionTradeQuery")
         query.validate()
+        decisions = self._validated_decisions()
         outcomes = tuple(
-            entry for entry in self._validated_completed_entries() if _trade_matches(query, entry)
+            entry
+            for entry in self._validated_completed_entries(decisions)
+            if _trade_matches(query, entry)
         )
         projected = tuple(_project_trade(entry) for entry in outcomes[: query.limit])
         page = DashboardTradePage(
@@ -123,12 +126,16 @@ class SnapshotDashboardJournalProvider:
             raise DashboardJournalProviderError("decision journal chronology is inconsistent")
         return tuple(sorted(snapshot.entries, key=lambda item: item.identity.sort_key))
 
-    def _validated_completed_entries(self) -> tuple[CompletedTradeJournalEntry, ...]:
+    def _validated_completed_entries(
+        self,
+        decisions: tuple[DecisionJournalEntry[object, object], ...],
+    ) -> tuple[CompletedTradeJournalEntry, ...]:
         snapshot = self._completed
         if snapshot.journal_schema_version != "1.0.0" or not isinstance(snapshot.entries, tuple):
             raise DashboardJournalProviderError("completed journal snapshot is inconsistent")
         identities: set[object] = set()
         origins: set[DecisionIdentity] = set()
+        authoritative_decisions = {entry.identity: entry for entry in decisions}
         for entry in snapshot.entries:
             if not isinstance(entry, CompletedTradeJournalEntry):
                 raise DashboardJournalProviderError("completed journal contains an invalid entry")
@@ -140,6 +147,13 @@ class SnapshotDashboardJournalProvider:
             if entry.identity.originating_decision_identity in origins:
                 raise DashboardJournalProviderError(
                     "completed journal has multiple outcomes for one decision"
+                )
+            authoritative = authoritative_decisions.get(
+                entry.identity.originating_decision_identity
+            )
+            if authoritative is not None and entry.pre_trade_decision != authoritative:
+                raise DashboardJournalProviderError(
+                    "completed trade contradicts the authoritative pre-trade decision"
                 )
             identities.add(entry.identity)
             origins.add(entry.identity.originating_decision_identity)
@@ -153,10 +167,13 @@ class SnapshotDashboardJournalProvider:
             )
         )
 
-    def _validated_outcomes(self) -> dict[DecisionIdentity, CompletedTradeJournalEntry]:
+    def _validated_outcomes(
+        self,
+        decisions: tuple[DecisionJournalEntry[object, object], ...],
+    ) -> dict[DecisionIdentity, CompletedTradeJournalEntry]:
         return {
             item.identity.originating_decision_identity: item
-            for item in self._validated_completed_entries()
+            for item in self._validated_completed_entries(decisions)
         }
 
 

@@ -17,6 +17,7 @@ from adaptive_trading_bot.dashboard import (
     DashboardAvailability,
     DashboardDecisionTradeQuery,
     DashboardJournalProviderError,
+    DashboardValue,
     SnapshotDashboardJournalProvider,
 )
 from adaptive_trading_bot.journal import (
@@ -24,7 +25,7 @@ from adaptive_trading_bot.journal import (
     DecisionJournalSnapshot,
 )
 from adaptive_trading_bot.paper import PaperPortfolioCoordinator
-from adaptive_trading_bot.risk import RiskDecisionStatus
+from adaptive_trading_bot.risk import RiskDecisionStatus, RiskPortfolioSnapshot
 from adaptive_trading_bot.strategies import CandidateAction
 
 _HELPERS = runpy.run_path(str(Path(__file__).parents[1] / "paper" / "protective_exit_helpers.py"))
@@ -130,6 +131,31 @@ def test_duplicate_completed_outcome_for_one_identity_fails_closed() -> None:
         provider.decisions(_query())
 
 
+def test_matching_identity_with_conflicting_authoritative_pretrade_fails_closed() -> None:
+    _, trades = _snapshots()
+    conflicting = cast(
+        PortfolioAdmissionCandidate[object, object],
+        candidate(
+            portfolio=RiskPortfolioSnapshot(
+                NOW,
+                "USDT",
+                Decimal(12000),
+                Decimal(12000),
+                Decimal(12000),
+            )
+        ),
+    )
+    decisions = DecisionJournalSnapshot((conflicting.journal_entry,), NOW)
+    assert decisions.entries[0].identity == trades.entries[0].identity.originating_decision_identity
+    assert decisions.entries[0] != trades.entries[0].pre_trade_decision
+    provider = SnapshotDashboardJournalProvider(decisions, trades)
+
+    with pytest.raises(DashboardJournalProviderError, match="contradicts"):
+        provider.decisions(_query())
+    with pytest.raises(DashboardJournalProviderError, match="contradicts"):
+        provider.trades(_query())
+
+
 def test_filters_half_open_range_order_limit_and_no_silent_truncation() -> None:
     first, _ = _snapshots()
     second, _ = _snapshots(observed_at=NOW + timedelta(minutes=15))
@@ -153,6 +179,47 @@ def test_filters_half_open_range_order_limit_and_no_silent_truncation() -> None:
     assert page.truncated is True
     assert page.records[0].identity.observed_at == NOW
     assert provider.decisions(_query(start=NOW + timedelta(microseconds=1))).records == ()
+
+
+def test_read_models_reject_completed_trade_identity_and_fact_contradictions() -> None:
+    decisions, trades = _snapshots()
+    record = SnapshotDashboardJournalProvider(decisions, trades).trades(_query()).records[0]
+    different_decision = replace(
+        record.originating_decision_identity,
+        strategy_version="contradictory-version",
+    )
+
+    with pytest.raises(ValueError, match="identity chain"):
+        replace(
+            record,
+            paper_order_identity=replace(
+                record.paper_order_identity,
+                intent_identity=replace(
+                    record.paper_order_identity.intent_identity,
+                    decision_identity=different_decision,
+                ),
+            ),
+        ).validate()
+    with pytest.raises(ValueError, match="originating decision"):
+        replace(record, source_id="contradictory-source").validate()
+
+
+def test_read_model_pages_reject_out_of_range_and_noncanonical_records() -> None:
+    first, _ = _snapshots()
+    second, _ = _snapshots(observed_at=NOW + timedelta(minutes=15))
+    provider = SnapshotDashboardJournalProvider(
+        DecisionJournalSnapshot(
+            (first.entries[0], second.entries[0]),
+            second.last_observed_at,
+        ),
+        CompletedTradeJournalSnapshot((), None),
+    )
+    page = provider.decisions(_query(end=NOW + timedelta(minutes=20)))
+
+    with pytest.raises(ValueError, match="outside the requested range"):
+        replace(page, start=NOW + timedelta(microseconds=1)).validate()
+    with pytest.raises(ValueError, match="canonical unique order"):
+        replace(page, records=tuple(reversed(page.records))).validate()
 
 
 def test_projection_is_detached_and_queries_do_not_mutate_snapshots() -> None:
@@ -269,6 +336,51 @@ async def test_api_fails_closed_on_non_finite_projected_fact() -> None:
 
     assert response.status_code == 503
     assert response.json()["code"] == "DASHBOARD_DECISION_PROVIDER_FAILURE"
+
+
+async def test_api_fails_closed_on_mismatched_linked_outcome_graph() -> None:
+    decisions, trades = _snapshots()
+    real = SnapshotDashboardJournalProvider(decisions, trades)
+    page = real.decisions(_query())
+    other_decisions, other_trades = _snapshots(observed_at=NOW + timedelta(minutes=15))
+    other = (
+        SnapshotDashboardJournalProvider(other_decisions, other_trades)
+        .trades(_query(end=NOW + timedelta(minutes=20)))
+        .records[0]
+    )
+    malformed = replace(
+        page,
+        records=(
+            replace(
+                page.records[0],
+                completed_trade=DashboardValue.available(other),
+            ),
+        ),
+    )
+
+    class MalformedLinkProvider:
+        def decisions(self, query: DashboardDecisionTradeQuery) -> object:
+            return malformed
+
+        def trades(self, query: DashboardDecisionTradeQuery) -> object:
+            return real.trades(query)
+
+    app = create_app(
+        Settings(_env_file=None),  # type: ignore[call-arg]
+        None,
+        None,
+        MalformedLinkProvider(),  # type: ignore[arg-type]
+    )
+    params = {"start": NOW.isoformat(), "end": (NOW + timedelta(minutes=5)).isoformat()}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/dashboard/decisions", params=params)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "code": "DASHBOARD_DECISION_PROVIDER_FAILURE",
+        "message": "dashboard decisions are temporarily unavailable",
+    }
 
 
 def test_provider_has_no_mutating_or_evaluation_surface() -> None:

@@ -77,6 +77,16 @@ class DashboardDecisionIdentity:
     def validate(self) -> None:
         require_utc(self.observed_at, field="dashboard decision identity observed_at")
 
+    @property
+    def sort_key(self) -> tuple[datetime, str, str, str, str]:
+        return (
+            self.observed_at,
+            self.source_id,
+            self.symbol,
+            self.strategy_id,
+            self.strategy_version,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DashboardStrategyDecision:
@@ -234,11 +244,17 @@ class DashboardEntryIntentIdentity:
     purpose: str
     schema_version: str
 
+    def validate(self) -> None:
+        self.decision_identity.validate()
+
 
 @dataclass(frozen=True, slots=True)
 class DashboardPaperOrderIdentity:
     intent_identity: DashboardEntryIntentIdentity
     simulation_schema_version: str
+
+    def validate(self) -> None:
+        self.intent_identity.validate()
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +265,7 @@ class DashboardExitIntentIdentity:
     schema_version: str
 
     def validate(self) -> None:
+        self.originating_entry_intent_identity.validate()
         require_utc(self.trigger_observed_at, field="dashboard exit intent trigger_observed_at")
 
 
@@ -304,7 +321,32 @@ class DashboardCompletedTradeRecord:
 
     def validate(self) -> None:
         self.originating_decision_identity.validate()
+        self.entry_intent_identity.validate()
+        self.paper_order_identity.validate()
         self.exit_intent_identity.validate()
+        if (
+            self.entry_intent_identity.decision_identity != self.originating_decision_identity
+            or self.paper_order_identity.intent_identity != self.entry_intent_identity
+            or self.exit_intent_identity.originating_entry_intent_identity
+            != self.entry_intent_identity
+        ):
+            raise DashboardJournalValidationError(
+                "completed trade authorization identity chain is inconsistent"
+            )
+        origin = self.originating_decision_identity
+        if (
+            self.source_id != origin.source_id
+            or self.symbol != origin.symbol
+            or self.strategy_id != origin.strategy_id
+            or self.strategy_version != origin.strategy_version
+        ):
+            raise DashboardJournalValidationError(
+                "completed trade facts do not match the originating decision"
+            )
+        if self.exit_intent_identity.trigger_observed_at != self.trigger_observed_at:
+            raise DashboardJournalValidationError(
+                "completed trade trigger does not match its exit intent identity"
+            )
         for time_field, time_value in (
             ("entry_authorized_at", self.entry_authorized_at),
             ("entry_fill_at", self.entry_fill_at),
@@ -363,6 +405,17 @@ class DashboardDecisionRecord:
         self.completed_trade.validate()
         if self.completed_trade.value is not None:
             self.completed_trade.value.validate()
+            if self.completed_trade.value.originating_decision_identity != self.identity:
+                raise DashboardJournalValidationError(
+                    "completed trade does not match its decision record identity"
+                )
+        if (
+            self.risk.risk_snapshot_observed_at != self.identity.observed_at
+            or self.safety.observed_at != self.identity.observed_at
+        ):
+            raise DashboardJournalValidationError(
+                "decision layers do not match the decision identity time"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +431,8 @@ class DashboardDecisionPage:
     def validate(self) -> None:
         require_utc(self.start, field="dashboard decision page start")
         require_utc(self.end, field="dashboard decision page end")
+        if not isinstance(self.records, tuple):
+            raise TypeError("decision page records must be an immutable tuple")
         if self.start >= self.end or not 1 <= self.limit <= MAX_DASHBOARD_JOURNAL_RECORDS:
             raise DashboardJournalValidationError("decision page range or limit is invalid")
         if self.total_matched < 0 or self.returned_count < 0:
@@ -388,6 +443,15 @@ class DashboardDecisionPage:
             raise DashboardJournalValidationError("decision page truncation is inconsistent")
         for record in self.records:
             record.validate()
+            if not self.start <= record.identity.observed_at < self.end:
+                raise DashboardJournalValidationError(
+                    "decision record is outside the requested range"
+                )
+        keys = tuple(record.identity.sort_key for record in self.records)
+        if keys != tuple(sorted(keys)) or len(set(keys)) != len(keys):
+            raise DashboardJournalValidationError(
+                "decision page records are not in canonical unique order"
+            )
 
 
 def _require_finite(value: Decimal | None, *, field: str) -> None:
@@ -408,6 +472,8 @@ class DashboardTradePage:
     def validate(self) -> None:
         require_utc(self.start, field="dashboard trade page start")
         require_utc(self.end, field="dashboard trade page end")
+        if not isinstance(self.records, tuple):
+            raise TypeError("trade page records must be an immutable tuple")
         if self.start >= self.end or not 1 <= self.limit <= MAX_DASHBOARD_JOURNAL_RECORDS:
             raise DashboardJournalValidationError("trade page range or limit is invalid")
         if self.total_matched < 0 or self.returned_count < 0:
@@ -418,3 +484,15 @@ class DashboardTradePage:
             raise DashboardJournalValidationError("trade page truncation is inconsistent")
         for record in self.records:
             record.validate()
+            if not self.start <= record.exit_fill_at < self.end:
+                raise DashboardJournalValidationError(
+                    "completed trade is outside the requested range"
+                )
+        keys = tuple(
+            (record.exit_fill_at, *record.originating_decision_identity.sort_key)
+            for record in self.records
+        )
+        if keys != tuple(sorted(keys)) or len(set(keys)) != len(keys):
+            raise DashboardJournalValidationError(
+                "trade page records are not in canonical unique order"
+            )
