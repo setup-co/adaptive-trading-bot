@@ -1,5 +1,10 @@
 """Deterministic Paper execution and process-local coordination."""
 
+from adaptive_trading_bot.paper.account import (
+    PaperAccountConfiguration,
+    PaperAccountError,
+    PaperAccountSnapshot,
+)
 from adaptive_trading_bot.paper.accounting import (
     PaperFillAccountingAdapterError,
     paper_fill_to_position_accounting_fill,
@@ -52,6 +57,9 @@ from adaptive_trading_bot.paper.exit_execution import (
 )
 
 __all__ = [
+    "PaperAccountConfiguration",
+    "PaperAccountError",
+    "PaperAccountSnapshot",
     "PaperAuthorizationError",
     "PaperAuthorizationSnapshot",
     "PaperClosedTradeSnapshot",

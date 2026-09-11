@@ -65,6 +65,7 @@ def candidate(
     action: CandidateAction = CandidateAction.LONG_CANDIDATE,
     positions: tuple[RiskPositionExposure, ...] = (),
     configuration: RiskManagerConfiguration | None = None,
+    portfolio: RiskPortfolioSnapshot | None = None,
 ) -> PortfolioAdmissionCandidate[object, object]:
     context = _context(source_id=source_id, symbol=symbol, observed_at=observed_at)
     evaluation = _manual_evaluation(
@@ -75,7 +76,8 @@ def candidate(
     )
     risk = RiskManager(configuration or RiskManagerConfiguration()).evaluate(
         evaluation,
-        RiskPortfolioSnapshot(
+        portfolio
+        or RiskPortfolioSnapshot(
             observed_at,
             "USDT",
             Decimal(10000),
@@ -519,14 +521,25 @@ def test_correct_open_baseline_allows_unrelated_symbol_and_caps_include_open() -
             candidate(
                 observed_at=NOW + timedelta(minutes=15),
                 symbol=ETH,
-                positions=baseline,
+                portfolio=RiskPortfolioSnapshot(
+                    NOW + timedelta(minutes=15),
+                    "USDT",
+                    paper.account_snapshot(NOW + timedelta(minutes=15)).account_equity_quote,
+                    paper.account_snapshot(NOW + timedelta(minutes=15)).day_start_equity_quote,
+                    paper.account_snapshot(NOW + timedelta(minutes=15)).peak_equity_quote,
+                    baseline,
+                ),
             ),
         )
     )
 
     assert result.status is PaperPortfolioStartBatchStatus.STARTED
     with localcontext(_DECIMAL_CONTEXT):
-        expected_remaining_risk = Decimal(50) - opened.locked_open_risk_quote
+        expected_remaining_risk = (
+            paper.account_snapshot(NOW + timedelta(minutes=15)).account_equity_quote
+            * Decimal("0.0050")
+            - opened.locked_open_risk_quote
+        )
     assert result.active_reservations.reserved_risk_quote == expected_remaining_risk
 
 
