@@ -129,9 +129,11 @@ def test_authoritative_technical_validator_rederives_all_classification_facts() 
         volume_zscore_20=Decimal(1),
     )
     structure = structure_snapshot(feature)
-    snapshot = TechnicalRegimeEngine(
-        TechnicalRegimeConfiguration(minimum_volatility_samples=1)
-    ).process(*batches((feature,), (structure,))).snapshots[0]
+    snapshot = (
+        TechnicalRegimeEngine(TechnicalRegimeConfiguration(minimum_volatility_samples=1))
+        .process(*batches((feature,), (structure,)))
+        .snapshots[0]
+    )
 
     validate_technical_regime_snapshot(snapshot, feature, structure)
 

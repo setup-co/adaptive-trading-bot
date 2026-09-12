@@ -68,25 +68,27 @@ def _authoritative_context(context: StrategyEvaluationContext) -> StrategyEvalua
     anchor = replace(
         context.multi_timeframe_regime.regime_15m,
         direction_evidence=(
-            DirectionEvidence(
-                DirectionComponent.EMA_ALIGNMENT, 20, "ema_20 above ema_50"
-            ),
+            DirectionEvidence(DirectionComponent.EMA_ALIGNMENT, 20, "ema_20 above ema_50"),
             DirectionEvidence(DirectionComponent.MOMENTUM_16, 20, "positive"),
             DirectionEvidence(DirectionComponent.MOMENTUM_4, 0, "zero"),
             DirectionEvidence(DirectionComponent.CONFIRMED_HIGH, 0, "unavailable"),
             DirectionEvidence(DirectionComponent.CONFIRMED_LOW, 0, "unavailable"),
         ),
     )
-    multi = MultiTimeframeRegimeComposer().process(
-        TechnicalRegimeBatch(
-            context.observed_at,
-            (
-                anchor,
-                context.multi_timeframe_regime.regime_1h,
-                context.multi_timeframe_regime.regime_4h,
-            ),
+    multi = (
+        MultiTimeframeRegimeComposer()
+        .process(
+            TechnicalRegimeBatch(
+                context.observed_at,
+                (
+                    anchor,
+                    context.multi_timeframe_regime.regime_1h,
+                    context.multi_timeframe_regime.regime_4h,
+                ),
+            )
         )
-    ).snapshots[0]
+        .snapshots[0]
+    )
     return replace(context, features_15m=feature, multi_timeframe_regime=multi)
 
 
@@ -249,12 +251,16 @@ def _with_regime(
         )
     assert multi.regime_1h is not None
     assert regime_4h is not None
-    rebuilt = MultiTimeframeRegimeComposer().process(
-        TechnicalRegimeBatch(
-            context.observed_at,
-            (anchor, multi.regime_1h, regime_4h),
+    rebuilt = (
+        MultiTimeframeRegimeComposer()
+        .process(
+            TechnicalRegimeBatch(
+                context.observed_at,
+                (anchor, multi.regime_1h, regime_4h),
+            )
         )
-    ).snapshots[0]
+        .snapshots[0]
+    )
     assert higher_timeframe_bias is None or rebuilt.higher_timeframe_bias is higher_timeframe_bias
     assert alignment is None or rebuilt.alignment is alignment
     return replace(
