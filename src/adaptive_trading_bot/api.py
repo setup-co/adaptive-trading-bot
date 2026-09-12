@@ -27,7 +27,6 @@ from adaptive_trading_bot.dashboard import (
     DashboardExperienceEstimateQuery,
     DashboardExperienceEstimateResponse,
     DashboardExperienceInvalidQueryResponse,
-    DashboardExperienceProvider,
     DashboardJournalInvalidQueryResponse,
     DashboardJournalProvider,
     DashboardSnapshot,
@@ -36,6 +35,8 @@ from adaptive_trading_bot.dashboard import (
     DashboardTradePage,
     DashboardTradePageResponse,
     DashboardUnavailableResponse,
+    ExperienceTradeSampleSnapshotSource,
+    SnapshotDashboardExperienceProvider,
     chart_response,
     dashboard_response,
     decision_page_response,
@@ -44,7 +45,11 @@ from adaptive_trading_bot.dashboard import (
     trade_page_response,
 )
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
-from adaptive_trading_bot.experience import ExperienceContextFingerprint, TrendStrengthBucket
+from adaptive_trading_bot.experience import (
+    ExperienceContextFingerprint,
+    ExperienceEstimationConfiguration,
+    TrendStrengthBucket,
+)
 from adaptive_trading_bot.journal import TradeOutcomeClassification
 from adaptive_trading_bot.logging import configure_logging
 from adaptive_trading_bot.regime import (
@@ -72,13 +77,22 @@ def create_app(
     dashboard_provider: DashboardSnapshotProvider | None = None,
     chart_provider: DashboardChartProvider | None = None,
     journal_provider: DashboardJournalProvider | None = None,
-    experience_provider: DashboardExperienceProvider | None = None,
+    experience_snapshot_source: ExperienceTradeSampleSnapshotSource | None = None,
+    experience_configuration: ExperienceEstimationConfiguration | None = None,
 ) -> FastAPI:
     """Build the API application without connecting to external services."""
 
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
     application = FastAPI(title=resolved_settings.app_name)
+    experience_provider = (
+        SnapshotDashboardExperienceProvider(
+            experience_snapshot_source,
+            experience_configuration,
+        )
+        if experience_snapshot_source is not None
+        else None
+    )
 
     @application.get("/health", response_model=HealthResponse, tags=["system"])
     async def health() -> HealthResponse:

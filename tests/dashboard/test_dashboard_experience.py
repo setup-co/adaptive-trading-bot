@@ -2,6 +2,7 @@ import ast
 import inspect
 import runpy
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -15,9 +16,7 @@ import adaptive_trading_bot.dashboard.experience_provider as provider_module
 from adaptive_trading_bot.api import create_app
 from adaptive_trading_bot.config import Settings
 from adaptive_trading_bot.dashboard import (
-    DashboardExperienceContextPage,
     DashboardExperienceContextQuery,
-    DashboardExperienceEstimate,
     DashboardExperienceEstimateQuery,
     DashboardExperienceProviderError,
     SnapshotDashboardExperienceProvider,
@@ -189,9 +188,13 @@ def test_provider_reads_current_snapshot_and_invokes_concrete_estimator(
 
 def test_provider_constructor_cannot_accept_prebuilt_estimate_authority() -> None:
     parameters = inspect.signature(SnapshotDashboardExperienceProvider).parameters
+    app_parameters = inspect.signature(create_app).parameters
 
     assert tuple(parameters) == ("snapshot_source", "configuration")
     assert "estimate" not in parameters
+    assert "experience_provider" not in app_parameters
+    assert "experience_snapshot_source" in app_parameters
+    assert "experience_configuration" in app_parameters
 
 
 def test_no_history_and_insufficient_states_preserve_exact_unavailability() -> None:
@@ -210,9 +213,9 @@ def test_no_history_and_insufficient_states_preserve_exact_unavailability() -> N
     assert insufficient.posterior_mean_win_probability is not None
 
 
-async def test_api_constructs_exact_target_ignores_injected_derived_fields_and_is_lossless() -> (
-    None
-):
+async def test_api_constructs_exact_target_ignores_injected_derived_fields_and_is_lossless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     base = _base()
     precise = _sample(
         base,
@@ -220,24 +223,23 @@ async def test_api_constructs_exact_target_ignores_injected_derived_fields_and_i
         net=Decimal("12345678901234567890.1234567890123"),
         realized_r=Decimal("1.23456789012345678901234567890123"),
     )
-    real = SnapshotDashboardExperienceProvider(
-        _SnapshotSource(_snapshot(precise)), _configuration()
-    )
     captured: list[DashboardExperienceEstimateQuery] = []
 
-    class RecordingProvider:
-        def contexts(
-            self, query: DashboardExperienceContextQuery
-        ) -> DashboardExperienceContextPage:
-            return real.contexts(query)
+    class RecordingEstimator(ExperienceEstimator):
+        def estimate(
+            self,
+            target: ExperienceContextFingerprint,
+            snapshot: ExperienceTradeSampleSnapshot,
+            as_of: datetime,
+        ) -> ExperienceEstimate:
+            captured.append(DashboardExperienceEstimateQuery(target, as_of))
+            return super().estimate(target, snapshot, as_of)
 
-        def estimate(self, query: DashboardExperienceEstimateQuery) -> DashboardExperienceEstimate:
-            captured.append(query)
-            return real.estimate(query)
-
+    monkeypatch.setattr(provider_module, "ExperienceEstimator", RecordingEstimator)
     app = create_app(
         Settings(_env_file=None),  # type: ignore[call-arg]
-        experience_provider=RecordingProvider(),
+        experience_snapshot_source=_SnapshotSource(_snapshot(precise)),
+        experience_configuration=_configuration(),
     )
     params = _params(base.fingerprint) | {
         "confidence": "HIGH",
@@ -263,10 +265,9 @@ async def test_api_constructs_exact_target_ignores_injected_derived_fields_and_i
 async def test_context_and_no_history_api_transport_preserve_causality_and_none() -> None:
     base = _base()
     future = _sample(base, 1, exit_at=AS_OF + timedelta(seconds=1))
-    provider = SnapshotDashboardExperienceProvider(_SnapshotSource(_snapshot(future)))
     app = create_app(
         Settings(_env_file=None),  # type: ignore[call-arg]
-        experience_provider=provider,
+        experience_snapshot_source=_SnapshotSource(_snapshot(future)),
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -289,7 +290,7 @@ async def test_context_and_no_history_api_transport_preserve_causality_and_none(
     assert body["recency_weighted_win_rate"] is None
 
 
-async def test_invalid_and_missing_experience_provider_are_structured() -> None:
+async def test_invalid_and_missing_experience_snapshot_source_are_structured() -> None:
     base = _base()
     app = create_app(Settings(_env_file=None))  # type: ignore[call-arg]
 
@@ -317,36 +318,74 @@ async def test_invalid_and_missing_experience_provider_are_structured() -> None:
     assert missing.json()["code"] == "DASHBOARD_EXPERIENCE_UNAVAILABLE"
 
 
-async def test_provider_failure_is_sanitized_and_malformed_read_model_returns_503() -> None:
+async def test_api_ignores_fabricated_estimate_method_on_snapshot_source() -> None:
+    base = _base()
+    snapshot = _snapshot(_sample(base, 1))
+    authoritative = SnapshotDashboardExperienceProvider(
+        _SnapshotSource(snapshot), _configuration()
+    ).estimate(_estimate_query(base.fingerprint))
+    fabricated = deepcopy(authoritative)
+    object.__setattr__(
+        fabricated,
+        "posterior_mean_win_probability",
+        Decimal("0.999999999999999999999999999999"),
+    )
+    fabricated.validate()
+
+    class FaultyEstimateProducingSource(_SnapshotSource):
+        def __init__(self) -> None:
+            super().__init__(snapshot)
+            self.estimate_calls = 0
+
+        def estimate(self, query: DashboardExperienceEstimateQuery) -> object:
+            self.estimate_calls += 1
+            return fabricated
+
+    source = FaultyEstimateProducingSource()
+    with pytest.raises(TypeError, match="experience_provider"):
+        create_app(
+            Settings(_env_file=None),  # type: ignore[call-arg]
+            experience_provider=source,
+        )
+    app = create_app(
+        Settings(_env_file=None),  # type: ignore[call-arg]
+        experience_snapshot_source=source,
+        experience_configuration=_configuration(),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/dashboard/experience/estimate",
+            params=_params(base.fingerprint),
+        )
+
+    assert response.status_code == 200
+    assert source.estimate_calls == 0
+    assert response.json()["posterior_mean_win_probability"] == str(
+        authoritative.posterior_mean_win_probability
+    )
+    assert response.json()["posterior_mean_win_probability"] != str(
+        fabricated.posterior_mean_win_probability
+    )
+
+
+async def test_snapshot_failure_is_sanitized_and_malformed_snapshot_returns_503() -> None:
     base = _base()
 
-    class FailingProvider:
-        def contexts(self, query: DashboardExperienceContextQuery) -> object:
+    class FailingSource:
+        def snapshot(self) -> ExperienceTradeSampleSnapshot:
             raise RuntimeError("secret-path-and-token")
 
-        def estimate(self, query: DashboardExperienceEstimateQuery) -> object:
-            raise RuntimeError("secret-path-and-token")
-
-    real = SnapshotDashboardExperienceProvider(
-        _SnapshotSource(_snapshot(_sample(base, 1))), _configuration()
-    )
-    malformed = real.estimate(_estimate_query(base.fingerprint))
-    object.__setattr__(malformed, "selected_level", "STRATEGY")
-
-    class MalformedProvider:
-        def contexts(self, query: DashboardExperienceContextQuery) -> object:
-            return real.contexts(query)
-
-        def estimate(self, query: DashboardExperienceEstimateQuery) -> object:
-            return malformed
+    class MalformedSource:
+        def snapshot(self) -> object:
+            return object()
 
     failing_app = create_app(
         Settings(_env_file=None),  # type: ignore[call-arg]
-        experience_provider=FailingProvider(),  # type: ignore[arg-type]
+        experience_snapshot_source=FailingSource(),
     )
     malformed_app = create_app(
         Settings(_env_file=None),  # type: ignore[call-arg]
-        experience_provider=MalformedProvider(),  # type: ignore[arg-type]
+        experience_snapshot_source=MalformedSource(),  # type: ignore[arg-type]
     )
     async with AsyncClient(
         transport=ASGITransport(app=failing_app), base_url="http://test"
@@ -380,7 +419,7 @@ def test_transport_and_routes_are_get_only_and_provider_has_no_mutating_surface(
     provider = SnapshotDashboardExperienceProvider(_SnapshotSource(_snapshot()))
     app = create_app(
         Settings(_env_file=None),  # type: ignore[call-arg]
-        experience_provider=provider,
+        experience_snapshot_source=_SnapshotSource(_snapshot()),
     )
     routes = {
         route.path: route.methods

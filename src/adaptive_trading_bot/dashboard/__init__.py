@@ -48,7 +48,6 @@ from adaptive_trading_bot.dashboard.experience_models import (
     DashboardExperienceValidationError,
 )
 from adaptive_trading_bot.dashboard.experience_provider import (
-    DashboardExperienceProvider,
     DashboardExperienceProviderError,
     ExperienceTradeSampleSnapshotSource,
     SnapshotDashboardExperienceProvider,
@@ -131,7 +130,6 @@ __all__ = [
     "DashboardExperienceFingerprint",
     "DashboardExperienceHierarchyEvidence",
     "DashboardExperienceInvalidQueryResponse",
-    "DashboardExperienceProvider",
     "DashboardExperienceProviderError",
     "DashboardExperienceValidationError",
     "DashboardJournalInvalidQueryResponse",

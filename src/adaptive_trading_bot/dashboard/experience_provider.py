@@ -35,16 +35,6 @@ class ExperienceTradeSampleSnapshotSource(Protocol):
     def snapshot(self) -> ExperienceTradeSampleSnapshot: ...
 
 
-class DashboardExperienceProvider(Protocol):
-    """Read-only Experience query boundary consumed by the API."""
-
-    def contexts(
-        self, query: DashboardExperienceContextQuery
-    ) -> DashboardExperienceContextPage: ...
-
-    def estimate(self, query: DashboardExperienceEstimateQuery) -> DashboardExperienceEstimate: ...
-
-
 class SnapshotDashboardExperienceProvider:
     """Project current sealed samples through the concrete project ExperienceEstimator."""
 
