@@ -135,6 +135,13 @@ separate layers and displays only exact completed-trade outcome facts returned b
 Decimal strings remain strings in frontend state; unavailable audit, Fundamental, Experience,
 MFE, MAE, and process-score facts remain explicitly unavailable rather than becoming zero.
 
+`GET /api/v1/dashboard/experience/contexts` and `GET /api/v1/dashboard/experience/estimate`
+provide process-local, strictly read-only Experience observations. The provider derives estimates
+internally from sealed trade-sample snapshots through the concrete Experience estimator; clients
+cannot supply estimates or trading authority. Contexts and estimates are causal as of the requested
+UTC timestamp, preserve exact hierarchy and prior/posterior provenance, and transport Decimal
+values as strings. No-history and insufficient-evidence states remain explicit.
+
 ## Market-data domain conventions
 
 Internal symbols use normalized exchange-neutral `BASE/QUOTE` notation. V1 candle timeframes are

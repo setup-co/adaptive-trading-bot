@@ -101,6 +101,10 @@ th, td { padding: .7rem; border-bottom: 1px solid #1b3045; white-space: nowrap; 
 .trade-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.2rem; margin-top: 1rem; }
 .outcome-column { border-left: 1px solid var(--line); padding-left: 1.2rem; }
 .audit-footer { display: flex; flex-wrap: wrap; gap: .8rem 1.5rem; margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--line); color: var(--muted); }
+.context-select { display: grid; gap: .35rem; margin-top: 1rem; color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+.context-select select { min-height: 2.6rem; border: 1px solid #29415c; border-radius: .45rem; padding: .45rem .6rem; color: #dbe6f5; background: #071321; }
+.evidence-note { margin: 1rem 0 0; padding: .7rem; border-left: 3px solid var(--accent); color: #b8c8d9; background: #102237; font-size: .8rem; }
+.selected-row { background: #13352f; box-shadow: inset 3px 0 var(--accent); }
 
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }

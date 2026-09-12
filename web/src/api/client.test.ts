@@ -7,6 +7,8 @@ import { dashboardApi, DashboardApiError } from "./client";
 import {
   chartFixture,
   decisionsPageFixture,
+  experienceContextsFixture,
+  experienceEstimateFixture,
   snapshotFixture,
   tradesPageFixture,
 } from "../test/fixtures";
@@ -47,12 +49,35 @@ describe("read-only API client", () => {
     ["chart", chartFixture],
     ["decisions", decisionsPageFixture],
     ["trades", tradesPageFixture],
+    ["experienceContexts", experienceContextsFixture],
+    ["experienceEstimate", experienceEstimateFixture],
   ] as const)("runtime-validates the %s transport", async (endpoint, fixture) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(fixture)));
 
     const result = await dashboardApi[endpoint]({});
 
     expect(result).toEqual(fixture);
+  });
+
+  it("preserves Experience Decimal strings and rejects numeric substitution", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(experienceEstimateFixture)));
+
+    const estimate = await dashboardApi.experienceEstimate({});
+    expect(estimate.posterior_mean_win_probability).toBe(
+      "0.6056338028169014084563380281690141",
+    );
+    expect(typeof estimate.posterior_mean_win_probability).toBe("string");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({ ...experienceEstimateFixture, posterior_mean_win_probability: 0.5 }),
+      ),
+    );
+    await expect(dashboardApi.experienceEstimate({})).rejects.toMatchObject({
+      kind: "malformed",
+      code: "MALFORMED_RESPONSE",
+    });
   });
 
   it.each([
@@ -83,6 +108,8 @@ describe("read-only API client", () => {
     expect(Object.keys(dashboardApi).sort()).toEqual([
       "chart",
       "decisions",
+      "experienceContexts",
+      "experienceEstimate",
       "health",
       "snapshot",
       "trades",
