@@ -20,9 +20,11 @@ from adaptive_trading_bot.regime.technical import (
     LiquidityState,
     RegimeLabel,
     TechnicalRegimeBatch,
+    TechnicalRegimeError,
     TechnicalRegimeSnapshot,
     VolatilityState,
     VolumeState,
+    validate_technical_regime_snapshot_shape,
 )
 from adaptive_trading_bot.storage import SourceId
 
@@ -96,6 +98,19 @@ class _SeriesKey:
     source_id: SourceId
     symbol: TradingSymbol
     timeframe: Timeframe
+
+
+@dataclass(frozen=True, slots=True)
+class _CompositionFacts:
+    age_1h: timedelta | None
+    age_4h: timedelta | None
+    is_1h_fresh: bool
+    is_4h_fresh: bool
+    is_fully_ready: bool
+    higher_timeframe_bias: HigherTimeframeBias
+    alignment: MultiTimeframeAlignment
+    extreme_volatility_timeframes: tuple[Timeframe, ...]
+    readiness_reasons: tuple[str, ...]
 
 
 def _key(snapshot: TechnicalRegimeSnapshot) -> _SeriesKey:
@@ -210,6 +225,122 @@ def _readiness_reasons(
     return tuple(reasons)
 
 
+def _composition_facts(
+    anchor: TechnicalRegimeSnapshot,
+    regime_1h: TechnicalRegimeSnapshot | None,
+    regime_4h: TechnicalRegimeSnapshot | None,
+) -> _CompositionFacts:
+    age_1h, is_1h_fresh = _age_and_freshness(anchor.observed_at, regime_1h, Timeframe.HOUR_1)
+    age_4h, is_4h_fresh = _age_and_freshness(anchor.observed_at, regime_4h, Timeframe.HOURS_4)
+    fully_ready = (
+        anchor.is_fully_classified
+        and regime_1h is not None
+        and is_1h_fresh
+        and regime_1h.is_fully_classified
+        and regime_4h is not None
+        and is_4h_fresh
+        and regime_4h.is_fully_classified
+    )
+    bias = _higher_timeframe_bias(
+        regime_1h,
+        regime_4h,
+        is_1h_fresh=is_1h_fresh,
+        is_4h_fresh=is_4h_fresh,
+    )
+    included = (
+        (Timeframe.MINUTES_15, anchor, anchor.is_fully_classified),
+        (Timeframe.HOUR_1, regime_1h, is_1h_fresh),
+        (Timeframe.HOURS_4, regime_4h, is_4h_fresh),
+    )
+    extremes = tuple(
+        timeframe
+        for timeframe, snapshot, fresh in included
+        if snapshot is not None
+        and fresh
+        and snapshot.is_fully_classified
+        and snapshot.volatility_state is VolatilityState.EXTREME
+    )
+    return _CompositionFacts(
+        age_1h,
+        age_4h,
+        is_1h_fresh,
+        is_4h_fresh,
+        fully_ready,
+        bias,
+        _alignment(anchor, bias, fully_ready=fully_ready),
+        extremes,
+        _readiness_reasons(
+            anchor,
+            regime_1h,
+            regime_4h,
+            is_1h_fresh=is_1h_fresh,
+            is_4h_fresh=is_4h_fresh,
+        ),
+    )
+
+
+def _validate_technical_snapshot(snapshot: TechnicalRegimeSnapshot) -> None:
+    try:
+        validate_technical_regime_snapshot_shape(snapshot)
+    except TechnicalRegimeError as error:
+        raise CompositionSeriesError("technical regime snapshot is inconsistent") from error
+
+
+def validate_multi_timeframe_regime_snapshot(snapshot: MultiTimeframeRegimeSnapshot) -> None:
+    """Revalidate one MTF snapshot using the composer's authoritative derivations."""
+
+    if not isinstance(snapshot, MultiTimeframeRegimeSnapshot):
+        raise TypeError("snapshot must be a MultiTimeframeRegimeSnapshot")
+    observed_at = require_utc(snapshot.observed_at, field="composition observed_at")
+    if type(snapshot.is_1h_fresh) is not bool or type(snapshot.is_4h_fresh) is not bool:
+        raise CompositionSeriesError("freshness flags must be booleans")
+    if type(snapshot.is_fully_ready) is not bool:
+        raise CompositionSeriesError("is_fully_ready must be a boolean")
+    if type(snapshot.has_extreme_volatility) is not bool:
+        raise CompositionSeriesError("has_extreme_volatility must be a boolean")
+    if not isinstance(snapshot.extreme_volatility_timeframes, tuple) or not isinstance(
+        snapshot.readiness_reasons, tuple
+    ):
+        raise CompositionSeriesError("composition collections must be immutable tuples")
+    anchor = snapshot.regime_15m
+    if (
+        anchor.source_id != snapshot.source_id
+        or anchor.symbol != snapshot.symbol
+        or anchor.timeframe is not Timeframe.MINUTES_15
+        or anchor.observed_at != observed_at
+    ):
+        raise CompositionSeriesError("15m anchor identity is inconsistent")
+    _validate_technical_snapshot(anchor)
+    for timeframe, regime in (
+        (Timeframe.HOUR_1, snapshot.regime_1h),
+        (Timeframe.HOURS_4, snapshot.regime_4h),
+    ):
+        if regime is None:
+            continue
+        if (
+            regime.source_id != snapshot.source_id
+            or regime.symbol != snapshot.symbol
+            or regime.timeframe is not timeframe
+            or regime.observed_at > observed_at
+        ):
+            raise CompositionSeriesError("higher-timeframe identity or causality is inconsistent")
+        _validate_technical_snapshot(regime)
+    facts = _composition_facts(anchor, snapshot.regime_1h, snapshot.regime_4h)
+    if (
+        snapshot.age_1h != facts.age_1h
+        or snapshot.age_4h != facts.age_4h
+        or snapshot.is_1h_fresh is not facts.is_1h_fresh
+        or snapshot.is_4h_fresh is not facts.is_4h_fresh
+        or snapshot.is_fully_ready is not facts.is_fully_ready
+        or snapshot.higher_timeframe_bias is not facts.higher_timeframe_bias
+        or snapshot.alignment is not facts.alignment
+        or snapshot.has_extreme_volatility is not bool(facts.extreme_volatility_timeframes)
+        or snapshot.extreme_volatility_timeframes != facts.extreme_volatility_timeframes
+        or snapshot.readiness_reasons != facts.readiness_reasons
+    ):
+        raise CompositionSeriesError("multi-timeframe composition derivation is inconsistent")
+
+
 class MultiTimeframeRegimeComposer:
     """Compose causal HTF context only when a current 15m anchor arrives."""
 
@@ -254,36 +385,7 @@ class MultiTimeframeRegimeComposer:
             Timeframe.HOURS_4,
             anchor.observed_at,
         )
-        age_1h, is_1h_fresh = _age_and_freshness(anchor.observed_at, regime_1h, Timeframe.HOUR_1)
-        age_4h, is_4h_fresh = _age_and_freshness(anchor.observed_at, regime_4h, Timeframe.HOURS_4)
-        fully_ready = (
-            anchor.is_fully_classified
-            and regime_1h is not None
-            and is_1h_fresh
-            and regime_1h.is_fully_classified
-            and regime_4h is not None
-            and is_4h_fresh
-            and regime_4h.is_fully_classified
-        )
-        bias = _higher_timeframe_bias(
-            regime_1h,
-            regime_4h,
-            is_1h_fresh=is_1h_fresh,
-            is_4h_fresh=is_4h_fresh,
-        )
-        included = (
-            (Timeframe.MINUTES_15, anchor, anchor.is_fully_classified),
-            (Timeframe.HOUR_1, regime_1h, is_1h_fresh),
-            (Timeframe.HOURS_4, regime_4h, is_4h_fresh),
-        )
-        extreme_timeframes = tuple(
-            timeframe
-            for timeframe, snapshot, fresh in included
-            if snapshot is not None
-            and fresh
-            and snapshot.is_fully_classified
-            and snapshot.volatility_state is VolatilityState.EXTREME
-        )
+        facts = _composition_facts(anchor, regime_1h, regime_4h)
         return MultiTimeframeRegimeSnapshot(
             source_id=anchor.source_id,
             symbol=anchor.symbol,
@@ -291,22 +393,16 @@ class MultiTimeframeRegimeComposer:
             regime_15m=anchor,
             regime_1h=regime_1h,
             regime_4h=regime_4h,
-            age_1h=age_1h,
-            age_4h=age_4h,
-            is_1h_fresh=is_1h_fresh,
-            is_4h_fresh=is_4h_fresh,
-            is_fully_ready=fully_ready,
-            higher_timeframe_bias=bias,
-            alignment=_alignment(anchor, bias, fully_ready=fully_ready),
-            has_extreme_volatility=bool(extreme_timeframes),
-            extreme_volatility_timeframes=extreme_timeframes,
-            readiness_reasons=_readiness_reasons(
-                anchor,
-                regime_1h,
-                regime_4h,
-                is_1h_fresh=is_1h_fresh,
-                is_4h_fresh=is_4h_fresh,
-            ),
+            age_1h=facts.age_1h,
+            age_4h=facts.age_4h,
+            is_1h_fresh=facts.is_1h_fresh,
+            is_4h_fresh=facts.is_4h_fresh,
+            is_fully_ready=facts.is_fully_ready,
+            higher_timeframe_bias=facts.higher_timeframe_bias,
+            alignment=facts.alignment,
+            has_extreme_volatility=bool(facts.extreme_volatility_timeframes),
+            extreme_volatility_timeframes=facts.extreme_volatility_timeframes,
+            readiness_reasons=facts.readiness_reasons,
         )
 
     def _validate_batch(

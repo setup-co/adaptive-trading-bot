@@ -302,6 +302,181 @@ def _regime_label(
     return RegimeLabel.NEUTRAL
 
 
+def validate_technical_regime_snapshot(
+    snapshot: TechnicalRegimeSnapshot,
+    feature: FeatureSnapshot,
+    structure: StructureSnapshot,
+) -> None:
+    """Revalidate one technical regime against its authoritative causal inputs."""
+
+    if not isinstance(snapshot, TechnicalRegimeSnapshot):
+        raise TypeError("snapshot must be a TechnicalRegimeSnapshot")
+    if not isinstance(feature, FeatureSnapshot):
+        raise TypeError("feature must be a FeatureSnapshot")
+    if not isinstance(structure, StructureSnapshot):
+        raise TypeError("structure must be a StructureSnapshot")
+    observed_at = require_utc(snapshot.observed_at, field="regime snapshot observed_at")
+    candle_open_at = require_utc(feature.candle_open_time, field="feature candle_open_time")
+    candle_close_at = require_utc(feature.candle_close_time, field="feature candle_close_time")
+    if (
+        snapshot.source_id != feature.source_id
+        or snapshot.source_id != structure.source_id
+        or snapshot.symbol != feature.symbol
+        or snapshot.symbol != structure.symbol
+        or snapshot.timeframe is not feature.timeframe
+        or snapshot.timeframe is not structure.timeframe
+        or require_utc(feature.observed_at, field="feature snapshot observed_at") != observed_at
+        or require_utc(structure.observed_at, field="structure snapshot observed_at") != observed_at
+        or candle_close_at != observed_at
+        or candle_close_at - candle_open_at != feature.timeframe.duration
+        or feature.bars_seen != snapshot.bars_seen
+        or structure.bars_seen != snapshot.bars_seen
+    ):
+        raise RegimeSeriesError("technical regime input identity or causality is inconsistent")
+    _validate_feature_values(feature)
+    _validate_structure_relations(structure)
+    validate_technical_regime_snapshot_shape(snapshot)
+
+    evidence = _direction_evidence(feature, structure)
+    score = sum(item.contribution for item in evidence)
+    direction = _direction(score, feature.is_fully_warmed)
+    strength = abs(score)
+    volatility = _volatility_state(snapshot.volatility_percentile)
+    fully_classified = feature.is_fully_warmed and snapshot.volatility_percentile is not None
+    if (
+        snapshot.direction_evidence != evidence
+        or snapshot.direction_score != score
+        or snapshot.trend_strength != strength
+        or snapshot.direction is not direction
+        or snapshot.volume_state is not _volume_state(feature.volume_zscore_20)
+        or snapshot.volatility_state is not volatility
+        or snapshot.is_fully_classified is not fully_classified
+        or snapshot.regime_label
+        is not _regime_label(
+            fully_warmed=feature.is_fully_warmed,
+            percentile=snapshot.volatility_percentile,
+            volatility=volatility,
+            direction=direction,
+            strength=strength,
+        )
+    ):
+        raise RegimeSeriesError("technical regime derivation is inconsistent with its inputs")
+
+
+def _validate_feature_values(snapshot: FeatureSnapshot) -> None:
+    if type(snapshot.is_fully_warmed) is not bool:
+        raise RegimeSeriesError("is_fully_warmed must be a boolean")
+    for name, value in (
+        ("ema_20", snapshot.ema_20),
+        ("ema_50", snapshot.ema_50),
+        ("momentum_16", snapshot.momentum_16),
+        ("momentum_4", snapshot.momentum_4),
+        ("volume_zscore_20", snapshot.volume_zscore_20),
+        ("realized_volatility_20", snapshot.realized_volatility_20),
+    ):
+        if value is not None and (not isinstance(value, Decimal) or not value.is_finite()):
+            raise RegimeSeriesError(f"{name} must be None or a finite Decimal")
+    if snapshot.realized_volatility_20 is not None and snapshot.realized_volatility_20 < 0:
+        raise RegimeSeriesError("realized_volatility_20 cannot be negative")
+
+
+def _validate_structure_relations(snapshot: StructureSnapshot) -> None:
+    for relation in (snapshot.latest_high_relation, snapshot.latest_low_relation):
+        if relation is not None and not isinstance(relation, StructureRelation):
+            raise RegimeSeriesError("structure relation must be a StructureRelation")
+    if snapshot.latest_high_relation not in {
+        None,
+        StructureRelation.HH,
+        StructureRelation.LH,
+        StructureRelation.EQUAL,
+    }:
+        raise RegimeSeriesError("latest high relation is invalid")
+    if snapshot.latest_low_relation not in {
+        None,
+        StructureRelation.HL,
+        StructureRelation.LL,
+        StructureRelation.EQUAL,
+    }:
+        raise RegimeSeriesError("latest low relation is invalid")
+
+
+def validate_technical_regime_snapshot_shape(snapshot: TechnicalRegimeSnapshot) -> None:
+    """Validate technical facts derivable without retaining feature inputs."""
+
+    if not isinstance(snapshot, TechnicalRegimeSnapshot):
+        raise TypeError("snapshot must be a TechnicalRegimeSnapshot")
+    require_utc(snapshot.observed_at, field="regime snapshot observed_at")
+    if type(snapshot.bars_seen) is not int or snapshot.bars_seen < 1:
+        raise RegimeSeriesError("bars_seen must be a positive integer")
+    if type(snapshot.is_fully_classified) is not bool:
+        raise RegimeSeriesError("is_fully_classified must be a boolean")
+    percentile = snapshot.volatility_percentile
+    if percentile is not None and (
+        not isinstance(percentile, Decimal)
+        or not percentile.is_finite()
+        or percentile < 0
+        or percentile > 100
+    ):
+        raise RegimeSeriesError("volatility_percentile must be in [0, 100]")
+    for name, value, expected_type in (
+        ("direction", snapshot.direction, Direction),
+        ("volatility_state", snapshot.volatility_state, VolatilityState),
+        ("volume_state", snapshot.volume_state, VolumeState),
+        ("liquidity_state", snapshot.liquidity_state, LiquidityState),
+        ("event_risk_state", snapshot.event_risk_state, EventRiskState),
+        ("regime_label", snapshot.regime_label, RegimeLabel),
+    ):
+        if not isinstance(value, expected_type):
+            raise RegimeSeriesError(f"{name} has an invalid type")
+    if snapshot.liquidity_state is not LiquidityState.UNKNOWN:
+        raise RegimeSeriesError("liquidity_state must remain UNKNOWN")
+    if snapshot.event_risk_state is not EventRiskState.UNKNOWN:
+        raise RegimeSeriesError("event_risk_state must remain UNKNOWN")
+    if not isinstance(snapshot.direction_evidence, tuple) or not all(
+        isinstance(item, DirectionEvidence) for item in snapshot.direction_evidence
+    ):
+        raise RegimeSeriesError("direction evidence must be an immutable evidence tuple")
+    expected_components = tuple(DirectionComponent)
+    if tuple(item.component for item in snapshot.direction_evidence) != expected_components:
+        raise RegimeSeriesError("direction evidence must contain the five canonical components")
+    if any(item.contribution not in {-20, 0, 20} for item in snapshot.direction_evidence):
+        raise RegimeSeriesError("direction evidence contribution is invalid")
+    if (
+        type(snapshot.direction_score) is not int
+        or snapshot.direction_score < -100
+        or snapshot.direction_score > 100
+        or snapshot.direction_score % 20
+        or sum(item.contribution for item in snapshot.direction_evidence)
+        != snapshot.direction_score
+    ):
+        raise RegimeSeriesError("direction score is inconsistent with its evidence")
+    if type(snapshot.trend_strength) is not int or snapshot.trend_strength != abs(
+        snapshot.direction_score
+    ):
+        raise RegimeSeriesError("trend_strength must equal the absolute direction score")
+    expected_volatility = _volatility_state(percentile)
+    if snapshot.volatility_state is not expected_volatility:
+        raise RegimeSeriesError("volatility state is inconsistent with its percentile")
+    if snapshot.is_fully_classified:
+        if percentile is None:
+            raise RegimeSeriesError("a fully classified snapshot requires volatility history")
+        expected_direction = _direction(snapshot.direction_score, True)
+        expected_label = _regime_label(
+            fully_warmed=True,
+            percentile=percentile,
+            volatility=expected_volatility,
+            direction=expected_direction,
+            strength=snapshot.trend_strength,
+        )
+        if (
+            snapshot.direction is not expected_direction
+            or snapshot.regime_label is not expected_label
+        ):
+            raise RegimeSeriesError("classified direction or regime label is inconsistent")
+    elif snapshot.regime_label is not RegimeLabel.INSUFFICIENT_DATA:
+        raise RegimeSeriesError("unclassified regime label must be INSUFFICIENT_DATA")
+
+
 class TechnicalRegimeEngine:
     """Classify synchronized causal feature/structure batches with isolated state."""
 
@@ -408,8 +583,8 @@ class TechnicalRegimeEngine:
                     raise RegimeSeriesError(f"observation time must advance strictly for {series}")
                 if feature.bars_seen != previous.bars_seen + 1:
                     raise RegimeSeriesError(f"bars_seen must advance by one for {series}")
-            self._validate_feature_values(feature)
-            self._validate_structure_relations(structure)
+            _validate_feature_values(feature)
+            _validate_structure_relations(structure)
         return feature_time, feature_by_series, structure_by_series
 
     @staticmethod
@@ -445,40 +620,3 @@ class TechnicalRegimeEngine:
                 raise RegimeBatchError("structure snapshot observed_at must match its batch")
             snapshots[series] = snapshot
         return snapshots
-
-    @staticmethod
-    def _validate_feature_values(snapshot: FeatureSnapshot) -> None:
-        if type(snapshot.is_fully_warmed) is not bool:
-            raise RegimeSeriesError("is_fully_warmed must be a boolean")
-        for name, value in (
-            ("ema_20", snapshot.ema_20),
-            ("ema_50", snapshot.ema_50),
-            ("momentum_16", snapshot.momentum_16),
-            ("momentum_4", snapshot.momentum_4),
-            ("volume_zscore_20", snapshot.volume_zscore_20),
-            ("realized_volatility_20", snapshot.realized_volatility_20),
-        ):
-            if value is not None and (not isinstance(value, Decimal) or not value.is_finite()):
-                raise RegimeSeriesError(f"{name} must be None or a finite Decimal")
-        if snapshot.realized_volatility_20 is not None and snapshot.realized_volatility_20 < 0:
-            raise RegimeSeriesError("realized_volatility_20 cannot be negative")
-
-    @staticmethod
-    def _validate_structure_relations(snapshot: StructureSnapshot) -> None:
-        for relation in (snapshot.latest_high_relation, snapshot.latest_low_relation):
-            if relation is not None and not isinstance(relation, StructureRelation):
-                raise RegimeSeriesError("structure relation must be a StructureRelation")
-        if snapshot.latest_high_relation not in {
-            None,
-            StructureRelation.HH,
-            StructureRelation.LH,
-            StructureRelation.EQUAL,
-        }:
-            raise RegimeSeriesError("latest high relation is invalid")
-        if snapshot.latest_low_relation not in {
-            None,
-            StructureRelation.HL,
-            StructureRelation.LL,
-            StructureRelation.EQUAL,
-        }:
-            raise RegimeSeriesError("latest low relation is invalid")

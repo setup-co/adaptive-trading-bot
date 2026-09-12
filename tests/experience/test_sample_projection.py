@@ -30,9 +30,14 @@ from adaptive_trading_bot.journal.trade_outcome import (
 from adaptive_trading_bot.orders import EntryOrderIntentAuthorizer
 from adaptive_trading_bot.paper import PaperExecutionObservation, PaperPortfolioCoordinator
 from adaptive_trading_bot.regime import (
+    Direction,
+    DirectionComponent,
+    DirectionEvidence,
     HigherTimeframeBias,
     MultiTimeframeAlignment,
+    MultiTimeframeRegimeComposer,
     RegimeLabel,
+    TechnicalRegimeBatch,
     VolatilityState,
     VolumeState,
 )
@@ -56,6 +61,33 @@ _context = _JOURNAL_HELPERS["_context"]
 _manual_evaluation = _JOURNAL_HELPERS["_manual_evaluation"]
 _health = _JOURNAL_HELPERS["_health"]
 PROJECTOR = ExperienceSampleProjector()
+
+
+def _authoritative_context(context: StrategyEvaluationContext) -> StrategyEvaluationContext:
+    feature = replace(context.features_15m, momentum_4=Decimal(0))
+    anchor = replace(
+        context.multi_timeframe_regime.regime_15m,
+        direction_evidence=(
+            DirectionEvidence(
+                DirectionComponent.EMA_ALIGNMENT, 20, "ema_20 above ema_50"
+            ),
+            DirectionEvidence(DirectionComponent.MOMENTUM_16, 20, "positive"),
+            DirectionEvidence(DirectionComponent.MOMENTUM_4, 0, "zero"),
+            DirectionEvidence(DirectionComponent.CONFIRMED_HIGH, 0, "unavailable"),
+            DirectionEvidence(DirectionComponent.CONFIRMED_LOW, 0, "unavailable"),
+        ),
+    )
+    multi = MultiTimeframeRegimeComposer().process(
+        TechnicalRegimeBatch(
+            context.observed_at,
+            (
+                anchor,
+                context.multi_timeframe_regime.regime_1h,
+                context.multi_timeframe_regime.regime_4h,
+            ),
+        )
+    ).snapshots[0]
+    return replace(context, features_15m=feature, multi_timeframe_regime=multi)
 
 
 def _candidate(
@@ -97,7 +129,10 @@ def _complete(
     action: CandidateAction = CandidateAction.LONG_CANDIDATE,
     exit_price: Decimal | None = None,
 ) -> tuple[DecisionJournalEntry[object, object], CompletedTradeJournalEntry]:
-    current = cast(StrategyEvaluationContext, _context() if context is None else context)
+    current = cast(
+        StrategyEvaluationContext,
+        _authoritative_context(_context()) if context is None else context,
+    )
     item = _candidate(current, action=action)
     paper = PaperPortfolioCoordinator(
         SimulatedExecutionCostConfiguration(Decimal(1), Decimal(1), Decimal(1))
@@ -171,21 +206,61 @@ def _with_regime(
     higher_timeframe_bias: HigherTimeframeBias | None = None,
     alignment: MultiTimeframeAlignment | None = None,
 ) -> StrategyEvaluationContext:
+    context = _authoritative_context(context)
     multi = context.multi_timeframe_regime
-    anchor = replace(
-        multi.regime_15m,
-        regime_label=regime_label or multi.regime_15m.regime_label,
-        volatility_state=volatility_state or multi.regime_15m.volatility_state,
-        volume_state=volume_state or multi.regime_15m.volume_state,
-    )
+    feature = context.features_15m
+    anchor = multi.regime_15m
+    if regime_label is RegimeLabel.STRONG_UPTREND:
+        feature = replace(feature, momentum_4=Decimal("0.01"))
+        evidence = list(anchor.direction_evidence)
+        evidence[2] = DirectionEvidence(DirectionComponent.MOMENTUM_4, 20, "positive")
+        anchor = replace(
+            anchor,
+            direction_score=60,
+            trend_strength=60,
+            direction_evidence=tuple(evidence),
+            regime_label=regime_label,
+        )
+    if volatility_state is VolatilityState.HIGH:
+        anchor = replace(
+            anchor,
+            volatility_percentile=Decimal(80),
+            volatility_state=volatility_state,
+        )
+    if volume_state is VolumeState.HIGH:
+        feature = replace(feature, volume_zscore_20=Decimal(1))
+        anchor = replace(anchor, volume_state=volume_state)
+    regime_4h = multi.regime_4h
+    if higher_timeframe_bias is HigherTimeframeBias.MIXED:
+        assert regime_4h is not None
+        evidence = tuple(
+            replace(item, contribution=-20)
+            if item.component in {DirectionComponent.EMA_ALIGNMENT, DirectionComponent.MOMENTUM_16}
+            else item
+            for item in regime_4h.direction_evidence
+        )
+        regime_4h = replace(
+            regime_4h,
+            direction=Direction.DOWN,
+            direction_score=-40,
+            trend_strength=40,
+            direction_evidence=evidence,
+            regime_label=RegimeLabel.DOWNTREND,
+        )
+    assert multi.regime_1h is not None
+    assert regime_4h is not None
+    rebuilt = MultiTimeframeRegimeComposer().process(
+        TechnicalRegimeBatch(
+            context.observed_at,
+            (anchor, multi.regime_1h, regime_4h),
+        )
+    ).snapshots[0]
+    assert higher_timeframe_bias is None or rebuilt.higher_timeframe_bias is higher_timeframe_bias
+    assert alignment is None or rebuilt.alignment is alignment
     return replace(
         context,
-        multi_timeframe_regime=replace(
-            multi,
-            regime_15m=anchor,
-            higher_timeframe_bias=higher_timeframe_bias or multi.higher_timeframe_bias,
-            alignment=alignment or multi.alignment,
-        ),
+        features_15m=feature,
+        multi_timeframe_regime=rebuilt,
     )
 
 
@@ -318,7 +393,7 @@ def test_outcome_changes_never_change_same_context_fingerprint() -> None:
 def test_context_dimensions_change_only_expected_key_levels(
     changes: dict[str, object], changed_levels: set[int]
 ) -> None:
-    base_context = cast(StrategyEvaluationContext, _context())
+    base_context = _authoritative_context(cast(StrategyEvaluationContext, _context()))
     _, _, base = _project_one(context=base_context)
     changed_context = _with_regime(base_context, **changes)  # type: ignore[arg-type]
     _, _, changed = _project_one(context=changed_context)
@@ -441,7 +516,7 @@ def test_mutated_regime_and_outcome_authority_fail_closed() -> None:
     decision, trade = _complete()
     object.__setattr__(decision.context.multi_timeframe_regime.regime_15m, "trend_strength", 60)
     object.__setattr__(trade, "pre_trade_decision", deepcopy(decision))
-    with pytest.raises(ExperienceProjectionError, match="trend-strength authority"):
+    with pytest.raises(ExperienceProjectionError, match="regime authority"):
         PROJECTOR.project(*_snapshots((decision,), (trade,)))
 
     decision, trade = _complete()
@@ -450,9 +525,34 @@ def test_mutated_regime_and_outcome_authority_fail_closed() -> None:
         PROJECTOR.project(*_snapshots((decision,), (trade,)))
 
 
+@pytest.mark.parametrize(
+    ("target", "field_name", "forged_value"),
+    (
+        ("anchor", "direction", Direction.DOWN),
+        ("anchor", "regime_label", RegimeLabel.STRONG_UPTREND),
+        ("anchor", "volatility_state", VolatilityState.HIGH),
+        ("anchor", "volume_state", VolumeState.HIGH),
+        ("multi", "higher_timeframe_bias", HigherTimeframeBias.MIXED),
+        ("multi", "alignment", MultiTimeframeAlignment.MIXED),
+    ),
+)
+def test_coordinated_valid_enum_regime_mutations_fail_before_sample_emission(
+    target: str, field_name: str, forged_value: object
+) -> None:
+    decision, trade = _complete()
+    for authority in (decision, trade.pre_trade_decision):
+        multi = authority.context.multi_timeframe_regime
+        mutation_target = multi.regime_15m if target == "anchor" else multi
+        object.__setattr__(mutation_target, field_name, forged_value)
+
+    with pytest.raises(ExperienceProjectionError, match="regime authority"):
+        PROJECTOR.project(*_snapshots((decision,), (trade,)))
+
+
 def test_input_order_invariance_and_canonical_btc_eth_order() -> None:
-    btc_decision, btc_trade = _complete(context=cast(StrategyEvaluationContext, _context()))
-    eth_context = cast(StrategyEvaluationContext, _context(symbol=ETH))
+    btc_context = _authoritative_context(cast(StrategyEvaluationContext, _context()))
+    btc_decision, btc_trade = _complete(context=btc_context)
+    eth_context = _authoritative_context(cast(StrategyEvaluationContext, _context(symbol=ETH)))
     eth_decision, eth_trade = _complete(context=eth_context)
 
     forward = PROJECTOR.project(*_snapshots((btc_decision, eth_decision), (btc_trade, eth_trade)))

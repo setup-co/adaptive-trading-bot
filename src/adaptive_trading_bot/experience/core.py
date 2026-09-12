@@ -28,9 +28,13 @@ from adaptive_trading_bot.regime import (
     Direction,
     HigherTimeframeBias,
     MultiTimeframeAlignment,
+    RegimeCompositionError,
     RegimeLabel,
+    TechnicalRegimeError,
     VolatilityState,
     VolumeState,
+    validate_multi_timeframe_regime_snapshot,
+    validate_technical_regime_snapshot,
 )
 
 _FINGERPRINT_SCHEMA_VERSION = "1.0.0"
@@ -512,29 +516,13 @@ def _fingerprint(
     context = decision.context
     regime = context.multi_timeframe_regime
     anchor = regime.regime_15m
-    if (
-        context.source_id != decision.identity.source_id
-        or context.symbol != decision.identity.symbol
-        or context.observed_at != decision.identity.observed_at
-        or context.candle_15m.timeframe is not Timeframe.MINUTES_15
-        or regime.source_id != context.source_id
-        or regime.symbol != context.symbol
-        or regime.observed_at != context.observed_at
-        or anchor.source_id != context.source_id
-        or anchor.symbol != context.symbol
-        or anchor.timeframe is not Timeframe.MINUTES_15
-        or anchor.observed_at != context.observed_at
-    ):
+    if context.candle_15m.timeframe is not Timeframe.MINUTES_15:
         raise ExperienceProjectionError("pre-trade fingerprint context identity is inconsistent")
-    if (
-        type(anchor.direction_score) is not int
-        or anchor.direction_score < -100
-        or anchor.direction_score > 100
-        or anchor.direction_score % 20
-        or type(anchor.trend_strength) is not int
-        or anchor.trend_strength != abs(anchor.direction_score)
-    ):
-        raise ExperienceProjectionError("pre-trade trend-strength authority is inconsistent")
+    try:
+        validate_technical_regime_snapshot(anchor, context.features_15m, context.structure_15m)
+        validate_multi_timeframe_regime_snapshot(regime)
+    except (TechnicalRegimeError, RegimeCompositionError, TypeError, ValueError) as error:
+        raise ExperienceProjectionError("pre-trade regime authority is inconsistent") from error
     bucket = trend_strength_bucket(anchor.trend_strength)
     return ExperienceContextFingerprint(
         symbol=deepcopy(context.symbol),

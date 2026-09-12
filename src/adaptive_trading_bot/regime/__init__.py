@@ -9,6 +9,7 @@ from adaptive_trading_bot.regime.composition import (
     MultiTimeframeRegimeComposer,
     MultiTimeframeRegimeSnapshot,
     RegimeCompositionError,
+    validate_multi_timeframe_regime_snapshot,
 )
 from adaptive_trading_bot.regime.technical import (
     Direction,
@@ -26,6 +27,8 @@ from adaptive_trading_bot.regime.technical import (
     TechnicalRegimeSnapshot,
     VolatilityState,
     VolumeState,
+    validate_technical_regime_snapshot,
+    validate_technical_regime_snapshot_shape,
 )
 
 __all__ = [
@@ -52,4 +55,7 @@ __all__ = [
     "TechnicalRegimeSnapshot",
     "VolatilityState",
     "VolumeState",
+    "validate_multi_timeframe_regime_snapshot",
+    "validate_technical_regime_snapshot",
+    "validate_technical_regime_snapshot_shape",
 ]
