@@ -7,10 +7,13 @@ score a strategy, evaluate Risk or Safety, authorize an order, or mutate trading
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from enum import StrEnum
+from enum import Enum, StrEnum
+from hashlib import sha256
+from hmac import compare_digest
+from json import dumps
 from typing import Protocol, runtime_checkable
 
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
@@ -40,6 +43,7 @@ from adaptive_trading_bot.regime import (
 _FINGERPRINT_SCHEMA_VERSION = "1.0.0"
 _FALLBACK_KEY_SCHEMA_VERSION = "1.0.0"
 _SAMPLE_SCHEMA_VERSION = "1.0.0"
+_SAMPLE_INTEGRITY_SEAL_VERSION = "1.0.0"
 _SAMPLE_SNAPSHOT_SCHEMA_VERSION = "1.0.0"
 _DECISION_JOURNAL_SCHEMA_VERSION = "1.0.0"
 _COMPLETED_TRADE_JOURNAL_SCHEMA_VERSION = "1.0.0"
@@ -256,9 +260,11 @@ class ExperienceTradeSample:
     accounting_entry_fill_id: str
     accounting_exit_fill_id: str
     sample_schema_version: str = field(init=False, default=_SAMPLE_SCHEMA_VERSION)
+    sample_integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.validate()
+        self._validate_fields()
+        object.__setattr__(self, "sample_integrity_seal", _sample_integrity_seal(self))
 
     @property
     def sort_key(self) -> tuple[datetime, datetime, str, str, str, str, str]:
@@ -273,6 +279,12 @@ class ExperienceTradeSample:
         )
 
     def validate(self) -> None:
+        seal = self.sample_integrity_seal
+        if not isinstance(seal, str) or not compare_digest(seal, _sample_integrity_seal(self)):
+            raise ExperienceProjectionError("sample integrity seal mismatch")
+        self._validate_fields()
+
+    def _validate_fields(self) -> None:
         if self.sample_schema_version != _SAMPLE_SCHEMA_VERSION:
             raise ExperienceProjectionError("sample schema version mismatch")
         if not isinstance(self.decision_identity, DecisionIdentity):
@@ -602,3 +614,92 @@ def _validate_hierarchy(
 def _require_canonical_text(name: str, value: str) -> None:
     if not isinstance(value, str) or not value or value != value.strip():
         raise ExperienceProjectionError(f"{name} must be canonical and non-empty")
+
+
+def _sample_integrity_seal(sample: ExperienceTradeSample) -> str:
+    authoritative_fields = (
+        ("decision_identity", sample.decision_identity),
+        ("source_id", sample.source_id),
+        ("fingerprint", sample.fingerprint),
+        ("hierarchical_keys", sample.hierarchical_keys),
+        ("entry_decision_at", sample.entry_decision_at),
+        ("entry_fill_at", sample.entry_fill_at),
+        ("exit_fill_at", sample.exit_fill_at),
+        ("candidate_action", sample.candidate_action),
+        ("entry_side", sample.entry_side),
+        ("exit_side", sample.exit_side),
+        ("quantity", sample.quantity),
+        ("approved_risk_quote", sample.approved_risk_quote),
+        ("gross_realized_pnl", sample.gross_realized_pnl),
+        ("total_trade_fees_quote", sample.total_trade_fees_quote),
+        ("net_realized_pnl", sample.net_realized_pnl),
+        ("realized_r_net", sample.realized_r_net),
+        ("outcome_classification", sample.outcome_classification),
+        ("exit_reason", sample.exit_reason),
+        ("duration", sample.duration),
+        ("risk_policy_version", sample.risk_policy_version),
+        ("safety_policy_version", sample.safety_policy_version),
+        ("accounting_entry_fill_id", sample.accounting_entry_fill_id),
+        ("accounting_exit_fill_id", sample.accounting_exit_fill_id),
+        ("sample_schema_version", sample.sample_schema_version),
+    )
+    payload = dumps(
+        (
+            "adaptive-trading-bot/experience-trade-sample-integrity",
+            _SAMPLE_INTEGRITY_SEAL_VERSION,
+            tuple(
+                (name, _canonical_sample_integrity_value(value))
+                for name, value in authoritative_fields
+            ),
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
+def _canonical_sample_integrity_value(value: object) -> object:
+    if value is None:
+        return ("none",)
+    if isinstance(value, Enum):
+        return (
+            "enum",
+            value.__class__.__module__,
+            value.__class__.__qualname__,
+            value.name,
+            _canonical_sample_integrity_value(value.value),
+        )
+    if isinstance(value, datetime):
+        return ("datetime", value.isoformat(timespec="microseconds"))
+    if isinstance(value, timedelta):
+        return ("timedelta", value.days, value.seconds, value.microseconds)
+    if isinstance(value, Decimal):
+        decimal_tuple = value.as_tuple()
+        return (
+            "decimal",
+            decimal_tuple.sign,
+            tuple(decimal_tuple.digits),
+            str(decimal_tuple.exponent),
+        )
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, tuple):
+        return ("tuple", tuple(_canonical_sample_integrity_value(item) for item in value))
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            "dataclass",
+            value.__class__.__module__,
+            value.__class__.__qualname__,
+            tuple(
+                (
+                    item.name,
+                    _canonical_sample_integrity_value(getattr(value, item.name)),
+                )
+                for item in fields(value)
+            ),
+        )
+    raise TypeError(f"unsupported sample integrity value: {type(value).__qualname__}")
