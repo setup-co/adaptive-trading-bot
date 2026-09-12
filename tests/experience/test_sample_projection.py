@@ -75,6 +75,10 @@ def _authoritative_context(context: StrategyEvaluationContext) -> StrategyEvalua
             DirectionEvidence(DirectionComponent.CONFIRMED_LOW, 0, "unavailable"),
         ),
     )
+    regime_1h = context.multi_timeframe_regime.regime_1h
+    regime_4h = context.multi_timeframe_regime.regime_4h
+    assert regime_1h is not None
+    assert regime_4h is not None
     multi = (
         MultiTimeframeRegimeComposer()
         .process(
@@ -82,8 +86,8 @@ def _authoritative_context(context: StrategyEvaluationContext) -> StrategyEvalua
                 context.observed_at,
                 (
                     anchor,
-                    context.multi_timeframe_regime.regime_1h,
-                    context.multi_timeframe_regime.regime_4h,
+                    regime_1h,
+                    regime_4h,
                 ),
             )
         )
@@ -131,10 +135,7 @@ def _complete(
     action: CandidateAction = CandidateAction.LONG_CANDIDATE,
     exit_price: Decimal | None = None,
 ) -> tuple[DecisionJournalEntry[object, object], CompletedTradeJournalEntry]:
-    current = cast(
-        StrategyEvaluationContext,
-        _authoritative_context(_context()) if context is None else context,
-    )
+    current = _authoritative_context(_context()) if context is None else context
     item = _candidate(current, action=action)
     paper = PaperPortfolioCoordinator(
         SimulatedExecutionCostConfiguration(Decimal(1), Decimal(1), Decimal(1))
@@ -214,13 +215,13 @@ def _with_regime(
     anchor = multi.regime_15m
     if regime_label is RegimeLabel.STRONG_UPTREND:
         feature = replace(feature, momentum_4=Decimal("0.01"))
-        evidence = list(anchor.direction_evidence)
-        evidence[2] = DirectionEvidence(DirectionComponent.MOMENTUM_4, 20, "positive")
+        anchor_evidence = list(anchor.direction_evidence)
+        anchor_evidence[2] = DirectionEvidence(DirectionComponent.MOMENTUM_4, 20, "positive")
         anchor = replace(
             anchor,
             direction_score=60,
             trend_strength=60,
-            direction_evidence=tuple(evidence),
+            direction_evidence=tuple(anchor_evidence),
             regime_label=regime_label,
         )
     if volatility_state is VolatilityState.HIGH:
@@ -235,7 +236,7 @@ def _with_regime(
     regime_4h = multi.regime_4h
     if higher_timeframe_bias is HigherTimeframeBias.MIXED:
         assert regime_4h is not None
-        evidence = tuple(
+        htf_evidence = tuple(
             replace(item, contribution=-20)
             if item.component in {DirectionComponent.EMA_ALIGNMENT, DirectionComponent.MOMENTUM_16}
             else item
@@ -246,7 +247,7 @@ def _with_regime(
             direction=Direction.DOWN,
             direction_score=-40,
             trend_strength=40,
-            direction_evidence=evidence,
+            direction_evidence=htf_evidence,
             regime_label=RegimeLabel.DOWNTREND,
         )
     assert multi.regime_1h is not None
