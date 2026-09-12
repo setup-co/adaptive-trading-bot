@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 
 import { ChartPage } from "./pages/ChartPage";
 import { DecisionsPage } from "./pages/DecisionsPage";
+import { ExperiencePage } from "./pages/ExperiencePage";
 import { HealthPage } from "./pages/HealthPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { TradesPage } from "./pages/TradesPage";
 
-const routes = ["overview", "chart", "decisions", "trades", "health"] as const;
+const routes = ["overview", "chart", "decisions", "trades", "experience", "health"] as const;
 type Route = (typeof routes)[number];
 
 function currentRoute(): Route {
@@ -33,8 +34,8 @@ export default function App() {
           <NavLink route="chart" current={route}>Chart</NavLink>
           <NavLink route="decisions" current={route}>Decisions</NavLink>
           <NavLink route="trades" current={route}>Trades</NavLink>
+          <NavLink route="experience" current={route}>Experience</NavLink>
           <NavLink route="health" current={route}>Health</NavLink>
-          <span className="nav-disabled" aria-disabled="true">Experience <small>Phase 12</small></span>
         </nav>
         <div className="observer-lock"><span aria-hidden="true">◉</span><div><strong>Read-only</strong><small>Observation APIs only</small></div></div>
       </aside>
@@ -44,6 +45,7 @@ export default function App() {
         {route === "chart" && <ChartPage />}
         {route === "decisions" && <DecisionsPage />}
         {route === "trades" && <TradesPage />}
+        {route === "experience" && <ExperiencePage />}
         {route === "health" && <HealthPage />}
       </div>
     </div>

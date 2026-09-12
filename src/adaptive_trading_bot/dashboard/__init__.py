@@ -27,6 +27,31 @@ from adaptive_trading_bot.dashboard.chart_provider import (
     DashboardChartProviderError,
     HistoricalDashboardChartProvider,
 )
+from adaptive_trading_bot.dashboard.experience_api_models import (
+    DashboardExperienceContextPageResponse,
+    DashboardExperienceEstimateResponse,
+    DashboardExperienceInvalidQueryResponse,
+    experience_context_page_response,
+    experience_estimate_response,
+)
+from adaptive_trading_bot.dashboard.experience_models import (
+    MAX_DASHBOARD_EXPERIENCE_CONTEXTS,
+    PROCESS_LOCAL_HISTORY_LIMITATION,
+    PROCESS_LOCAL_HISTORY_SCOPE,
+    DashboardExperienceContextKey,
+    DashboardExperienceContextPage,
+    DashboardExperienceContextQuery,
+    DashboardExperienceEstimate,
+    DashboardExperienceEstimateQuery,
+    DashboardExperienceFingerprint,
+    DashboardExperienceHierarchyEvidence,
+    DashboardExperienceValidationError,
+)
+from adaptive_trading_bot.dashboard.experience_provider import (
+    DashboardExperienceProviderError,
+    ExperienceTradeSampleSnapshotSource,
+    SnapshotDashboardExperienceProvider,
+)
 from adaptive_trading_bot.dashboard.journal_api_models import (
     DashboardDecisionPageResponse,
     DashboardJournalInvalidQueryResponse,
@@ -69,7 +94,10 @@ from adaptive_trading_bot.dashboard.provider import DashboardSnapshotProvider
 
 __all__ = [
     "MAX_DASHBOARD_CHART_CANDLES",
+    "MAX_DASHBOARD_EXPERIENCE_CONTEXTS",
     "MAX_DASHBOARD_JOURNAL_RECORDS",
+    "PROCESS_LOCAL_HISTORY_LIMITATION",
+    "PROCESS_LOCAL_HISTORY_SCOPE",
     "DashboardAvailability",
     "DashboardChartCandle",
     "DashboardChartIntegrity",
@@ -92,6 +120,18 @@ __all__ = [
     "DashboardDecisionQuery",
     "DashboardDecisionRecord",
     "DashboardDecisionTradeQuery",
+    "DashboardExperienceContextKey",
+    "DashboardExperienceContextPage",
+    "DashboardExperienceContextPageResponse",
+    "DashboardExperienceContextQuery",
+    "DashboardExperienceEstimate",
+    "DashboardExperienceEstimateQuery",
+    "DashboardExperienceEstimateResponse",
+    "DashboardExperienceFingerprint",
+    "DashboardExperienceHierarchyEvidence",
+    "DashboardExperienceInvalidQueryResponse",
+    "DashboardExperienceProviderError",
+    "DashboardExperienceValidationError",
     "DashboardJournalInvalidQueryResponse",
     "DashboardJournalProvider",
     "DashboardJournalProviderError",
@@ -109,11 +149,15 @@ __all__ = [
     "DashboardTradeQuery",
     "DashboardUnavailableResponse",
     "DashboardValue",
+    "ExperienceTradeSampleSnapshotSource",
     "HistoricalDashboardChartProvider",
+    "SnapshotDashboardExperienceProvider",
     "SnapshotDashboardJournalProvider",
     "chart_response",
     "dashboard_response",
     "decision_page_response",
+    "experience_context_page_response",
+    "experience_estimate_response",
     "project_dashboard_snapshot",
     "trade_page_response",
 ]

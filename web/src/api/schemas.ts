@@ -365,3 +365,138 @@ export const decisionsPageSchema = z.object({ ...pageFields, records: z.array(de
 export const tradesPageSchema = z.object({ ...pageFields, records: z.array(detailedTradeSchema) });
 export type DecisionsPage = z.infer<typeof decisionsPageSchema>;
 export type TradesPage = z.infer<typeof tradesPageSchema>;
+
+export const experienceFingerprintSchema = z.object({
+  symbol: z.string().min(1),
+  strategy_id: z.string().min(1),
+  strategy_version: z.string().min(1),
+  entry_timeframe: z.literal("15m"),
+  regime_label: z.string().min(1),
+  direction: z.string().min(1),
+  trend_strength_bucket: z.string().min(1),
+  volatility_state: z.string().min(1),
+  volume_state: z.string().min(1),
+  higher_timeframe_bias: z.string().min(1),
+  multi_timeframe_alignment: z.string().min(1),
+  fingerprint_schema_version: z.string().min(1),
+});
+export type ExperienceFingerprint = z.infer<typeof experienceFingerprintSchema>;
+
+const experienceLevelSchema = z.enum([
+  "FULL_CONTEXT",
+  "REGIME_HTF",
+  "REGIME",
+  "STRATEGY_SYMBOL",
+  "STRATEGY",
+]);
+const experienceKeySchema = z.object({
+  level: experienceLevelSchema,
+  strategy_id: z.string().min(1),
+  strategy_version: z.string().min(1),
+  symbol: z.string().nullable(),
+  entry_timeframe: z.string().nullable(),
+  regime_label: z.string().nullable(),
+  direction: z.string().nullable(),
+  trend_strength_bucket: z.string().nullable(),
+  volatility_state: z.string().nullable(),
+  volume_state: z.string().nullable(),
+  higher_timeframe_bias: z.string().nullable(),
+  multi_timeframe_alignment: z.string().nullable(),
+  key_schema_version: z.string().min(1),
+});
+const processLocalFields = {
+  history_scope: z.literal("PROCESS_LOCAL"),
+  history_limitation: z.string().min(1),
+};
+
+export const experienceContextsSchema = z
+  .object({
+    as_of: utcTimestampSchema,
+    limit: z.number().int().min(1).max(200),
+    total_matched: z.number().int().nonnegative(),
+    returned_count: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    contexts: z.array(experienceFingerprintSchema),
+    ...processLocalFields,
+  })
+  .superRefine((page, context) => {
+    if (
+      page.returned_count !== page.contexts.length ||
+      page.returned_count > page.limit ||
+      page.total_matched < page.returned_count ||
+      page.truncated !== (page.total_matched > page.returned_count)
+    ) {
+      context.addIssue({ code: "custom", message: "inconsistent Experience context page" });
+    }
+  });
+export type ExperienceContexts = z.infer<typeof experienceContextsSchema>;
+
+const experienceEvidenceSchema = z.object({
+  key: experienceKeySchema,
+  raw_eligible_sample_count: z.number().int().nonnegative(),
+  effective_sample_size: decimalStringSchema,
+  sufficient: z.boolean(),
+  hierarchy_evidence_schema_version: z.string().min(1),
+});
+const nullableDecimal = decimalStringSchema.nullable();
+export const experienceEstimateSchema = z
+  .object({
+    target_fingerprint: experienceFingerprintSchema,
+    as_of: utcTimestampSchema,
+    availability: z.enum(["AVAILABLE", "INSUFFICIENT_EVIDENCE", "NO_HISTORY"]),
+    selected_key: experienceKeySchema.nullable(),
+    selected_level: experienceLevelSchema.nullable(),
+    confidence: z.enum(["NO_HISTORY", "INSUFFICIENT", "LOW", "MEDIUM", "HIGH"]),
+    examined_hierarchy: z.array(experienceEvidenceSchema).length(5),
+    eligible_selected_raw_sample_count: z.number().int().nonnegative(),
+    selected_effective_sample_size: decimalStringSchema,
+    excluded_future_sample_count: z.number().int().nonnegative(),
+    prior_source: z.enum(["NEUTRAL_PRIOR", "HIERARCHICAL"]).nullable(),
+    prior_source_level: experienceLevelSchema.nullable(),
+    prior_source_key: experienceKeySchema.nullable(),
+    prior_external_effective_sample_size: nullableDecimal,
+    prior_alpha: nullableDecimal,
+    prior_beta: nullableDecimal,
+    posterior_alpha: nullableDecimal,
+    posterior_beta: nullableDecimal,
+    posterior_mean_win_probability: nullableDecimal,
+    recency_weighted_win_rate: nullableDecimal,
+    recency_weighted_expectancy_r: nullableDecimal,
+    quote_currency: z.string().min(1).nullable(),
+    recency_weighted_expectancy_net_quote: nullableDecimal,
+    estimation_policy_version: z.string().min(1),
+    recency_policy_version: z.string().min(1),
+    estimate_schema_version: z.string().min(1),
+    ...processLocalFields,
+  })
+  .superRefine((estimate, context) => {
+    const levels = estimate.examined_hierarchy.map((row) => row.key.level);
+    const canonical = ["FULL_CONTEXT", "REGIME_HTF", "REGIME", "STRATEGY_SYMBOL", "STRATEGY"];
+    if (levels.some((level, index) => level !== canonical[index])) {
+      context.addIssue({ code: "custom", message: "non-canonical Experience hierarchy" });
+    }
+    if (estimate.selected_key?.level !== estimate.selected_level) {
+      context.addIssue({ code: "custom", message: "inconsistent selected Experience level" });
+    }
+    const unavailable = [
+      estimate.selected_key,
+      estimate.selected_level,
+      estimate.prior_source,
+      estimate.prior_alpha,
+      estimate.prior_beta,
+      estimate.posterior_alpha,
+      estimate.posterior_beta,
+      estimate.posterior_mean_win_probability,
+      estimate.recency_weighted_win_rate,
+      estimate.recency_weighted_expectancy_r,
+      estimate.quote_currency,
+      estimate.recency_weighted_expectancy_net_quote,
+    ];
+    if (
+      estimate.availability === "NO_HISTORY" &&
+      (estimate.confidence !== "NO_HISTORY" || unavailable.some((value) => value !== null))
+    ) {
+      context.addIssue({ code: "custom", message: "inconsistent NO_HISTORY state" });
+    }
+  });
+export type ExperienceEstimate = z.infer<typeof experienceEstimateSchema>;

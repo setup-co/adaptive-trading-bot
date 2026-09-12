@@ -4,6 +4,8 @@ import {
   backendErrorSchema,
   chartSchema,
   decisionsPageSchema,
+  experienceContextsSchema,
+  experienceEstimateSchema,
   healthSchema,
   snapshotSchema,
   tradesPageSchema,
@@ -111,4 +113,16 @@ export const dashboardApi = {
     getValidated(`/api/v1/dashboard/decisions${queryString(query)}`, decisionsPageSchema, signal),
   trades: (query: Query, signal?: AbortSignal) =>
     getValidated(`/api/v1/dashboard/trades${queryString(query)}`, tradesPageSchema, signal),
+  experienceContexts: (query: Query, signal?: AbortSignal) =>
+    getValidated(
+      `/api/v1/dashboard/experience/contexts${queryString(query)}`,
+      experienceContextsSchema,
+      signal,
+    ),
+  experienceEstimate: (query: Query, signal?: AbortSignal) =>
+    getValidated(
+      `/api/v1/dashboard/experience/estimate${queryString(query)}`,
+      experienceEstimateSchema,
+      signal,
+    ),
 } as const;

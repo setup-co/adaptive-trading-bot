@@ -7,6 +7,8 @@ import {
   chartFixture,
   decisionFixture,
   decisionsPageFixture,
+  experienceContextsFixture,
+  experienceEstimateFixture,
   snapshotFixture,
   tradeFixture,
   tradesPageFixture,
@@ -14,6 +16,7 @@ import {
 } from "../test/fixtures";
 import { ChartPage } from "./ChartPage";
 import { DecisionsPage } from "./DecisionsPage";
+import { ExperiencePage } from "./ExperiencePage";
 import { HealthPage } from "./HealthPage";
 import { OverviewPage } from "./OverviewPage";
 import { TradesPage } from "./TradesPage";
@@ -200,6 +203,104 @@ describe("Trades", () => {
     expect(screen.getByText("-1.317999987723271594136")).toBeInTheDocument();
     expect(screen.getByText("-1.067580000000000000")).toBeInTheDocument();
     expect(screen.getAllByText("authoritative completed-trade analytics are unavailable")).toHaveLength(3);
+  });
+});
+
+describe("Experience", () => {
+  it("fetches authoritative contexts then renders distinct estimate concepts and hierarchy", async () => {
+    const contexts = vi.spyOn(dashboardApi, "experienceContexts").mockResolvedValue(
+      experienceContextsFixture,
+    );
+    const estimate = vi.spyOn(dashboardApi, "experienceEstimate").mockResolvedValue(
+      experienceEstimateFixture,
+    );
+    render(<ExperiencePage />);
+
+    expect(await screen.findByRole("heading", { name: "Posterior win probability" })).toBeInTheDocument();
+    expect(contexts).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("option", { name: /BTC\/USDT.*trend-pullback/i })).toBeInTheDocument();
+    expect(estimate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: "BTC/USDT",
+        strategy_id: "trend-pullback",
+        regime_label: "UPTREND",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByText("Confidence = evidence sufficiency, not probability of profit.")).toBeInTheDocument();
+    expect(screen.getByText("0.6056338028169014084563380281690141")).toBeInTheDocument();
+    expect(screen.getByText("0.64")).toBeInTheDocument();
+    expect(screen.getByText("0.3123456789012345678901234567890123")).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(6);
+    expect(screen.getAllByText(/not durable across process restarts/i)).toHaveLength(2);
+  });
+
+  it("renders NO_HISTORY without zero-filling unavailable estimates", async () => {
+    vi.spyOn(dashboardApi, "experienceContexts").mockResolvedValue(experienceContextsFixture);
+    vi.spyOn(dashboardApi, "experienceEstimate").mockResolvedValue({
+      ...experienceEstimateFixture,
+      availability: "NO_HISTORY",
+      confidence: "NO_HISTORY",
+      selected_key: null,
+      selected_level: null,
+      eligible_selected_raw_sample_count: 0,
+      selected_effective_sample_size: "0",
+      examined_hierarchy: experienceEstimateFixture.examined_hierarchy.map((row) => ({
+        ...row,
+        raw_eligible_sample_count: 0,
+        effective_sample_size: "0",
+        sufficient: false,
+      })),
+      prior_source: null,
+      prior_source_level: null,
+      prior_source_key: null,
+      prior_external_effective_sample_size: null,
+      prior_alpha: null,
+      prior_beta: null,
+      posterior_alpha: null,
+      posterior_beta: null,
+      posterior_mean_win_probability: null,
+      recency_weighted_win_rate: null,
+      recency_weighted_expectancy_r: null,
+      quote_currency: null,
+      recency_weighted_expectancy_net_quote: null,
+    });
+    render(<ExperiencePage />);
+
+    expect(await screen.findByText(/Numeric estimates remain unavailable/i)).toBeInTheDocument();
+    expect(screen.getAllByText("UNAVAILABLE").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^0\.0$/)).not.toBeInTheDocument();
+  });
+
+  it("renders insufficient evidence and explicit API failure", async () => {
+    vi.spyOn(dashboardApi, "experienceContexts").mockResolvedValue(experienceContextsFixture);
+    vi.spyOn(dashboardApi, "experienceEstimate").mockResolvedValueOnce({
+      ...experienceEstimateFixture,
+      availability: "INSUFFICIENT_EVIDENCE",
+      confidence: "INSUFFICIENT",
+      selected_key: experienceEstimateFixture.examined_hierarchy[4].key,
+      selected_level: "STRATEGY",
+      examined_hierarchy: experienceEstimateFixture.examined_hierarchy.map((row) => ({
+        ...row,
+        sufficient: false,
+      })),
+    });
+    const { unmount } = render(<ExperiencePage />);
+    expect(await screen.findByText(/configured evidence minimums are not met/i)).toBeInTheDocument();
+    unmount();
+
+    vi.spyOn(dashboardApi, "experienceContexts").mockRejectedValue(
+      new DashboardApiError(
+        "unavailable",
+        "dashboard Experience observation is temporarily unavailable",
+        "DASHBOARD_EXPERIENCE_PROVIDER_FAILURE",
+        503,
+      ),
+    );
+    render(<ExperiencePage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "dashboard Experience observation is temporarily unavailable",
+    );
   });
 });
 

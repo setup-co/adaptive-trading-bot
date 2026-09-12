@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from adaptive_trading_bot.config import Settings, get_settings
 from adaptive_trading_bot.dashboard import (
     MAX_DASHBOARD_CHART_CANDLES,
+    MAX_DASHBOARD_EXPERIENCE_CONTEXTS,
     MAX_DASHBOARD_JOURNAL_RECORDS,
     DashboardChartInvalidQueryResponse,
     DashboardChartProvider,
@@ -19,6 +20,13 @@ from adaptive_trading_bot.dashboard import (
     DashboardDecisionPage,
     DashboardDecisionPageResponse,
     DashboardDecisionTradeQuery,
+    DashboardExperienceContextPage,
+    DashboardExperienceContextPageResponse,
+    DashboardExperienceContextQuery,
+    DashboardExperienceEstimate,
+    DashboardExperienceEstimateQuery,
+    DashboardExperienceEstimateResponse,
+    DashboardExperienceInvalidQueryResponse,
     DashboardJournalInvalidQueryResponse,
     DashboardJournalProvider,
     DashboardSnapshot,
@@ -27,14 +35,31 @@ from adaptive_trading_bot.dashboard import (
     DashboardTradePage,
     DashboardTradePageResponse,
     DashboardUnavailableResponse,
+    ExperienceTradeSampleSnapshotSource,
+    SnapshotDashboardExperienceProvider,
     chart_response,
     dashboard_response,
     decision_page_response,
+    experience_context_page_response,
+    experience_estimate_response,
     trade_page_response,
 )
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
+from adaptive_trading_bot.experience import (
+    ExperienceContextFingerprint,
+    ExperienceEstimationConfiguration,
+    TrendStrengthBucket,
+)
 from adaptive_trading_bot.journal import TradeOutcomeClassification
 from adaptive_trading_bot.logging import configure_logging
+from adaptive_trading_bot.regime import (
+    Direction,
+    HigherTimeframeBias,
+    MultiTimeframeAlignment,
+    RegimeLabel,
+    VolatilityState,
+    VolumeState,
+)
 from adaptive_trading_bot.risk import OperationalSafetyStatus, RiskDecisionStatus
 from adaptive_trading_bot.storage import SourceId
 from adaptive_trading_bot.strategies import CandidateAction
@@ -52,12 +77,22 @@ def create_app(
     dashboard_provider: DashboardSnapshotProvider | None = None,
     chart_provider: DashboardChartProvider | None = None,
     journal_provider: DashboardJournalProvider | None = None,
+    experience_snapshot_source: ExperienceTradeSampleSnapshotSource | None = None,
+    experience_configuration: ExperienceEstimationConfiguration | None = None,
 ) -> FastAPI:
     """Build the API application without connecting to external services."""
 
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
     application = FastAPI(title=resolved_settings.app_name)
+    experience_provider = (
+        SnapshotDashboardExperienceProvider(
+            experience_snapshot_source,
+            experience_configuration,
+        )
+        if experience_snapshot_source is not None
+        else None
+    )
 
     @application.get("/health", response_model=HealthResponse, tags=["system"])
     async def health() -> HealthResponse:
@@ -233,6 +268,99 @@ def create_app(
             )
         return JSONResponse(response.model_dump(mode="json"))
 
+    @application.get(
+        "/api/v1/dashboard/experience/contexts",
+        response_model=DashboardExperienceContextPageResponse,
+        responses={
+            400: {"model": DashboardExperienceInvalidQueryResponse},
+            503: {"model": DashboardUnavailableResponse},
+        },
+        tags=["dashboard"],
+    )
+    async def dashboard_experience_contexts(
+        as_of: str,
+        limit: int = MAX_DASHBOARD_EXPERIENCE_CONTEXTS,
+    ) -> Response:
+        try:
+            query = DashboardExperienceContextQuery(_parse_datetime(as_of), limit)
+        except (TypeError, ValueError):
+            return _dashboard_invalid_experience_query()
+        if experience_provider is None:
+            return _dashboard_unavailable(
+                "DASHBOARD_EXPERIENCE_UNAVAILABLE",
+                "dashboard Experience provider is not configured",
+            )
+        try:
+            page = experience_provider.contexts(query)
+            if not isinstance(page, DashboardExperienceContextPage):
+                raise TypeError("provider returned an invalid Experience context page")
+            page.validate()
+            response = experience_context_page_response(page)
+        except Exception:
+            return _dashboard_unavailable(
+                "DASHBOARD_EXPERIENCE_PROVIDER_FAILURE",
+                "dashboard Experience observation is temporarily unavailable",
+            )
+        return JSONResponse(response.model_dump(mode="json"))
+
+    @application.get(
+        "/api/v1/dashboard/experience/estimate",
+        response_model=DashboardExperienceEstimateResponse,
+        responses={
+            400: {"model": DashboardExperienceInvalidQueryResponse},
+            503: {"model": DashboardUnavailableResponse},
+        },
+        tags=["dashboard"],
+    )
+    async def dashboard_experience_estimate(
+        as_of: str,
+        symbol: str,
+        strategy_id: str,
+        strategy_version: str,
+        entry_timeframe: str,
+        regime_label: str,
+        direction: str,
+        trend_strength_bucket: str,
+        volatility_state: str,
+        volume_state: str,
+        higher_timeframe_bias: str,
+        multi_timeframe_alignment: str,
+    ) -> Response:
+        try:
+            fingerprint = ExperienceContextFingerprint(
+                TradingSymbol.parse(symbol),
+                strategy_id,
+                strategy_version,
+                Timeframe(entry_timeframe),
+                RegimeLabel(regime_label),
+                Direction(direction),
+                TrendStrengthBucket(trend_strength_bucket),
+                VolatilityState(volatility_state),
+                VolumeState(volume_state),
+                HigherTimeframeBias(higher_timeframe_bias),
+                MultiTimeframeAlignment(multi_timeframe_alignment),
+            )
+            query = DashboardExperienceEstimateQuery(fingerprint, _parse_datetime(as_of))
+        except (TypeError, ValueError):
+            return _dashboard_invalid_experience_query()
+        if experience_provider is None:
+            return _dashboard_unavailable(
+                "DASHBOARD_EXPERIENCE_UNAVAILABLE",
+                "dashboard Experience provider is not configured",
+            )
+        try:
+            estimate = experience_provider.estimate(query)
+            if not isinstance(estimate, DashboardExperienceEstimate):
+                raise TypeError("provider returned an invalid Experience estimate")
+            estimate.validate()
+            response = experience_estimate_response(estimate)
+        except Exception:
+            return _dashboard_unavailable(
+                "DASHBOARD_EXPERIENCE_PROVIDER_FAILURE",
+                "dashboard Experience observation is temporarily unavailable",
+            )
+        return JSONResponse(response.model_dump(mode="json"))
+
     return application
 
 
@@ -248,6 +376,11 @@ def _dashboard_invalid_chart_query() -> JSONResponse:
 
 def _dashboard_invalid_journal_query() -> JSONResponse:
     response = DashboardJournalInvalidQueryResponse()
+    return JSONResponse(status_code=400, content=response.model_dump(mode="json"))
+
+
+def _dashboard_invalid_experience_query() -> JSONResponse:
+    response = DashboardExperienceInvalidQueryResponse()
     return JSONResponse(status_code=400, content=response.model_dump(mode="json"))
 
 

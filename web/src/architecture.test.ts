@@ -39,4 +39,12 @@ describe("frontend safety architecture", () => {
       .join("\n");
     expect(names).not.toMatch(/(?:calculate|compute|derive)(?:Pnl|PnL|Risk|Safety|RMultiple|Ema|Vwap)/);
   });
+
+  it("does not implement Experience estimation, fallback, confidence, or ranking formulas", () => {
+    const content = sources(join(process.cwd(), "src"))
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
+    expect(content).not.toMatch(/(?:calculate|compute|derive)(?:Posterior|Prior|Recency|Confidence|Fallback|Expectancy|Edge|Rank)/i);
+    expect(content).not.toMatch(/alpha\s*\+\s*.*success|beta\s*\+\s*.*failure|minimum_effective_sample_size/i);
+  });
 });
