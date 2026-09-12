@@ -22,7 +22,11 @@ from adaptive_trading_bot.experience import (
     TrendStrengthBucket,
     trend_strength_bucket,
 )
-from adaptive_trading_bot.journal import DecisionJournalEntry, DecisionJournalSnapshot
+from adaptive_trading_bot.journal import (
+    DecisionJournalEntry,
+    DecisionJournalSnapshot,
+    DecisionJournalValidationError,
+)
 from adaptive_trading_bot.journal.trade_outcome import (
     CompletedTradeJournalEntry,
     CompletedTradeJournalSnapshot,
@@ -40,6 +44,8 @@ from adaptive_trading_bot.regime import (
     TechnicalRegimeBatch,
     VolatilityState,
     VolumeState,
+    validate_multi_timeframe_regime_snapshot,
+    validate_technical_regime_snapshot,
 )
 from adaptive_trading_bot.risk import (
     OperationalSafetyGate,
@@ -523,7 +529,7 @@ def test_mutated_regime_and_outcome_authority_fail_closed() -> None:
     decision, trade = _complete()
     object.__setattr__(decision.context.multi_timeframe_regime.regime_15m, "trend_strength", 60)
     object.__setattr__(trade, "pre_trade_decision", deepcopy(decision))
-    with pytest.raises(ExperienceProjectionError, match="regime authority"):
+    with pytest.raises(DecisionJournalValidationError, match="context integrity seal"):
         PROJECTOR.project(*_snapshots((decision,), (trade,)))
 
     decision, trade = _complete()
@@ -552,7 +558,67 @@ def test_coordinated_valid_enum_regime_mutations_fail_before_sample_emission(
         mutation_target = multi.regime_15m if target == "anchor" else multi
         object.__setattr__(mutation_target, field_name, forged_value)
 
-    with pytest.raises(ExperienceProjectionError, match="regime authority"):
+    with pytest.raises(DecisionJournalValidationError, match="context integrity seal"):
+        PROJECTOR.project(*_snapshots((decision,), (trade,)))
+
+
+def _apply_coherent_context_mutation(
+    authority: DecisionJournalEntry[object, object], mutation: str
+) -> None:
+    context = authority.context
+    multi = context.multi_timeframe_regime
+    anchor = multi.regime_15m
+    if mutation == "volume":
+        object.__setattr__(context.features_15m, "volume_zscore_20", Decimal(1))
+        object.__setattr__(anchor, "volume_state", VolumeState.HIGH)
+        return
+    if mutation == "direction":
+        anchor_evidence = list(anchor.direction_evidence)
+        anchor_evidence[0] = DirectionEvidence(
+            DirectionComponent.EMA_ALIGNMENT, -20, "ema_20 below ema_50"
+        )
+        object.__setattr__(context.features_15m, "ema_20", Decimal(99))
+        object.__setattr__(anchor, "direction_evidence", tuple(anchor_evidence))
+        object.__setattr__(anchor, "direction_score", 0)
+        object.__setattr__(anchor, "trend_strength", 0)
+        object.__setattr__(anchor, "direction", Direction.NEUTRAL)
+        object.__setattr__(anchor, "regime_label", RegimeLabel.NEUTRAL)
+        object.__setattr__(multi, "alignment", MultiTimeframeAlignment.HTF_UP_ENTRY_DIVERGENT)
+        return
+    assert mutation == "higher_timeframe"
+    regime_4h = multi.regime_4h
+    assert regime_4h is not None
+    htf_evidence = tuple(
+        replace(item, contribution=-20)
+        if item.component in {DirectionComponent.EMA_ALIGNMENT, DirectionComponent.MOMENTUM_16}
+        else item
+        for item in regime_4h.direction_evidence
+    )
+    object.__setattr__(regime_4h, "direction_evidence", htf_evidence)
+    object.__setattr__(regime_4h, "direction_score", -40)
+    object.__setattr__(regime_4h, "trend_strength", 40)
+    object.__setattr__(regime_4h, "direction", Direction.DOWN)
+    object.__setattr__(regime_4h, "regime_label", RegimeLabel.DOWNTREND)
+    object.__setattr__(multi, "higher_timeframe_bias", HigherTimeframeBias.MIXED)
+    object.__setattr__(multi, "alignment", MultiTimeframeAlignment.MIXED)
+
+
+@pytest.mark.parametrize("mutation", ("volume", "direction", "higher_timeframe"))
+def test_coherent_coordinated_context_mutation_is_rejected_by_original_seal(
+    mutation: str,
+) -> None:
+    decision, trade = _complete()
+    for authority in (decision, trade.pre_trade_decision):
+        _apply_coherent_context_mutation(authority, mutation)
+        context = authority.context
+        validate_technical_regime_snapshot(
+            context.multi_timeframe_regime.regime_15m,
+            context.features_15m,
+            context.structure_15m,
+        )
+        validate_multi_timeframe_regime_snapshot(context.multi_timeframe_regime)
+
+    with pytest.raises(DecisionJournalValidationError, match="context integrity seal"):
         PROJECTOR.project(*_snapshots((decision,), (trade,)))
 
 
