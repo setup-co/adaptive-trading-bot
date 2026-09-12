@@ -19,6 +19,7 @@ from adaptive_trading_bot.experience import (
     ExperienceFallbackLevel,
     ExperienceMetricAvailability,
     ExperienceMetricUnavailableReason,
+    ExperienceProjectionError,
     ExperienceTradeSample,
     ExperienceTradeSampleSnapshot,
 )
@@ -515,6 +516,42 @@ def test_malformed_snapshot_or_sample_fails_before_aggregation(
         object.__setattr__(sample, "outcome_classification", "LOSS")
 
     with pytest.raises((ExperienceAggregationError, ValueError)):
+        AGGREGATOR.aggregate(snapshot)
+
+
+@pytest.mark.parametrize("mutation", ("net_outcome", "realized_r_outcome", "fingerprint_keys"))
+def test_coherent_post_creation_sample_mutation_fails_at_authority_boundary(
+    base_sample: ExperienceTradeSample, mutation: str
+) -> None:
+    sample = _sample(
+        base_sample,
+        1,
+        net=Decimal(-10),
+        gross=Decimal(-9),
+        fees=Decimal(1),
+        realized_r=Decimal(-1),
+        outcome="LOSS",
+    )
+    snapshot = _snapshot(sample)
+    if mutation == "net_outcome":
+        object.__setattr__(sample, "net_realized_pnl", Decimal(10))
+        object.__setattr__(sample, "outcome_classification", "PROFIT")
+    elif mutation == "realized_r_outcome":
+        forged_net = sample.approved_risk_quote
+        object.__setattr__(sample, "gross_realized_pnl", forged_net + sample.total_trade_fees_quote)
+        object.__setattr__(sample, "net_realized_pnl", forged_net)
+        object.__setattr__(sample, "realized_r_net", Decimal(1))
+        object.__setattr__(sample, "outcome_classification", "PROFIT")
+    else:
+        forged_direction = (
+            Direction.DOWN if sample.fingerprint.direction is Direction.UP else Direction.UP
+        )
+        object.__setattr__(sample.fingerprint, "direction", forged_direction)
+        full_context = sample.hierarchical_keys[0]
+        assert full_context.level is ExperienceFallbackLevel.FULL_CONTEXT
+        object.__setattr__(full_context, "direction", forged_direction)
+
+    with pytest.raises(ExperienceProjectionError, match="sample integrity seal mismatch"):
         AGGREGATOR.aggregate(snapshot)
 
 

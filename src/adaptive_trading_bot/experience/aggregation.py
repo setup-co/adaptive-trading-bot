@@ -271,17 +271,6 @@ def _validated_samples(
         if not isinstance(sample, ExperienceTradeSample):
             raise TypeError("sample snapshot contains an invalid sample")
         sample.validate()
-        expected_classification = (
-            "PROFIT"
-            if sample.net_realized_pnl > 0
-            else "LOSS"
-            if sample.net_realized_pnl < 0
-            else "BREAKEVEN"
-        )
-        if sample.outcome_classification != expected_classification:
-            raise ExperienceAggregationError(
-                "sample outcome classification contradicts authoritative net PnL"
-            )
         if any(sample.decision_identity == identity for identity in identities):
             raise ExperienceAggregationError("duplicate DecisionIdentity sample")
         identities.append(sample.decision_identity)

@@ -432,12 +432,28 @@ def test_exact_decision_identity_join_and_reprojection_are_deterministic() -> No
     assert first.samples[0].decision_identity == trade.identity.originating_decision_identity
 
 
+def test_sample_integrity_seal_is_deterministic_and_survives_detached_copy() -> None:
+    _, _, sample = _project_one()
+    _, _, equivalent = _project_one()
+    detached = deepcopy(sample)
+
+    assert sample.sample_integrity_seal == equivalent.sample_integrity_seal
+    assert len(sample.sample_integrity_seal) == 64
+    assert detached.sample_integrity_seal == sample.sample_integrity_seal
+    detached.validate()
+
+    object.__setattr__(detached, "accounting_exit_fill_id", "forged-exit-fill")
+    with pytest.raises(ExperienceProjectionError, match="sample integrity seal mismatch"):
+        detached.validate()
+
+
 def test_contracts_are_immutable_and_schema_versioned() -> None:
     _, _, sample = _project_one()
     snapshot = experience_module.ExperienceTradeSampleSnapshot((sample,))
 
     assert sample.fingerprint.fingerprint_schema_version == "1.0.0"
     assert sample.sample_schema_version == "1.0.0"
+    assert len(sample.sample_integrity_seal) == 64
     assert snapshot.sample_snapshot_schema_version == "1.0.0"
     assert all(key.key_schema_version == "1.0.0" for key in sample.hierarchical_keys)
     with pytest.raises(FrozenInstanceError):
