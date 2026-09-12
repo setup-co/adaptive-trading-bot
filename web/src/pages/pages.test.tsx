@@ -68,6 +68,8 @@ describe("Chart", () => {
     expect(screen.getByText("DIRTY")).toBeInTheDocument();
     expect(screen.getByText(/no repair was applied/i)).toBeInTheDocument();
     expect(screen.getByText("completed trade entry")).toBeInTheDocument();
+    expect(screen.getByText("100.05")).toBeInTheDocument();
+    expect(screen.getByText("2026-09-10T11:30:00Z · BUY")).toBeInTheDocument();
     expect(screen.getAllByText("authoritative historical feature series is unavailable")).toHaveLength(4);
     expect(screen.queryByText(/calculated/i)).not.toBeInTheDocument();
   });

@@ -83,6 +83,8 @@ th, td { padding: .7rem; border-bottom: 1px solid #1b3045; white-space: nowrap; 
 .chart-panel { padding: .35rem; overflow: hidden; }
 .chart-canvas { min-height: 420px; width: 100%; }
 .chart-empty { display: grid; place-items: center; min-height: 18rem; color: var(--muted); }
+.marker-render-warning { margin: .65rem; padding: .75rem; border: 1px solid #b88642; border-radius: .6rem; background: #2a2115; color: #ffd394; font-size: .78rem; }
+.marker-render-warning ul { margin: .5rem 0 0; padding-left: 1.2rem; }
 .reason-list { margin: .75rem 0 0; padding-left: 1.1rem; color: #b8c6d7; font-size: .75rem; }
 .reason-list li { margin-bottom: .42rem; }
 .reason-list small { margin: .2rem 0 .6rem; }

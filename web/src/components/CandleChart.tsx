@@ -6,12 +6,54 @@ import {
   HistogramSeries,
   type Time,
 } from "lightweight-charts";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type { DashboardChart } from "../api/schemas";
 
+type ChartMarker = DashboardChart["markers"][number];
+
+type MarkerDisplayMapping = {
+  rendered: Array<{
+    time: Time;
+    position: "aboveBar" | "belowBar";
+    color: string;
+    shape: "arrowDown" | "arrowUp";
+    text: string;
+  }>;
+  notRendered: ChartMarker[];
+};
+
+// Exported only for deterministic adapter-boundary regression tests.
+// eslint-disable-next-line react-refresh/only-export-components
+export function mapMarkersToCandleDisplayTimes(data: DashboardChart): MarkerDisplayMapping {
+  const rendered: MarkerDisplayMapping["rendered"] = [];
+  const notRendered: ChartMarker[] = [];
+
+  for (const marker of data.markers) {
+    const markerTime = Date.parse(marker.timestamp);
+    const containingCandle = data.candles.find(
+      (candle) =>
+        Date.parse(candle.open_time) <= markerTime && markerTime < Date.parse(candle.close_time),
+    );
+    if (containingCandle === undefined) {
+      notRendered.push(marker);
+      continue;
+    }
+    rendered.push({
+      // This candle open is a display coordinate only. The marker timestamp remains unchanged.
+      time: Math.floor(Date.parse(containingCandle.open_time) / 1000) as Time,
+      position: marker.side === "BUY" ? "belowBar" : "aboveBar",
+      color: marker.side === "BUY" ? "#3dd6a6" : "#ff9d66",
+      shape: marker.side === "BUY" ? "arrowUp" : "arrowDown",
+      text: marker.label,
+    });
+  }
+  return { rendered, notRendered };
+}
+
 export function CandleChart({ data }: { data: DashboardChart }) {
   const target = useRef<HTMLDivElement>(null);
+  const markerMapping = useMemo(() => mapMarkersToCandleDisplayTimes(data), [data]);
 
   useEffect(() => {
     if (!target.current || data.candles.length === 0) return;
@@ -51,16 +93,7 @@ export function CandleChart({ data }: { data: DashboardChart }) {
         value: Number(item.volume),
       })),
     );
-    createSeriesMarkers(
-      candles,
-      data.markers.map((marker) => ({
-        time: Math.floor(Date.parse(marker.timestamp) / 1000) as Time,
-        position: marker.side === "BUY" ? "belowBar" : "aboveBar",
-        color: marker.side === "BUY" ? "#3dd6a6" : "#ff9d66",
-        shape: marker.side === "BUY" ? "arrowUp" : "arrowDown",
-        text: marker.label,
-      })),
-    );
+    createSeriesMarkers(candles, markerMapping.rendered);
     chart.timeScale().fitContent();
     const resize = new ResizeObserver(([entry]) => {
       chart.applyOptions({ width: entry.contentRect.width });
@@ -70,8 +103,27 @@ export function CandleChart({ data }: { data: DashboardChart }) {
       resize.disconnect();
       chart.remove();
     };
-  }, [data]);
+  }, [data, markerMapping]);
 
-  if (data.candles.length === 0) return <div className="chart-empty">No candles in range.</div>;
-  return <div className="chart-canvas" data-testid="candle-chart" ref={target} />;
+  return (
+    <>
+      {data.candles.length === 0 ? (
+        <div className="chart-empty">No candles in range.</div>
+      ) : (
+        <div className="chart-canvas" data-testid="candle-chart" ref={target} />
+      )}
+      {markerMapping.notRendered.length > 0 && (
+        <section className="marker-render-warning" role="status">
+          <strong>Not rendered on chart — no returned candle contains these marker times</strong>
+          <ul>
+            {markerMapping.notRendered.map((marker) => (
+              <li key={`${marker.identity}-${marker.kind}-${marker.timestamp}`}>
+                {marker.label}: <time>{marker.timestamp}</time> @ <span className="mono">{marker.price}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
+  );
 }

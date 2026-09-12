@@ -27,7 +27,9 @@ describe("frontend safety architecture", () => {
   it("confines Decimal-to-number conversion to the chart renderer", () => {
     const files = sources(join(process.cwd(), "src"));
     for (const path of files.filter((value) => !value.endsWith("CandleChart.tsx"))) {
-      expect(readFileSync(path, "utf8"), path).not.toMatch(/\b(?:Number|parseFloat)\s*\(/);
+      expect(readFileSync(path, "utf8"), path).not.toMatch(
+        /(?:\b(?:Number|parseFloat)\s*\(|\bDate\.parse\s*\()/,
+      );
     }
   });
 
