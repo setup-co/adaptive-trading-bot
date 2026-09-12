@@ -16,8 +16,9 @@ from hmac import compare_digest
 from json import dumps
 from typing import Protocol, runtime_checkable
 
-from adaptive_trading_bot.domain import Timeframe, TradingSymbol
+from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.features import FeatureSnapshot, StructureSnapshot
 from adaptive_trading_bot.journal import (
     DecisionIdentity,
     DecisionJournalEntry,
@@ -31,6 +32,7 @@ from adaptive_trading_bot.regime import (
     Direction,
     HigherTimeframeBias,
     MultiTimeframeAlignment,
+    MultiTimeframeRegimeSnapshot,
     RegimeCompositionError,
     RegimeLabel,
     TechnicalRegimeError,
@@ -58,6 +60,34 @@ class ExperienceProjectionError(ValueError):
 class _SourceIdentity(Protocol):
     @property
     def value(self) -> str: ...
+
+
+@runtime_checkable
+class ExperienceFingerprintContext(Protocol):
+    """Narrow pre-trade authority needed for canonical Experience fingerprinting."""
+
+    @property
+    def source_id(self) -> _SourceIdentity: ...
+
+    @property
+    def symbol(self) -> TradingSymbol: ...
+
+    @property
+    def observed_at(self) -> datetime: ...
+
+    @property
+    def candle_15m(self) -> Candle: ...
+
+    @property
+    def features_15m(self) -> FeatureSnapshot: ...
+
+    @property
+    def structure_15m(self) -> StructureSnapshot: ...
+
+    @property
+    def multi_timeframe_regime(self) -> MultiTimeframeRegimeSnapshot: ...
+
+    def validate(self) -> None: ...
 
 
 class TrendStrengthBucket(StrEnum):
@@ -365,6 +395,11 @@ class ExperienceTradeSampleSnapshot:
     sample_snapshot_schema_version: str = field(init=False, default=_SAMPLE_SNAPSHOT_SCHEMA_VERSION)
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate snapshot schema, seals, ordering, and uniqueness."""
+
         if not isinstance(self.samples, tuple):
             raise TypeError("Experience samples must be an immutable tuple")
         if self.sample_snapshot_schema_version != _SAMPLE_SNAPSHOT_SCHEMA_VERSION:
@@ -494,7 +529,11 @@ def _project_sample(
     ):
         raise ExperienceProjectionError("completed trade learning chronology is invalid")
 
-    fingerprint = _fingerprint(decision)
+    fingerprint = experience_context_fingerprint(
+        decision.context,
+        decision.identity.strategy_id,
+        decision.identity.strategy_version,
+    )
     return ExperienceTradeSample(
         decision_identity=deepcopy(decision.identity),
         source_id=deepcopy(decision.identity.source_id),
@@ -522,10 +561,16 @@ def _project_sample(
     )
 
 
-def _fingerprint(
-    decision: DecisionJournalEntry[object, object],
+def experience_context_fingerprint(
+    context: ExperienceFingerprintContext,
+    strategy_id: str,
+    strategy_version: str,
 ) -> ExperienceContextFingerprint:
-    context = decision.context
+    """Derive the one canonical fingerprint from validated causal pre-trade authority."""
+
+    if not isinstance(context, ExperienceFingerprintContext):
+        raise TypeError("context must provide validated pre-trade fingerprint authority")
+    context.validate()
     regime = context.multi_timeframe_regime
     anchor = regime.regime_15m
     if context.candle_15m.timeframe is not Timeframe.MINUTES_15:
@@ -538,8 +583,8 @@ def _fingerprint(
     bucket = trend_strength_bucket(anchor.trend_strength)
     return ExperienceContextFingerprint(
         symbol=deepcopy(context.symbol),
-        strategy_id=decision.identity.strategy_id,
-        strategy_version=decision.identity.strategy_version,
+        strategy_id=strategy_id,
+        strategy_version=strategy_version,
         entry_timeframe=context.candle_15m.timeframe,
         regime_label=anchor.regime_label,
         direction=anchor.direction,

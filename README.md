@@ -142,6 +142,11 @@ cannot supply estimates or trading authority. Contexts and estimates are causal 
 UTC timestamp, preserve exact hierarchy and prior/posterior provenance, and transport Decimal
 values as strings. No-history and insufficient-evidence states remain explicit.
 
+The shadow-only Experience candidate advisor consumes the same canonical pre-trade fingerprint and
+concrete estimator authority. It records evidence usability, descriptive outcome bias, and a
+counterfactual `would_block_candidate` audit flag without changing the strategy candidate, calling
+Risk or Safety, or affecting order, Paper, or Live behavior.
+
 ## Market-data domain conventions
 
 Internal symbols use normalized exchange-neutral `BASE/QUOTE` notation. V1 candle timeframes are
