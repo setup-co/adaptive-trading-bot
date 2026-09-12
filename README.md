@@ -73,6 +73,30 @@ Run the API locally (the host and port shown match the safe defaults):
 uvicorn adaptive_trading_bot.api:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+The isolated React/TypeScript operator Dashboard lives in `web/`. With the FastAPI process
+running on port 8000, install its locked dependencies and start the Vite development server:
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+Frontend application code uses only same-origin `GET` observation URLs. During development,
+Vite proxies `/api` and `/health` to `http://127.0.0.1:8000`; there is no hard-coded production
+host and no Node application server. The Dashboard is observation-only: it has no order, account,
+settings, or Live-trading controls. Production static serving and deployment remain deferred.
+
+Run all frontend quality gates independently of backend availability:
+
+```bash
+cd web
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
 Run the same quality gates used by CI:
 
 ```bash
@@ -104,6 +128,12 @@ findings remain visible without interpolation, while unsafe storage failures ret
 `503`; indicator history without an authoritative source is explicitly unavailable. Candle opens
 and authoritative Paper/Journal marker events use `[start, end)` filtering. The open-position stop
 level is anchored to its recorded entry-fill time and is never inferred as a trailing series.
+
+`GET /api/v1/dashboard/decisions` and `GET /api/v1/dashboard/trades` provide bounded, strictly
+read-only journal observations. The frontend preserves Strategy, Risk, and Operational Safety as
+separate layers and displays only exact completed-trade outcome facts returned by the backend.
+Decimal strings remain strings in frontend state; unavailable audit, Fundamental, Experience,
+MFE, MAE, and process-score facts remain explicitly unavailable rather than becoming zero.
 
 ## Market-data domain conventions
 

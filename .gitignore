@@ -10,4 +10,7 @@ dist/
 build/
 .coverage
 htmlcov/
+node_modules/
+coverage/
+*.tsbuildinfo
 /data/market_data/
