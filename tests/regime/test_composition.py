@@ -22,6 +22,7 @@ from adaptive_trading_bot.regime import (
     TechnicalRegimeSnapshot,
     VolatilityState,
     VolumeState,
+    validate_multi_timeframe_regime_snapshot,
 )
 from adaptive_trading_bot.storage import SourceId
 
@@ -96,6 +97,24 @@ def ready_context(
         )
     )
     return result.snapshots[0]
+
+
+def test_authoritative_composition_validator_rederives_all_composed_facts() -> None:
+    context = ready_context(Direction.NEUTRAL, Direction.NEUTRAL, Direction.NEUTRAL)
+
+    validate_multi_timeframe_regime_snapshot(context)
+
+    for field_name, value in (
+        ("age_1h", timedelta(minutes=1)),
+        ("is_4h_fresh", False),
+        ("is_fully_ready", False),
+        ("higher_timeframe_bias", HigherTimeframeBias.MIXED),
+        ("alignment", MultiTimeframeAlignment.MIXED),
+    ):
+        with pytest.raises(CompositionSeriesError, match="derivation"):
+            validate_multi_timeframe_regime_snapshot(
+                replace(context, **{field_name: value})  # type: ignore[arg-type]
+            )
 
 
 def test_missing_one_hour_is_not_ready_with_unknown_bias() -> None:

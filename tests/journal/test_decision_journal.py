@@ -1,4 +1,5 @@
 import ast
+from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -316,6 +317,20 @@ def test_identity_entry_batch_and_snapshot_are_immutable_and_versioned() -> None
         result.total_count = 0  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         snapshot.entries = ()  # type: ignore[misc]
+
+
+def test_pretrade_context_integrity_seal_survives_deepcopy_and_rejects_raw_mutation() -> None:
+    entry = _entry()
+    detached = deepcopy(entry)
+
+    assert _entry().pre_trade_context_integrity_seal == entry.pre_trade_context_integrity_seal
+    assert detached.pre_trade_context_integrity_seal == entry.pre_trade_context_integrity_seal
+    assert len(detached.pre_trade_context_integrity_seal) == 64
+    detached.validate()
+
+    object.__setattr__(detached.context.features_15m, "volume_zscore_20", Decimal(1))
+    with pytest.raises(DecisionJournalValidationError, match="context integrity seal"):
+        detached.validate()
 
 
 @pytest.mark.parametrize(

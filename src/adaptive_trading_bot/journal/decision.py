@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal
+from enum import Enum
+from hashlib import sha256
+from hmac import compare_digest
+from json import dumps
 
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
@@ -22,6 +27,7 @@ from adaptive_trading_bot.strategies.core import (
 )
 
 _JOURNAL_SCHEMA_VERSION = "1.0.0"
+_PRE_TRADE_CONTEXT_SEAL_VERSION = "1.0.0"
 
 
 class DecisionJournalValidationError(ValueError):
@@ -83,28 +89,104 @@ class DecisionJournalEntry[ReasonT, AuditT]:
     risk_decision: RiskDecision
     safety_decision: OperationalSafetyDecision
     identity: DecisionIdentity = field(init=False)
+    pre_trade_context_integrity_seal: str = field(init=False, repr=False)
     journal_schema_version: str = field(init=False, default=_JOURNAL_SCHEMA_VERSION)
 
     def __post_init__(self) -> None:
         identity = _identity_for(self.strategy_evaluation)
         object.__setattr__(self, "identity", identity)
-        self.validate()
+        _validate_entry_chain(self)
+        object.__setattr__(
+            self,
+            "pre_trade_context_integrity_seal",
+            _pre_trade_context_integrity_seal(identity, self.context),
+        )
 
     def validate(self) -> None:
-        """Revalidate the immutable chain before each append."""
+        """Revalidate the immutable chain and its creation-time context seal."""
 
         if self.journal_schema_version != _JOURNAL_SCHEMA_VERSION:
             raise DecisionJournalValidationError("journal schema version mismatch")
-        if self.identity != _identity_for(self.strategy_evaluation):
-            raise DecisionJournalValidationError("decision identity does not match strategy")
-        _validate_context_to_strategy(self.context, self.strategy_evaluation)
-        _validate_strategy_to_risk(self.strategy_evaluation, self.risk_decision)
-        _validate_risk_to_safety(self.risk_decision, self.safety_decision)
-        _validate_final_permission(
-            self.strategy_evaluation,
-            self.risk_decision,
-            self.safety_decision,
+        seal = self.pre_trade_context_integrity_seal
+        if not isinstance(seal, str) or not compare_digest(
+            seal, _pre_trade_context_integrity_seal(self.identity, self.context)
+        ):
+            raise DecisionJournalValidationError("pre-trade context integrity seal mismatch")
+        _validate_entry_chain(self)
+
+
+def _validate_entry_chain(entry: DecisionJournalEntry[object, object]) -> None:
+    if entry.journal_schema_version != _JOURNAL_SCHEMA_VERSION:
+        raise DecisionJournalValidationError("journal schema version mismatch")
+    if entry.identity != _identity_for(entry.strategy_evaluation):
+        raise DecisionJournalValidationError("decision identity does not match strategy")
+    _validate_context_to_strategy(entry.context, entry.strategy_evaluation)
+    _validate_strategy_to_risk(entry.strategy_evaluation, entry.risk_decision)
+    _validate_risk_to_safety(entry.risk_decision, entry.safety_decision)
+    _validate_final_permission(
+        entry.strategy_evaluation,
+        entry.risk_decision,
+        entry.safety_decision,
+    )
+
+
+def _pre_trade_context_integrity_seal(
+    identity: DecisionIdentity, context: StrategyEvaluationContext
+) -> str:
+    payload = dumps(
+        (
+            "adaptive-trading-bot/pre-trade-context",
+            _PRE_TRADE_CONTEXT_SEAL_VERSION,
+            _canonical_integrity_value(identity),
+            _canonical_integrity_value(context),
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
+def _canonical_integrity_value(value: object) -> object:
+    if value is None:
+        return ("none",)
+    if isinstance(value, Enum):
+        return (
+            "enum",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            _canonical_integrity_value(value.value),
         )
+    if isinstance(value, datetime):
+        return ("datetime", value.isoformat(timespec="microseconds"), value.fold)
+    if isinstance(value, timedelta):
+        return ("timedelta", value.days, value.seconds, value.microseconds)
+    if isinstance(value, Decimal):
+        decimal_tuple = value.as_tuple()
+        return (
+            "decimal",
+            decimal_tuple.sign,
+            tuple(decimal_tuple.digits),
+            str(decimal_tuple.exponent),
+        )
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, tuple):
+        return ("tuple", tuple(_canonical_integrity_value(item) for item in value))
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            "dataclass",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            tuple(
+                (item.name, _canonical_integrity_value(getattr(value, item.name)))
+                for item in fields(value)
+            ),
+        )
+    raise DecisionJournalValidationError(
+        f"pre-trade context contains unsupported integrity type {type(value).__qualname__}"
+    )
 
 
 @dataclass(frozen=True, slots=True)

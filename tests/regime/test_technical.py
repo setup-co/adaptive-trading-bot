@@ -25,6 +25,7 @@ from adaptive_trading_bot.regime import (
     TechnicalRegimeSnapshot,
     VolatilityState,
     VolumeState,
+    validate_technical_regime_snapshot,
 )
 from adaptive_trading_bot.storage import SourceId
 
@@ -119,6 +120,35 @@ def classify(
         (structure_snapshot(feature, high_relation=high_relation, low_relation=low_relation),),
     )
     return engine.process(feature_batch, structure_batch).snapshots[0]
+
+
+def test_authoritative_technical_validator_rederives_all_classification_facts() -> None:
+    feature = feature_snapshot(
+        ema_20=Decimal(101),
+        momentum_16=Decimal(1),
+        volume_zscore_20=Decimal(1),
+    )
+    structure = structure_snapshot(feature)
+    snapshot = (
+        TechnicalRegimeEngine(TechnicalRegimeConfiguration(minimum_volatility_samples=1))
+        .process(*batches((feature,), (structure,)))
+        .snapshots[0]
+    )
+
+    validate_technical_regime_snapshot(snapshot, feature, structure)
+
+    for field_name, value in (
+        ("direction", Direction.DOWN),
+        ("regime_label", RegimeLabel.DOWNTREND),
+        ("volatility_state", VolatilityState.HIGH),
+        ("volume_state", VolumeState.NORMAL),
+    ):
+        with pytest.raises(RegimeSeriesError, match="inconsistent"):
+            validate_technical_regime_snapshot(
+                replace(snapshot, **{field_name: value}),  # type: ignore[arg-type]
+                feature,
+                structure,
+            )
 
 
 @pytest.mark.parametrize(
