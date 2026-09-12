@@ -18,7 +18,18 @@ from adaptive_trading_bot.experience.core import (
     ExperienceTradeSample,
     ExperienceTradeSampleSnapshot,
     TrendStrengthBucket,
+    experience_context_hierarchy,
     trend_strength_bucket,
+)
+from adaptive_trading_bot.experience.estimation import (
+    ExperienceEstimate,
+    ExperienceEstimateAvailability,
+    ExperienceEstimationConfiguration,
+    ExperienceEstimationError,
+    ExperienceEstimator,
+    ExperienceEvidenceConfidence,
+    ExperienceHierarchyEvidence,
+    ExperiencePriorSource,
 )
 
 __all__ = [
@@ -29,13 +40,22 @@ __all__ = [
     "ExperienceContextFingerprint",
     "ExperienceContextKey",
     "ExperienceDecimalMetric",
+    "ExperienceEstimate",
+    "ExperienceEstimateAvailability",
+    "ExperienceEstimationConfiguration",
+    "ExperienceEstimationError",
+    "ExperienceEstimator",
+    "ExperienceEvidenceConfidence",
     "ExperienceFallbackLevel",
+    "ExperienceHierarchyEvidence",
     "ExperienceMetricAvailability",
     "ExperienceMetricUnavailableReason",
+    "ExperiencePriorSource",
     "ExperienceProjectionError",
     "ExperienceSampleProjector",
     "ExperienceTradeSample",
     "ExperienceTradeSampleSnapshot",
     "TrendStrengthBucket",
+    "experience_context_hierarchy",
     "trend_strength_bucket",
 ]

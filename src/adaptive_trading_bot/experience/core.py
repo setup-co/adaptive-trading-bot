@@ -499,7 +499,7 @@ def _project_sample(
         decision_identity=deepcopy(decision.identity),
         source_id=deepcopy(decision.identity.source_id),
         fingerprint=fingerprint,
-        hierarchical_keys=_hierarchy(fingerprint),
+        hierarchical_keys=experience_context_hierarchy(fingerprint),
         entry_decision_at=decision.identity.observed_at,
         entry_fill_at=trade.entry_fill_at,
         exit_fill_at=trade.exit_fill_at,
@@ -551,7 +551,14 @@ def _fingerprint(
     )
 
 
-def _hierarchy(fingerprint: ExperienceContextFingerprint) -> tuple[ExperienceContextKey, ...]:
+def experience_context_hierarchy(
+    fingerprint: ExperienceContextFingerprint,
+) -> tuple[ExperienceContextKey, ...]:
+    """Return the one canonical most-specific-to-broadest Experience hierarchy."""
+
+    if not isinstance(fingerprint, ExperienceContextFingerprint):
+        raise TypeError("fingerprint must be an ExperienceContextFingerprint")
+    fingerprint.validate()
     return (
         ExperienceContextKey(
             ExperienceFallbackLevel.FULL_CONTEXT,
@@ -607,7 +614,7 @@ def _validate_hierarchy(
         if not isinstance(key, ExperienceContextKey):
             raise TypeError("hierarchical keys contain an invalid value")
         key.validate()
-    if keys != _hierarchy(fingerprint):
+    if keys != experience_context_hierarchy(fingerprint):
         raise ExperienceProjectionError("sample hierarchy does not match its fingerprint")
 
 
