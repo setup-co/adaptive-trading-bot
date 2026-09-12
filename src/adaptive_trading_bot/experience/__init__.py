@@ -1,5 +1,14 @@
 """Causal, authority-preserving Experience sample contracts."""
 
+from adaptive_trading_bot.experience.aggregation import (
+    ExperienceAggregate,
+    ExperienceAggregateSnapshot,
+    ExperienceAggregationError,
+    ExperienceAggregator,
+    ExperienceDecimalMetric,
+    ExperienceMetricAvailability,
+    ExperienceMetricUnavailableReason,
+)
 from adaptive_trading_bot.experience.core import (
     ExperienceContextFingerprint,
     ExperienceContextKey,
@@ -13,9 +22,16 @@ from adaptive_trading_bot.experience.core import (
 )
 
 __all__ = [
+    "ExperienceAggregate",
+    "ExperienceAggregateSnapshot",
+    "ExperienceAggregationError",
+    "ExperienceAggregator",
     "ExperienceContextFingerprint",
     "ExperienceContextKey",
+    "ExperienceDecimalMetric",
     "ExperienceFallbackLevel",
+    "ExperienceMetricAvailability",
+    "ExperienceMetricUnavailableReason",
     "ExperienceProjectionError",
     "ExperienceSampleProjector",
     "ExperienceTradeSample",
