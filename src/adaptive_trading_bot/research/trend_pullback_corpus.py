@@ -632,16 +632,7 @@ def _validate_corpus(corpus: TrendPullbackHistoricalResearchCorpus) -> None:
             or item.identity.strategy_version != corpus.configuration.strategy_version
         ):
             raise TrendPullbackResearchCorpusError("decision lies outside corpus provenance")
-        risk = item.decision.risk_decision
-        if (
-            risk.account_equity_quote != corpus.configuration.research_equity_quote
-            or risk.day_start_equity_quote != corpus.configuration.research_equity_quote
-            or risk.peak_equity_quote != corpus.configuration.research_equity_quote
-            or risk.current_open_risk_quote != 0
-            or risk.current_gross_exposure_quote != 0
-        ):
-            raise TrendPullbackResearchCorpusError("decision violates independent research capital")
-        _validate_admission_audit(item.decision, corpus.configuration)
+        _validate_admission_authorities(item.decision, corpus.configuration)
     counts = _corpus_counts(corpus.decisions)
     if any(getattr(corpus, name) != value for name, value in counts.items()):
         raise TrendPullbackResearchCorpusError("corpus aggregate count is inconsistent")
@@ -661,36 +652,40 @@ def _validate_corpus(corpus: TrendPullbackHistoricalResearchCorpus) -> None:
         raise TrendPullbackResearchCorpusError("corpus digest is inconsistent")
 
 
-def _validate_admission_audit(
+def _validate_admission_authorities(
     decision: DecisionJournalEntry[object, object],
     configuration: ResearchAdmissionConfiguration,
 ) -> None:
-    risk = decision.risk_decision
-    safety = decision.safety_decision
-    risk_configuration = configuration.risk_manager_configuration
-    safety_configuration = configuration.safety_configuration
-    assumptions = configuration.safety_assumptions
-    if (
-        risk.risk_policy_version != risk_configuration.risk_policy_version
-        or risk.max_daily_loss_fraction != risk_configuration.max_daily_loss_fraction
-        or risk.max_drawdown_fraction != risk_configuration.max_drawdown_fraction
-        or safety.safety_policy_version != safety_configuration.safety_policy_version
-        or safety.max_market_data_age_seconds != safety_configuration.max_market_data_age_seconds
-        or safety.max_spread_bps != safety_configuration.max_spread_bps
-        or safety.max_abs_time_sync_offset_ms != safety_configuration.max_abs_time_sync_offset_ms
-        or safety.max_consecutive_order_rejections
-        != safety_configuration.max_consecutive_order_rejections
-        or safety.market_data_observed_at != decision.identity.observed_at
-        or safety.feed_integrity_state is not assumptions.feed_integrity_state
-        or safety.exchange_api_health_state is not assumptions.exchange_api_health_state
-        or safety.spread_bps != assumptions.assumed_spread_bps
-        or safety.time_sync_offset_ms != assumptions.assumed_time_sync_offset_ms
-        or safety.volatility_safety_state is not assumptions.volatility_safety_state
-        or safety.suspicious_price_anomaly is not assumptions.assumed_suspicious_price_anomaly
-        or safety.consecutive_order_rejections != assumptions.assumed_consecutive_order_rejections
-    ):
+    expected_strategy = TrendPullbackStrategy().evaluate(decision.context)
+    if expected_strategy != decision.strategy_evaluation:
         raise TrendPullbackResearchCorpusError(
-            "decision admission audit differs from declared research assumptions"
+            "stored strategy evaluation differs from Trend Pullback authority"
+        )
+    equity = configuration.research_equity_quote
+    portfolio = RiskPortfolioSnapshot(
+        observed_at=decision.identity.observed_at,
+        quote_currency=configuration.quote_currency,
+        account_equity_quote=equity,
+        day_start_equity_quote=equity,
+        peak_equity_quote=equity,
+        positions=(),
+    )
+    expected_risk = RiskManager(configuration.risk_manager_configuration).evaluate(
+        decision.strategy_evaluation,
+        portfolio,
+    )
+    if expected_risk != decision.risk_decision:
+        raise TrendPullbackResearchCorpusError(
+            "stored Risk decision differs from configured RiskManager authority"
+        )
+    health = _research_health(decision.context, configuration.safety_assumptions)
+    expected_safety = OperationalSafetyGate(configuration.safety_configuration).evaluate(
+        expected_risk,
+        health,
+    )
+    if expected_safety != decision.safety_decision:
+        raise TrendPullbackResearchCorpusError(
+            "stored Safety decision differs from configured OperationalSafetyGate authority"
         )
 
 

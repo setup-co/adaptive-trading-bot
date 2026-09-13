@@ -29,10 +29,7 @@ from adaptive_trading_bot.research import (
 )
 from adaptive_trading_bot.risk import (
     ExchangeApiHealthState,
-    OperationalHealthSnapshot,
-    OperationalSafetyGate,
-    RiskManager,
-    RiskPortfolioSnapshot,
+    RiskManagerConfiguration,
 )
 from adaptive_trading_bot.storage import (
     IntegrityIssue,
@@ -325,7 +322,7 @@ def test_safety_blocked_candidate_is_preserved_not_admissible() -> None:
     assert all(item.category is ResearchDecisionCategory.SAFETY_BLOCKED for item in candidates)
 
 
-def test_risk_blocked_authoritative_decision_observation_is_preserved(
+def test_internally_valid_forged_strategy_evaluation_is_rejected(
     generated: tuple[MemoryHistoricalStore, TrendPullbackHistoricalResearchCorpus],
 ) -> None:
     _, corpus = generated
@@ -333,49 +330,53 @@ def test_risk_blocked_authoritative_decision_observation_is_preserved(
         item for item in corpus.decisions if item.action is CandidateAction.LONG_CANDIDATE
     )
     evaluation = accepted.decision.strategy_evaluation
-    assert evaluation.reference_price is not None
-    invalid = replace(
+    assert len(evaluation.reasons_for) > 1
+    forged = replace(
         evaluation,
-        invalidation_reference_price=evaluation.reference_price + Decimal(1),
+        reasons_for=tuple(reversed(evaluation.reasons_for)),
     )
     context = accepted.decision.context
-    portfolio = RiskPortfolioSnapshot(
-        context.observed_at,
-        "USDT",
-        Decimal(10000),
-        Decimal(10000),
-        Decimal(10000),
+    entry = DecisionJournalEntry(
+        context,
+        forged,
+        accepted.decision.risk_decision,
+        accepted.decision.safety_decision,
     )
-    risk = RiskManager().evaluate(invalid, portfolio)
-    safety = OperationalSafetyGate().evaluate(
-        risk,
-        OperationalHealthSnapshot(
-            context.source_id,
-            context.symbol,
-            context.observed_at,
-            context.observed_at,
-            corpus.configuration.safety_assumptions.feed_integrity_state,
-            corpus.configuration.safety_assumptions.exchange_api_health_state,
-            Decimal(0),
-            Decimal(0),
-            corpus.configuration.safety_assumptions.volatility_safety_state,
-            False,
-            0,
-        ),
-    )
-    entry = DecisionJournalEntry(context, invalid, risk, safety)
     observation = HistoricalTrendPullbackDecisionObservation(entry)
-    risk_blocked_corpus = TrendPullbackHistoricalResearchCorpus(
-        configuration=_configuration(),
-        decisions=(observation,),
-        historical_contexts=(HistoricalStrategyContextObservation(context),),
-    )
 
     assert observation.action is CandidateAction.LONG_CANDIDATE
-    assert observation.category is ResearchDecisionCategory.RISK_BLOCKED
-    assert observation.is_research_admissible_entry is False
-    assert risk_blocked_corpus.risk_blocked_count == 1
-    assert risk_blocked_corpus.research_admissible_entry_count == 0
+    with pytest.raises(TrendPullbackResearchCorpusError, match="Trend Pullback authority"):
+        TrendPullbackHistoricalResearchCorpus(
+            configuration=corpus.configuration,
+            decisions=(observation,),
+            historical_contexts=(HistoricalStrategyContextObservation(context),),
+        )
+
+
+@pytest.mark.parametrize(
+    "changed_risk",
+    (
+        RiskManagerConfiguration(risk_per_trade_fraction=Decimal("0.0010")),
+        RiskManagerConfiguration(max_simultaneous_risk_fraction=Decimal("0.0100")),
+        RiskManagerConfiguration(max_gross_exposure_fraction=Decimal("0.5000")),
+    ),
+)
+def test_decisions_are_bound_to_complete_research_risk_configuration(
+    generated: tuple[MemoryHistoricalStore, TrendPullbackHistoricalResearchCorpus],
+    changed_risk: RiskManagerConfiguration,
+) -> None:
+    _, corpus = generated
+    changed_configuration = replace(
+        corpus.configuration,
+        risk_manager_configuration=changed_risk,
+    )
+
+    with pytest.raises(TrendPullbackResearchCorpusError, match="RiskManager authority"):
+        TrendPullbackHistoricalResearchCorpus(
+            configuration=changed_configuration,
+            decisions=corpus.decisions,
+            historical_contexts=corpus.historical_contexts,
+        )
 
 
 def test_post_decision_contexts_are_sealed_and_exactly_from_same_source_path(
