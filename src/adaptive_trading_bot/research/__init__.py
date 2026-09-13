@@ -16,8 +16,17 @@ from adaptive_trading_bot.research.experience_shadow_replay import (
     ExperienceShadowStratum,
     ResearchDecimalRate,
 )
+from adaptive_trading_bot.research.trend_pullback_exit import (
+    DescriptiveResearchRate,
+    TrendPullbackExitPositionSummary,
+    TrendPullbackExitResearchError,
+    TrendPullbackExitResearchEvaluator,
+    TrendPullbackExitResearchReport,
+    TrendPullbackExitStratum,
+)
 
 __all__ = [
+    "DescriptiveResearchRate",
     "ExperienceObservedOutcomeGroup",
     "ExperienceObservedOutcomeSummary",
     "ExperienceOutcomeCurrencySummary",
@@ -32,4 +41,9 @@ __all__ = [
     "ExperienceShadowStratificationDimension",
     "ExperienceShadowStratum",
     "ResearchDecimalRate",
+    "TrendPullbackExitPositionSummary",
+    "TrendPullbackExitResearchError",
+    "TrendPullbackExitResearchEvaluator",
+    "TrendPullbackExitResearchReport",
+    "TrendPullbackExitStratum",
 ]
