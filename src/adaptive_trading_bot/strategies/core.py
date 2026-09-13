@@ -48,6 +48,11 @@ class StrategyEvaluationContext:
     multi_timeframe_regime: MultiTimeframeRegimeSnapshot
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate identity and causality after crossing an authority boundary."""
+
         observed_at = require_utc(self.observed_at, field="strategy context observed_at")
         candle = self.candle_15m
         feature = self.features_15m
