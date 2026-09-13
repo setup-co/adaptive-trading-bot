@@ -1,5 +1,7 @@
 """Environment-neutral strategy contracts and candidate evaluators."""
 
+from typing import TYPE_CHECKING
+
 from adaptive_trading_bot.strategies.breakout_retest import (
     ArmedBreakout,
     BreakoutRetestConfiguration,
@@ -45,6 +47,50 @@ from adaptive_trading_bot.strategies.trend_pullback import (
     TrendPullbackStrategy,
 )
 
+if TYPE_CHECKING:
+    from adaptive_trading_bot.strategies.exit_core import (
+        HoldOnlyExitReasonCode,
+        HoldOnlyExitRuleAudit,
+        HoldOnlyExitStrategy,
+        OpenPositionIdentity,
+        PositionExitAction,
+        PositionExitEvaluation,
+        PositionExitEvaluationContext,
+        PositionExitEvaluationIdentity,
+        PositionExitStrategy,
+        PositionExitValidationError,
+        PositionLifecycleStatus,
+        PositionSide,
+    )
+
+_EXIT_CORE_EXPORTS = frozenset(
+    {
+        "HoldOnlyExitReasonCode",
+        "HoldOnlyExitRuleAudit",
+        "HoldOnlyExitStrategy",
+        "OpenPositionIdentity",
+        "PositionExitAction",
+        "PositionExitEvaluation",
+        "PositionExitEvaluationContext",
+        "PositionExitEvaluationIdentity",
+        "PositionExitStrategy",
+        "PositionExitValidationError",
+        "PositionLifecycleStatus",
+        "PositionSide",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    """Load exit contracts lazily around the Journal/Risk/Strategies cycle."""
+
+    if name in _EXIT_CORE_EXPORTS:
+        from adaptive_trading_bot.strategies import exit_core
+
+        return getattr(exit_core, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "ArmedBreakout",
     "BreakoutRetestConfiguration",
@@ -54,6 +100,18 @@ __all__ = [
     "BreakoutRetestStrategy",
     "BreakoutSide",
     "CandidateAction",
+    "HoldOnlyExitReasonCode",
+    "HoldOnlyExitRuleAudit",
+    "HoldOnlyExitStrategy",
+    "OpenPositionIdentity",
+    "PositionExitAction",
+    "PositionExitEvaluation",
+    "PositionExitEvaluationContext",
+    "PositionExitEvaluationIdentity",
+    "PositionExitStrategy",
+    "PositionExitValidationError",
+    "PositionLifecycleStatus",
+    "PositionSide",
     "RangeContextDetector",
     "RangeContextSnapshot",
     "RangeDetectorSeriesState",
