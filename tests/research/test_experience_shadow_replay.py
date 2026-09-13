@@ -116,13 +116,16 @@ def _evaluate(
     decisions: DecisionJournalSnapshot[object, object],
     samples: ExperienceTradeSampleSnapshot,
     configuration: ExperienceShadowReplayConfiguration | None = None,
+    *,
+    start: datetime = START,
+    end: datetime = END,
 ) -> ExperienceShadowReplayReport:
     return ExperienceShadowReplayEvaluator().evaluate(
         decisions,
         samples,
         configuration or _configuration(),
-        START,
-        END,
+        start,
+        end,
     )
 
 
@@ -391,14 +394,59 @@ def test_strata_and_fixed_slices_are_canonical_with_raw_denominators() -> None:
     )
 
 
-def test_future_sample_after_report_does_not_change_report() -> None:
+def test_in_range_decision_outcome_after_end_does_not_change_earlier_report() -> None:
     decision, sample = _candidate(START + timedelta(days=1))
-    future_decision, future_sample = _candidate(END + timedelta(days=1))
+    future_exit = END + timedelta(days=1)
+    future_sample = replace(
+        sample,
+        exit_fill_at=future_exit,
+        duration=future_exit - sample.entry_fill_at,
+        accounting_exit_fill_id="after-report-end",
+    )
 
-    baseline = _evaluate(_decisions(decision), _samples(sample))
-    with_future = _evaluate(_decisions(future_decision, decision), _samples(sample, future_sample))
+    baseline = _evaluate(_decisions(decision), _samples())
+    with_future = _evaluate(_decisions(decision), _samples(future_sample))
 
     assert baseline == with_future
+    assert with_future.outcome_evaluable_count == 0
+    assert with_future.non_outcome_evaluable_candidate_count == 1
+    assert not with_future.records[0].completed_outcome_available
+    assert with_future.records[0].outcome_classification is None
+    assert all(
+        summary.completed_trade_count == 0 for summary in with_future.observed_outcome_summaries
+    )
+    assert all(item.outcome_evaluable_count == 0 for item in with_future.stratified_summaries)
+    assert all(
+        item.blocked_outcomes.completed_trade_count + item.retained_outcomes.completed_trade_count
+        == 0
+        for item in with_future.stability_summaries
+    )
+
+    empty_baseline = _evaluate(_decisions(), _samples())
+    assert _evaluate(_decisions(), _samples(future_sample)) == empty_baseline
+
+
+def test_in_range_future_outcome_becomes_evaluable_at_inclusive_end_boundary() -> None:
+    decision, sample = _candidate(START + timedelta(days=1))
+    future_exit = END + timedelta(days=1)
+    future_sample = replace(
+        sample,
+        exit_fill_at=future_exit,
+        duration=future_exit - sample.entry_fill_at,
+        accounting_exit_fill_id="at-later-report-end",
+    )
+
+    report = _evaluate(
+        _decisions(decision),
+        _samples(future_sample),
+        end=future_exit,
+    )
+
+    assert report.outcome_evaluable_count == 1
+    assert report.non_outcome_evaluable_candidate_count == 0
+    assert report.records[0].completed_outcome_available
+    assert report.records[0].exit_fill_at == future_exit
+    assert sum(summary.completed_trade_count for summary in report.observed_outcome_summaries) == 1
 
 
 def test_decimal_context_cannot_change_results() -> None:

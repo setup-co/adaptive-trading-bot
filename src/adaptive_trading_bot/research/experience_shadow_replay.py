@@ -600,7 +600,7 @@ class ExperienceShadowReplayEvaluator:
         outcome_by_identity = {
             sample.decision_identity: sample
             for sample in ordered_samples
-            if start <= sample.decision_identity.observed_at < end
+            if _eligible_for_reporting_attribution(sample, start, end)
         }
         # Outcomes completed after the report end cannot affect any in-range advisory.
         advisory_samples = ExperienceTradeSampleSnapshot(
@@ -690,10 +690,14 @@ def _validate_sample_joins(
     for sample in samples:
         sample.validate()
         decision = decisions.get(sample.decision_identity)
-        in_scope = start <= sample.decision_identity.observed_at < end
+        used_for_attribution = _eligible_for_reporting_attribution(sample, start, end)
         if decision is None:
-            if in_scope:
+            if used_for_attribution:
                 raise ExperienceShadowReplayError("in-scope completed sample is orphaned")
+            continue
+        # A sample completing after the inclusive report-end boundary is validated as sealed
+        # sample authority above, but it is not joined into this earlier attribution report.
+        if sample.exit_fill_at > end:
             continue
         expected_fingerprint = experience_context_fingerprint(
             decision.context,
@@ -723,6 +727,14 @@ def _validate_sample_joins(
             raise ExperienceShadowReplayError(
                 "completed sample and journal decision provenance are inconsistent"
             )
+
+
+def _eligible_for_reporting_attribution(
+    sample: ExperienceTradeSample, start: datetime, end: datetime
+) -> bool:
+    """Use an in-window decision outcome only when it completed by inclusive ``end``."""
+
+    return start <= sample.decision_identity.observed_at < end and sample.exit_fill_at <= end
 
 
 def _replay_record(
