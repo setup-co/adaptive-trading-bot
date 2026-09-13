@@ -27,6 +27,15 @@ from adaptive_trading_bot.research.paired_exit_replay import (
     PairedTrendPullbackExitReplayResult,
     PairedTrendPullbackExitReplayRunner,
 )
+from adaptive_trading_bot.research.trend_pullback_corpus import (
+    HistoricalTrendPullbackDecisionObservation,
+    ResearchAdmissionConfiguration,
+    ResearchDecisionCategory,
+    ResearchSafetyAssumptionProfile,
+    TrendPullbackHistoricalCorpusGenerator,
+    TrendPullbackHistoricalResearchCorpus,
+    TrendPullbackResearchCorpusError,
+)
 from adaptive_trading_bot.research.trend_pullback_exit import (
     DescriptiveResearchRate,
     TrendPullbackExitPositionSummary,
@@ -55,15 +64,22 @@ __all__ = [
     "HistoricalExitBranchResult",
     "HistoricalExitCause",
     "HistoricalStrategyContextObservation",
+    "HistoricalTrendPullbackDecisionObservation",
     "PairedExitComparisonState",
     "PairedExitReplayError",
     "PairedExitReplayStatus",
     "PairedTrendPullbackExitReplayResult",
     "PairedTrendPullbackExitReplayRunner",
+    "ResearchAdmissionConfiguration",
     "ResearchDecimalRate",
+    "ResearchDecisionCategory",
+    "ResearchSafetyAssumptionProfile",
     "TrendPullbackExitPositionSummary",
     "TrendPullbackExitResearchError",
     "TrendPullbackExitResearchEvaluator",
     "TrendPullbackExitResearchReport",
     "TrendPullbackExitStratum",
+    "TrendPullbackHistoricalCorpusGenerator",
+    "TrendPullbackHistoricalResearchCorpus",
+    "TrendPullbackResearchCorpusError",
 ]
