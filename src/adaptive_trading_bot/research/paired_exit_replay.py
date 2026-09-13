@@ -8,15 +8,19 @@ portfolio, or force-close an unresolved research position.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
-from enum import StrEnum
+from enum import Enum, StrEnum
+from hashlib import sha256
+from hmac import compare_digest
+from json import dumps
 
 from adaptive_trading_bot.backtest import (
     AccountingFillBatch,
     BacktestExecutionError,
     BacktestExecutionSimulator,
+    ExecutionCandleSource,
     ExecutionCostConfiguration,
     ExecutionSeries,
     FillAccountingEvent,
@@ -28,7 +32,7 @@ from adaptive_trading_bot.backtest import (
     PositionSnapshot,
     UnfilledOrder,
 )
-from adaptive_trading_bot.domain import Candle
+from adaptive_trading_bot.domain import Candle, Timeframe
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import (
@@ -60,6 +64,8 @@ from adaptive_trading_bot.strategies import (
 )
 
 _REPLAY_SCHEMA_VERSION = "1.0.0"
+_HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION = "1.0.0"
+_HISTORICAL_CONTEXT_INTEGRITY_SEAL_VERSION = "1.0.0"
 _RESEARCH_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _AFTER_DECISION = timedelta(microseconds=1)
 
@@ -97,6 +103,93 @@ class PairedExitComparisonState(StrEnum):
     BOTH_OPEN = "BOTH_OPEN"
     BASELINE_CLOSED_CANDIDATE_OPEN = "BASELINE_CLOSED_CANDIDATE_OPEN"
     BASELINE_OPEN_CANDIDATE_CLOSED = "BASELINE_OPEN_CANDIDATE_CLOSED"
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalStrategyContextObservation:
+    """Creation-sealed historical strategy context used by paired replay."""
+
+    context: StrategyEvaluationContext
+    observation_schema_version: str = field(
+        init=False, default=_HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION
+    )
+    context_integrity_seal: str = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_historical_strategy_context(self.context)
+        object.__setattr__(
+            self,
+            "context_integrity_seal",
+            _historical_context_integrity_seal(self.context),
+        )
+
+    def validate(self) -> None:
+        """Verify creation-time integrity before revalidating causal semantics."""
+
+        if self.observation_schema_version != _HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION:
+            raise PairedExitReplayError("historical context observation schema mismatch")
+        seal = self.context_integrity_seal
+        if not isinstance(seal, str) or not compare_digest(
+            seal, _historical_context_integrity_seal(self.context)
+        ):
+            raise PairedExitReplayError("historical strategy context integrity seal mismatch")
+        _validate_historical_strategy_context(self.context)
+
+
+class _BoundExecutionCandleSource:
+    """One detached candle snapshot shared by context matching and simulation."""
+
+    __slots__ = ("_candles", "_end", "_series", "_start")
+
+    def __init__(
+        self,
+        series: ExecutionSeries,
+        start: datetime,
+        end: datetime,
+        candles: tuple[Candle, ...],
+    ) -> None:
+        self._series = deepcopy(series)
+        self._start = require_utc(start, field="bound execution start")
+        self._end = require_utc(end, field="bound execution end")
+        if self._start >= self._end:
+            raise PairedExitReplayError("bound execution range must be non-empty")
+        if not isinstance(candles, tuple):
+            raise TypeError("historical execution source must return an immutable tuple")
+        owned = tuple(deepcopy(candles))
+        previous_open: datetime | None = None
+        for candle in owned:
+            _revalidate_candle(candle)
+            if candle.symbol != series.symbol or candle.timeframe is not series.timeframe:
+                raise PairedExitReplayError("historical candle violates execution series identity")
+            if not self._start <= candle.open_time < self._end:
+                raise PairedExitReplayError("historical candle lies outside the loaded range")
+            if previous_open is not None and candle.open_time <= previous_open:
+                raise PairedExitReplayError(
+                    "historical execution candles must strictly increase without duplicates"
+                )
+            previous_open = candle.open_time
+        self._candles = owned
+
+    @property
+    def candles(self) -> tuple[Candle, ...]:
+        return tuple(deepcopy(self._candles))
+
+    def load(
+        self,
+        series: ExecutionSeries,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[Candle, ...]:
+        start = require_utc(start, field="bound source request start")
+        end = require_utc(end, field="bound source request end")
+        if series != self._series:
+            raise PairedExitReplayError("bound source execution series changed")
+        if start >= end or end > self._end:
+            raise PairedExitReplayError("bound source request exceeds loaded range")
+        return tuple(
+            deepcopy(candle) for candle in self._candles if start <= candle.open_time < end
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,17 +385,17 @@ class PairedTrendPullbackExitReplayResult:
 class PairedTrendPullbackExitReplayRunner:
     """Run the two exit policies from one shared authorized Backtest entry fill."""
 
-    __slots__ = ("_execution",)
+    __slots__ = ("_source",)
 
-    def __init__(self, execution: BacktestExecutionSimulator) -> None:
-        if not isinstance(execution, BacktestExecutionSimulator):
-            raise TypeError("execution must be a BacktestExecutionSimulator")
-        self._execution = execution
+    def __init__(self, source: ExecutionCandleSource) -> None:
+        if not hasattr(source, "load"):
+            raise TypeError("source must satisfy ExecutionCandleSource")
+        self._source = source
 
     def run(
         self,
         decision: DecisionJournalEntry[object, object],
-        current_contexts: tuple[StrategyEvaluationContext, ...],
+        current_contexts: tuple[HistoricalStrategyContextObservation, ...],
         execution_series: ExecutionSeries,
         costs: ExecutionCostConfiguration,
         *,
@@ -331,6 +424,8 @@ class PairedTrendPullbackExitReplayRunner:
             or execution_series.symbol != intent.symbol
         ):
             raise PairedExitReplayError("execution series and entry authority differ")
+        if execution_series.timeframe is not Timeframe.MINUTES_15:
+            raise PairedExitReplayError("paired Trend Pullback replay requires a 15m series")
         if not start <= intent.observed_at < end:
             raise PairedExitReplayError("entry decision lies outside the bounded replay range")
         series = deepcopy(execution_series)
@@ -342,7 +437,22 @@ class PairedTrendPullbackExitReplayRunner:
         if entry_execution_start >= end:
             raise PairedExitReplayError("bounded replay has no post-decision execution interval")
         try:
-            entry_execution = self._execution.run(
+            historical_candles = self._source.load(
+                series,
+                start=entry_execution_start,
+                end=end,
+            )
+        except (BacktestExecutionError, TypeError, ValueError) as exc:
+            raise PairedExitReplayError("shared historical execution source failed") from exc
+        bound_source = _BoundExecutionCandleSource(
+            series,
+            entry_execution_start,
+            end,
+            historical_candles,
+        )
+        execution = BacktestExecutionSimulator(bound_source)
+        try:
+            entry_execution = execution.run(
                 series,
                 owned_costs,
                 (entry_order,),
@@ -376,7 +486,14 @@ class PairedTrendPullbackExitReplayRunner:
         if entry_execution.filled_count != 1 or entry_execution.unfilled_count != 0:
             raise PairedExitReplayError("entry execution returned contradictory fill counts")
         entry_fill = deepcopy(entry_execution.fills[0])
-        self._validate_contexts(owned_contexts, owned_decision, entry_fill, start, end)
+        self._validate_contexts(
+            owned_contexts,
+            owned_decision,
+            entry_fill,
+            start,
+            end,
+            bound_source.candles,
+        )
         baseline = self._run_branch(
             ExitReplayBranchPolicy.HOLD_ONLY,
             HoldOnlyExitStrategy(intent.strategy_id, intent.strategy_version),
@@ -389,6 +506,7 @@ class PairedTrendPullbackExitReplayRunner:
             owned_costs,
             start,
             end,
+            execution,
         )
         candidate = self._run_branch(
             ExitReplayBranchPolicy.EMA50_THESIS_EXIT,
@@ -402,6 +520,7 @@ class PairedTrendPullbackExitReplayRunner:
             owned_costs,
             start,
             end,
+            execution,
         )
         comparison = _comparison_state(baseline, candidate)
         net_delta: Decimal | None = None
@@ -464,33 +583,24 @@ class PairedTrendPullbackExitReplayRunner:
 
     @staticmethod
     def _validate_contexts(
-        contexts: tuple[StrategyEvaluationContext, ...],
+        observations: tuple[HistoricalStrategyContextObservation, ...],
         decision: DecisionJournalEntry[object, object],
         entry_fill: MarketFill,
         start: datetime,
         end: datetime,
+        historical_candles: tuple[Candle, ...],
     ) -> None:
+        candles_by_close = {candle.close_time: candle for candle in historical_candles}
+        if len(candles_by_close) != len(historical_candles):
+            raise PairedExitReplayError("shared historical candle path contains duplicate closes")
         previous: datetime | None = None
-        for context in contexts:
-            if not isinstance(context, StrategyEvaluationContext):
-                raise TypeError("each current context must be a StrategyEvaluationContext")
-            try:
-                context.validate()
-                _revalidate_candle(context.candle_15m)
-                validate_technical_regime_snapshot(
-                    context.multi_timeframe_regime.regime_15m,
-                    context.features_15m,
-                    context.structure_15m,
+        for observation in observations:
+            if not isinstance(observation, HistoricalStrategyContextObservation):
+                raise TypeError(
+                    "each current context must be a HistoricalStrategyContextObservation"
                 )
-                validate_multi_timeframe_regime_snapshot(context.multi_timeframe_regime)
-            except (
-                StrategyContextError,
-                TechnicalRegimeError,
-                RegimeCompositionError,
-                TypeError,
-                ValueError,
-            ) as exc:
-                raise PairedExitReplayError("current strategy context is invalid") from exc
+            observation.validate()
+            context = observation.context
             if (
                 context.source_id != decision.identity.source_id
                 or context.symbol != decision.identity.symbol
@@ -502,6 +612,11 @@ class PairedTrendPullbackExitReplayRunner:
                 raise PairedExitReplayError(
                     "current context timestamps must strictly increase without duplicates"
                 )
+            historical_candle = candles_by_close.get(context.candle_15m.close_time)
+            if historical_candle is None or historical_candle != context.candle_15m:
+                raise PairedExitReplayError(
+                    "sealed strategy context candle differs from shared historical path"
+                )
             previous = context.observed_at
 
     def _run_branch(
@@ -512,11 +627,12 @@ class PairedTrendPullbackExitReplayRunner:
         intent: EntryOrderIntent,
         entry_order: MarketOrderRequest,
         entry_fill: MarketFill,
-        contexts: tuple[StrategyEvaluationContext, ...],
+        observations: tuple[HistoricalStrategyContextObservation, ...],
         series: ExecutionSeries,
         costs: ExecutionCostConfiguration,
         start: datetime,
         end: datetime,
+        execution: BacktestExecutionSimulator,
     ) -> HistoricalExitBranchResult:
         accounting = PositionAccountingEngine()
         try:
@@ -534,7 +650,9 @@ class PairedTrendPullbackExitReplayRunner:
         exit_fill: MarketFill | None = None
         exit_unfilled: UnfilledOrder | None = None
         accounting_events = list(entry_batch.events)
-        for market_context in contexts:
+        for observation in observations:
+            observation.validate()
+            market_context = observation.context
             position = accounting.snapshot(intent.symbol, market_context.observed_at)
             if position.quantity == 0:
                 break
@@ -567,7 +685,7 @@ class PairedTrendPullbackExitReplayRunner:
                 quantity=position.quantity.copy_abs(),
             )
             try:
-                execution = self._execution.run(
+                execution_result = execution.run(
                     series,
                     costs,
                     (exit_request,),
@@ -576,9 +694,14 @@ class PairedTrendPullbackExitReplayRunner:
                 )
             except (BacktestExecutionError, TypeError, ValueError) as exc:
                 raise PairedExitReplayError("shared Backtest exit execution failed") from exc
-            _validate_execution_result(execution.execution_series, execution.costs, series, costs)
-            if execution.filled_count == 1 and execution.unfilled_count == 0:
-                exit_fill = deepcopy(execution.fills[0])
+            _validate_execution_result(
+                execution_result.execution_series,
+                execution_result.costs,
+                series,
+                costs,
+            )
+            if execution_result.filled_count == 1 and execution_result.unfilled_count == 0:
+                exit_fill = deepcopy(execution_result.fills[0])
                 try:
                     exit_batch = accounting.process(
                         AccountingFillBatch(exit_fill.fill_at, (exit_fill,))
@@ -586,8 +709,8 @@ class PairedTrendPullbackExitReplayRunner:
                 except (PositionAccountingError, TypeError, ValueError) as exc:
                     raise PairedExitReplayError("shared exit accounting failed") from exc
                 accounting_events.extend(exit_batch.events)
-            elif execution.filled_count == 0 and execution.unfilled_count == 1:
-                exit_unfilled = deepcopy(execution.unfilled_orders[0])
+            elif execution_result.filled_count == 0 and execution_result.unfilled_count == 1:
+                exit_unfilled = deepcopy(execution_result.unfilled_orders[0])
             else:
                 raise PairedExitReplayError("exit execution returned contradictory fill counts")
             break
@@ -708,6 +831,85 @@ def _revalidate_candle(candle: Candle) -> None:
     )
     if reconstructed != candle:
         raise PairedExitReplayError("current context candle reconstruction changed its facts")
+
+
+def _validate_historical_strategy_context(context: StrategyEvaluationContext) -> None:
+    if not isinstance(context, StrategyEvaluationContext):
+        raise TypeError("historical observation context must be a StrategyEvaluationContext")
+    try:
+        context.validate()
+        _revalidate_candle(context.candle_15m)
+        validate_technical_regime_snapshot(
+            context.multi_timeframe_regime.regime_15m,
+            context.features_15m,
+            context.structure_15m,
+        )
+        validate_multi_timeframe_regime_snapshot(context.multi_timeframe_regime)
+    except (
+        StrategyContextError,
+        TechnicalRegimeError,
+        RegimeCompositionError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise PairedExitReplayError("historical strategy context is invalid") from exc
+
+
+def _historical_context_integrity_seal(context: StrategyEvaluationContext) -> str:
+    payload = dumps(
+        (
+            "adaptive-trading-bot/historical-strategy-context-observation",
+            _HISTORICAL_CONTEXT_INTEGRITY_SEAL_VERSION,
+            _HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION,
+            _canonical_integrity_value(context),
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
+def _canonical_integrity_value(value: object) -> object:
+    if value is None:
+        return ("none",)
+    if isinstance(value, Enum):
+        return (
+            "enum",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            _canonical_integrity_value(value.value),
+        )
+    if isinstance(value, datetime):
+        return ("datetime", value.isoformat(timespec="microseconds"), value.fold)
+    if isinstance(value, timedelta):
+        return ("timedelta", value.days, value.seconds, value.microseconds)
+    if isinstance(value, Decimal):
+        decimal_tuple = value.as_tuple()
+        return (
+            "decimal",
+            decimal_tuple.sign,
+            tuple(decimal_tuple.digits),
+            str(decimal_tuple.exponent),
+        )
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, tuple):
+        return ("tuple", tuple(_canonical_integrity_value(item) for item in value))
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            "dataclass",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            tuple(
+                (item.name, _canonical_integrity_value(getattr(value, item.name)))
+                for item in fields(value)
+            ),
+        )
+    raise PairedExitReplayError(
+        f"historical context contains unsupported integrity type {type(value).__qualname__}"
+    )
 
 
 def _validate_execution_result(

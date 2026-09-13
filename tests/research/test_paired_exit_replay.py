@@ -1,6 +1,7 @@
 import ast
 import inspect
 import runpy
+from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta
 from decimal import (
@@ -19,7 +20,6 @@ import pytest
 
 import adaptive_trading_bot.research.paired_exit_replay as replay_module
 from adaptive_trading_bot.backtest import (
-    BacktestExecutionSimulator,
     ExecutionCostConfiguration,
     ExecutionSeries,
     OrderSide,
@@ -35,6 +35,7 @@ from adaptive_trading_bot.regime import (
 from adaptive_trading_bot.research import (
     ExitReplayBranchPolicy,
     HistoricalExitCause,
+    HistoricalStrategyContextObservation,
     PairedExitComparisonState,
     PairedExitReplayError,
     PairedExitReplayStatus,
@@ -50,6 +51,7 @@ from adaptive_trading_bot.strategies import (
     CandidateAction,
     PositionExitAction,
     StrategyEvaluationContext,
+    TrendPullbackExitRuleAudit,
 )
 
 _JOURNAL_HELPERS = runpy.run_path(
@@ -142,11 +144,13 @@ def _current_context(
         StrategyEvaluationContext,
         _journal_context(source_id=SOURCE, symbol=BTC, observed_at=observed_at),
     )
+    open_price = Decimal(100 + 10 * (minutes // 15 - 1))
     candle = replace(
         context.candle_15m,
+        open=open_price,
         close=close,
-        low=(min(context.candle_15m.low, close) if low is None else low),
-        high=(max(context.candle_15m.high, close) if high is None else high),
+        low=(min(context.candle_15m.low, close, open_price) if low is None else low),
+        high=(max(context.candle_15m.high, close, open_price) if high is None else high),
     )
     anchor = replace(
         context.multi_timeframe_regime.regime_15m,
@@ -167,20 +171,29 @@ def _current_context(
 
 
 def _run(
-    contexts: tuple[StrategyEvaluationContext, ...],
+    contexts: tuple[StrategyEvaluationContext | HistoricalStrategyContextObservation, ...],
     *,
     decision: DecisionJournalEntry[object, object] | None = None,
     candles: tuple[Candle, ...] | None = None,
     costs: ExecutionCostConfiguration | None = None,
     end: datetime | None = None,
 ) -> tuple[PairedTrendPullbackExitReplayResult, RecordingExecutionSource]:
-    source = RecordingExecutionSource(
-        _execution_path(100, 110, 120, 130) if candles is None else candles
+    observations = tuple(
+        item
+        if isinstance(item, HistoricalStrategyContextObservation)
+        else HistoricalStrategyContextObservation(item)
+        for item in contexts
     )
-    runner = PairedTrendPullbackExitReplayRunner(BacktestExecutionSimulator(source))
+    default_candles = list(_execution_path(100, 110, 120, 130))
+    for observation in observations:
+        candle = observation.context.candle_15m
+        candle_index = int((candle.open_time - NOW) / Timeframe.MINUTES_15.duration)
+        default_candles[candle_index] = candle
+    source = RecordingExecutionSource(tuple(default_candles) if candles is None else candles)
+    runner = PairedTrendPullbackExitReplayRunner(source)
     result = runner.run(
         decision or _decision(),
-        contexts,
+        observations,
         ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15),
         costs
         or ExecutionCostConfiguration(
@@ -195,7 +208,7 @@ def _run(
 
 
 def test_authoritative_long_entry_uses_one_shared_fill_for_both_branches() -> None:
-    result, _ = _run((_current_context(30),))
+    result, source = _run((_current_context(30),))
 
     assert result.status is PairedExitReplayStatus.REPLAYED
     assert result.baseline is not None
@@ -208,6 +221,7 @@ def test_authoritative_long_entry_uses_one_shared_fill_for_both_branches() -> No
     assert result.entry_fill is not None
     assert result.entry_fill.fill_price == Decimal("110.275")
     assert result.baseline.accounting_events[0].fill_price == result.entry_fill.fill_price
+    assert len(source.loads) == 1
 
 
 def test_authoritative_short_entry_and_exit_use_opposite_shared_sides() -> None:
@@ -279,7 +293,8 @@ def test_candidate_ema50_exit_fills_at_next_execution_open_not_reference() -> No
 
 
 def test_long_stop_uses_low_equality_and_wins_same_bar_over_ema50() -> None:
-    result, _ = _run((_current_context(30, close=Decimal(70), low=Decimal(70)),))
+    context = _current_context(30, close=Decimal(70), low=Decimal(70))
+    result, source = _run((context,))
     assert result.baseline is not None
     assert result.ema50_candidate is not None
     for branch in (result.baseline, result.ema50_candidate):
@@ -290,6 +305,13 @@ def test_long_stop_uses_low_equality_and_wins_same_bar_over_ema50() -> None:
         assert branch.exit_fill.fill_price != branch.stop_basis
     assert result.ema50_candidate.protective_stop_precedence_applied is True
     assert result.ema50_candidate.discretionary_close_signal_count == 1
+    candidate_audit = cast(
+        TrendPullbackExitRuleAudit,
+        result.ema50_candidate.exit_evaluations[0].rule_audit,
+    )
+    assert source.candles[1] == context.candle_15m
+    assert candidate_audit.current_close == source.candles[1].close
+    assert result.ema50_candidate.protective_stop_breach_at == source.candles[1].close_time
 
 
 def test_short_stop_uses_high_equality() -> None:
@@ -341,11 +363,12 @@ def test_unresolved_and_exit_unfilled_states_are_not_force_closed() -> None:
     assert unresolved.baseline.unresolved_open_quantity > 0
     assert unresolved.baseline.unresolved_average_entry_price is not None
 
+    exit_context = _current_context(30, close=Decimal(99))
     unfilled, _ = _run(
-        (_current_context(30, close=Decimal(99)),),
+        (exit_context,),
         candles=(
             _execution_candle(0, Decimal(100)),
-            _execution_candle(1, Decimal(110)),
+            exit_context.candle_15m,
         ),
         end=NOW + timedelta(minutes=45),
     )
@@ -358,14 +381,14 @@ def test_unresolved_and_exit_unfilled_states_are_not_force_closed() -> None:
 
 
 def test_post_end_execution_candle_cannot_change_bounded_result() -> None:
-    context = (_current_context(30, close=Decimal(99)),)
+    context = _current_context(30, close=Decimal(99))
     bounded = (
         _execution_candle(0, Decimal(100)),
-        _execution_candle(1, Decimal(110)),
+        context.candle_15m,
     )
     with_future = (*bounded, _execution_candle(3, Decimal(1000)))
-    first, _ = _run(context, candles=bounded, end=NOW + timedelta(minutes=45))
-    second, _ = _run(context, candles=with_future, end=NOW + timedelta(minutes=45))
+    first, _ = _run((context,), candles=bounded, end=NOW + timedelta(minutes=45))
+    second, _ = _run((context,), candles=with_future, end=NOW + timedelta(minutes=45))
     assert first == second
 
 
@@ -381,6 +404,58 @@ def test_duplicate_decreasing_or_mutated_current_context_fails_closed() -> None:
     object.__setattr__(mutated.features_15m, "ema_50", Decimal("NaN"))
     with pytest.raises(PairedExitReplayError, match="context is invalid"):
         _run((mutated,))
+
+
+def test_sealed_observation_rejects_coherent_finite_ema50_mutation() -> None:
+    observation = HistoricalStrategyContextObservation(_current_context(30, close=Decimal(99)))
+    object.__setattr__(observation.context.features_15m, "ema_50", Decimal(101))
+
+    with pytest.raises(PairedExitReplayError, match="integrity seal"):
+        _run((observation,))
+
+
+def test_historical_observation_is_versioned_immutable_and_detached() -> None:
+    observation = HistoricalStrategyContextObservation(_current_context(30))
+
+    assert observation.observation_schema_version == "1.0.0"
+    assert len(observation.context_integrity_seal) == 64
+    copied = deepcopy(observation)
+    copied.validate()
+    assert copied == observation
+    with pytest.raises(FrozenInstanceError):
+        observation.context = _current_context(45)  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutated_value"),
+    (
+        ("low", Decimal(90)),
+        ("high", Decimal(120)),
+        ("close", Decimal(98)),
+    ),
+)
+def test_sealed_observation_rejects_ohlc_mutation(field_name: str, mutated_value: Decimal) -> None:
+    observation = HistoricalStrategyContextObservation(_current_context(30, close=Decimal(99)))
+    object.__setattr__(observation.context.candle_15m, field_name, mutated_value)
+
+    with pytest.raises(PairedExitReplayError, match="integrity seal"):
+        _run((observation,))
+
+
+def test_sealed_context_candle_must_exactly_match_shared_execution_path() -> None:
+    context = _current_context(30, close=Decimal(99))
+    observation = HistoricalStrategyContextObservation(context)
+    different_historical_candle = _execution_candle(1, Decimal(110))
+
+    with pytest.raises(PairedExitReplayError, match="differs from shared historical path"):
+        _run(
+            (observation,),
+            candles=(
+                _execution_candle(0, Decimal(100)),
+                different_historical_candle,
+                _execution_candle(2, Decimal(120)),
+            ),
+        )
 
 
 def test_same_run_is_decimal_deterministic_immutable_and_detached() -> None:
