@@ -23,6 +23,7 @@ dependencies = [
 [project.scripts]
 atb-import-ohlcv = "adaptive_trading_bot.market_data.cli:main"
 atb-replay = "adaptive_trading_bot.replay.cli:main"
+atb-research-corpus = "adaptive_trading_bot.research.trend_pullback_corpus:main"
 
 [project.optional-dependencies]
 dev = [
