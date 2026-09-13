@@ -62,6 +62,12 @@ if TYPE_CHECKING:
         PositionLifecycleStatus,
         PositionSide,
     )
+    from adaptive_trading_bot.strategies.trend_pullback_exit import (
+        Ema50ComparisonRelation,
+        TrendPullbackEma50ExitStrategy,
+        TrendPullbackExitReasonCode,
+        TrendPullbackExitRuleAudit,
+    )
 
 _EXIT_CORE_EXPORTS = frozenset(
     {
@@ -80,6 +86,15 @@ _EXIT_CORE_EXPORTS = frozenset(
     }
 )
 
+_TREND_PULLBACK_EXIT_EXPORTS = frozenset(
+    {
+        "Ema50ComparisonRelation",
+        "TrendPullbackEma50ExitStrategy",
+        "TrendPullbackExitReasonCode",
+        "TrendPullbackExitRuleAudit",
+    }
+)
+
 
 def __getattr__(name: str) -> object:
     """Load exit contracts lazily around the Journal/Risk/Strategies cycle."""
@@ -88,6 +103,10 @@ def __getattr__(name: str) -> object:
         from adaptive_trading_bot.strategies import exit_core
 
         return getattr(exit_core, name)
+    if name in _TREND_PULLBACK_EXIT_EXPORTS:
+        from adaptive_trading_bot.strategies import trend_pullback_exit
+
+        return getattr(trend_pullback_exit, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -100,6 +119,7 @@ __all__ = [
     "BreakoutRetestStrategy",
     "BreakoutSide",
     "CandidateAction",
+    "Ema50ComparisonRelation",
     "HoldOnlyExitReasonCode",
     "HoldOnlyExitRuleAudit",
     "HoldOnlyExitStrategy",
@@ -132,6 +152,9 @@ __all__ = [
     "StrategyEvaluationContext",
     "StrategyReasonCode",
     "TrendPullbackConfiguration",
+    "TrendPullbackEma50ExitStrategy",
+    "TrendPullbackExitReasonCode",
+    "TrendPullbackExitRuleAudit",
     "TrendPullbackRuleAudit",
     "TrendPullbackStrategy",
     "ValidatedRange",
