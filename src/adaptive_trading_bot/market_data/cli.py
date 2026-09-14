@@ -68,6 +68,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"import failed: {error}", file=sys.stderr)
         return 1
 
+    if not result.integrity.is_clean:
+        print(
+            json.dumps(
+                {
+                    "error": "dirty_integrity",
+                    "source_id": str(result.source_id),
+                    "symbol": str(result.symbol),
+                    "timeframe": result.timeframe.value,
+                    "requested_start": result.requested_start.isoformat(),
+                    "requested_end": result.requested_end.isoformat(),
+                    "effective_end": result.effective_end.isoformat(),
+                    "integrity": {
+                        "clean": False,
+                        "rows_scanned": result.integrity.rows_scanned,
+                        "issues": [
+                            {"kind": issue.kind.value, "message": issue.message}
+                            for issue in result.integrity.issues
+                        ],
+                    },
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
     print(
         json.dumps(
             {

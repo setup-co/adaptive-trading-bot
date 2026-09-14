@@ -191,6 +191,9 @@ atb-import-ohlcv --exchange binance --symbol BTC/USDT --timeframe 15m \
 
 Only candles closed by `min(requested_end, current_time)` are persisted. The command reports its
 effective closed-candle boundary and a non-mutating integrity scan; it never repairs missing data.
+Exit status `0` is reserved for a completed import whose authoritative integrity report is clean.
+If that report is dirty, the command emits deterministic JSON diagnostics to standard error and
+returns status `2`; request, source, store, and import exceptions retain status `1`.
 OHLCV values use `Decimal(str(value))` without rounding. If CCXT's JSON decoder has already
 represented a wire number as a binary float, the original lexical precision cannot be recovered.
 

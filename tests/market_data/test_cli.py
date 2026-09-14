@@ -8,11 +8,23 @@ import pytest
 from adaptive_trading_bot.config import Settings
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.market_data import cli
-from adaptive_trading_bot.storage import SourceId
+from adaptive_trading_bot.market_data.acquisition import BoundedOHLCVImporter, ImportResult
+from adaptive_trading_bot.storage import (
+    IntegrityIssue,
+    IntegrityIssueKind,
+    IntegrityReport,
+    MergeResult,
+    SourceId,
+)
+
+START = datetime(2026, 1, 1, tzinfo=UTC)
+END = datetime(2026, 1, 1, 0, 15, tzinfo=UTC)
+SYMBOL = TradingSymbol("BTC", "USDT")
+SOURCE = SourceId("ccxt-fake-spot")
 
 
 class OnePageSource:
-    source_id = SourceId("ccxt-fake-spot")
+    source_id = SOURCE
 
     def fetch_page(
         self,
@@ -38,6 +50,43 @@ class OnePageSource:
         )
 
 
+def _dirty_result(*issues: IntegrityIssue) -> ImportResult:
+    return ImportResult(
+        source_id=SOURCE,
+        symbol=SYMBOL,
+        timeframe=Timeframe.MINUTES_15,
+        requested_start=START,
+        requested_end=END,
+        effective_end=END,
+        fetched=1,
+        merge=MergeResult(added=1, unchanged=0, partitions_written=1),
+        integrity=IntegrityReport(
+            source_id=SOURCE,
+            symbol=SYMBOL,
+            timeframe=Timeframe.MINUTES_15,
+            start=START,
+            end=END,
+            rows_scanned=1,
+            issues=tuple(issues),
+        ),
+    )
+
+
+def _cli_args() -> list[str]:
+    return [
+        "--exchange",
+        "fake",
+        "--symbol",
+        "BTC/USDT",
+        "--timeframe",
+        "15m",
+        "--start",
+        "2026-01-01T00:00:00Z",
+        "--end",
+        "2026-01-01T00:15:00Z",
+    ]
+
+
 def test_cli_outputs_structured_import_and_integrity_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -51,27 +100,98 @@ def test_cli_outputs_structured_import_and_integrity_result(
         lambda exchange, timeout_ms: OnePageSource(),
     )
 
-    exit_code = cli.main(
-        [
-            "--exchange",
-            "fake",
-            "--symbol",
-            "BTC/USDT",
-            "--timeframe",
-            "15m",
-            "--start",
-            "2026-01-01T00:00:00Z",
-            "--end",
-            "2026-01-01T00:15:00Z",
-        ]
+    exit_code = cli.main(_cli_args())
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert exit_code == 0
+    assert captured.err == ""
+    assert output == {
+        "effective_end": "2026-01-01T00:15:00+00:00",
+        "fetched": 1,
+        "imported": 1,
+        "integrity": {"clean": True, "issues": [], "rows_scanned": 1},
+        "partitions_written": 1,
+        "requested_end": "2026-01-01T00:15:00+00:00",
+        "requested_start": "2026-01-01T00:00:00+00:00",
+        "source_id": "ccxt-fake-spot",
+        "symbol": "BTC/USDT",
+        "timeframe": "15m",
+        "unchanged": 0,
+    }
+
+
+def test_cli_dirty_integrity_fails_closed_with_deterministic_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = Settings(_env_file=None, historical_market_data_root=tmp_path)  # type: ignore[call-arg]
+    result = _dirty_result(
+        IntegrityIssue(
+            kind=IntegrityIssueKind.GAP,
+            message="historical candle coverage gap",
+            partition="2026-01.parquet",
+            open_time=START,
+        )
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "CcxtPublicOHLCVSource", lambda exchange, timeout_ms: OnePageSource())
+    monkeypatch.setattr(BoundedOHLCVImporter, "import_range", lambda *args, **kwargs: result)
+
+    exit_code = cli.main(_cli_args())
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == (
+        '{"effective_end": "2026-01-01T00:15:00+00:00", '
+        '"error": "dirty_integrity", "integrity": {"clean": false, '
+        '"issues": [{"kind": "gap", "message": "historical candle coverage gap"}], '
+        '"rows_scanned": 1}, "requested_end": "2026-01-01T00:15:00+00:00", '
+        '"requested_start": "2026-01-01T00:00:00+00:00", '
+        '"source_id": "ccxt-fake-spot", "symbol": "BTC/USDT", "timeframe": "15m"}\n'
     )
 
-    output = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert output["source_id"] == "ccxt-fake-spot"
-    assert output["imported"] == 1
-    assert output["unchanged"] == 0
-    assert output["integrity"] == {"clean": True, "issues": [], "rows_scanned": 1}
+
+def test_cli_dirty_integrity_preserves_all_issue_kinds_and_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = Settings(_env_file=None, historical_market_data_root=tmp_path)  # type: ignore[call-arg]
+    result = _dirty_result(
+        IntegrityIssue(
+            kind=IntegrityIssueKind.GAP,
+            message="missing boundary candle",
+            partition="2026-01.parquet",
+            open_time=START,
+        ),
+        IntegrityIssue(
+            kind=IntegrityIssueKind.OVERLAP,
+            message="candle intervals overlap",
+            partition="2026-01.parquet",
+            open_time=START,
+        ),
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "CcxtPublicOHLCVSource", lambda exchange, timeout_ms: OnePageSource())
+    monkeypatch.setattr(BoundedOHLCVImporter, "import_range", lambda *args, **kwargs: result)
+
+    assert cli.main(_cli_args()) == 2
+
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert captured.out == ""
+    assert diagnostic["integrity"]["issues"] == [
+        {"kind": "gap", "message": "missing boundary candle"},
+        {"kind": "overlap", "message": "candle intervals overlap"},
+    ]
+    assert diagnostic["source_id"] == "ccxt-fake-spot"
+    assert diagnostic["symbol"] == "BTC/USDT"
+    assert diagnostic["timeframe"] == "15m"
+    assert diagnostic["requested_start"] == "2026-01-01T00:00:00+00:00"
+    assert diagnostic["requested_end"] == "2026-01-01T00:15:00+00:00"
 
 
 def test_cli_returns_nonzero_for_invalid_exchange(capsys: pytest.CaptureFixture[str]) -> None:
@@ -91,7 +211,9 @@ def test_cli_returns_nonzero_for_invalid_exchange(capsys: pytest.CaptureFixture[
     )
 
     assert exit_code == 1
-    assert "import failed" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "import failed" in captured.err
 
 
 def test_cli_rejects_symbol_before_constructing_exchange(
