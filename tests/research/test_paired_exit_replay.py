@@ -269,6 +269,24 @@ def test_entry_unfilled_is_explicit_and_creates_no_branch_position() -> None:
     assert result.comparison_state is PairedExitComparisonState.ENTRY_UNFILLED
 
 
+def test_closed_context_at_entry_fill_is_not_reused_as_exit_evidence() -> None:
+    result, _ = _run(
+        (
+            _current_context(15, close=Decimal(99)),
+            _current_context(30, close=Decimal(101)),
+        )
+    )
+
+    assert result.entry_fill is not None
+    assert result.entry_fill.fill_at == NOW + timedelta(minutes=15)
+    assert result.baseline is not None
+    assert result.ema50_candidate is not None
+    assert result.baseline.evaluated_exit_context_count == 1
+    assert result.ema50_candidate.evaluated_exit_context_count == 1
+    assert result.ema50_candidate.position_closed is False
+    assert result.comparison_state is PairedExitComparisonState.BOTH_OPEN
+
+
 def test_candidate_ema50_exit_fills_at_next_execution_open_not_reference() -> None:
     result, _ = _run((_current_context(30, close=Decimal(99)),))
     assert result.baseline is not None

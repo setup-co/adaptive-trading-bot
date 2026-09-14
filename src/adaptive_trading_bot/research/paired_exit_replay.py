@@ -298,6 +298,11 @@ class HistoricalExitBranchResult:
             if self.unresolved_open_quantity <= 0 or self.unresolved_average_entry_price is None:
                 raise PairedExitReplayError("open branch lacks its accounting state")
 
+    def validate(self) -> None:
+        """Revalidate branch semantics before a downstream research projection."""
+
+        self.__post_init__()
+
 
 @dataclass(frozen=True, slots=True)
 class PairedTrendPullbackExitReplayResult:
@@ -372,6 +377,15 @@ class PairedTrendPullbackExitReplayResult:
                 or self.exit_fill_time_delta_candidate_minus_baseline is None
             ):
                 raise PairedExitReplayError("closed pair lacks descriptive comparison")
+            expected_net_delta, expected_time_delta = _closed_pair_deltas(
+                self.baseline,
+                self.ema50_candidate,
+            )
+            if (
+                self.realized_net_pnl_delta_candidate_minus_baseline != expected_net_delta
+                or self.exit_fill_time_delta_candidate_minus_baseline != expected_time_delta
+            ):
+                raise PairedExitReplayError("closed pair descriptive deltas are inconsistent")
         elif (
             self.realized_net_pnl_delta_candidate_minus_baseline is not None
             or self.exit_fill_time_delta_candidate_minus_baseline is not None
@@ -380,6 +394,15 @@ class PairedTrendPullbackExitReplayResult:
         expected_comparison = _comparison_state(self.baseline, self.ema50_candidate)
         if self.comparison_state is not expected_comparison:
             raise PairedExitReplayError("paired comparison state contradicts branch closure")
+
+    def validate(self) -> None:
+        """Revalidate the complete paired result before downstream research use."""
+
+        if self.baseline is not None:
+            self.baseline.validate()
+        if self.ema50_candidate is not None:
+            self.ema50_candidate.validate()
+        self.__post_init__()
 
 
 class PairedTrendPullbackExitReplayRunner:
@@ -486,7 +509,7 @@ class PairedTrendPullbackExitReplayRunner:
         if entry_execution.filled_count != 1 or entry_execution.unfilled_count != 0:
             raise PairedExitReplayError("entry execution returned contradictory fill counts")
         entry_fill = deepcopy(entry_execution.fills[0])
-        self._validate_contexts(
+        exit_contexts = self._validate_contexts(
             owned_contexts,
             owned_decision,
             entry_fill,
@@ -501,7 +524,7 @@ class PairedTrendPullbackExitReplayRunner:
             intent,
             entry_order,
             entry_fill,
-            owned_contexts,
+            exit_contexts,
             series,
             owned_costs,
             start,
@@ -515,7 +538,7 @@ class PairedTrendPullbackExitReplayRunner:
             intent,
             entry_order,
             entry_fill,
-            owned_contexts,
+            exit_contexts,
             series,
             owned_costs,
             start,
@@ -526,13 +549,7 @@ class PairedTrendPullbackExitReplayRunner:
         net_delta: Decimal | None = None
         time_delta: timedelta | None = None
         if comparison is PairedExitComparisonState.BOTH_CLOSED:
-            assert baseline.realized_net_pnl is not None
-            assert candidate.realized_net_pnl is not None
-            assert baseline.exit_fill is not None
-            assert candidate.exit_fill is not None
-            with localcontext(_RESEARCH_DECIMAL_CONTEXT):
-                net_delta = candidate.realized_net_pnl - baseline.realized_net_pnl
-            time_delta = candidate.exit_fill.fill_at - baseline.exit_fill.fill_at
+            net_delta, time_delta = _closed_pair_deltas(baseline, candidate)
         result = PairedTrendPullbackExitReplayResult(
             status=PairedExitReplayStatus.REPLAYED,
             originating_decision_identity=deepcopy(owned_decision.identity),
@@ -589,11 +606,12 @@ class PairedTrendPullbackExitReplayRunner:
         start: datetime,
         end: datetime,
         historical_candles: tuple[Candle, ...],
-    ) -> None:
+    ) -> tuple[HistoricalStrategyContextObservation, ...]:
         candles_by_close = {candle.close_time: candle for candle in historical_candles}
         if len(candles_by_close) != len(historical_candles):
             raise PairedExitReplayError("shared historical candle path contains duplicate closes")
         previous: datetime | None = None
+        eligible: list[HistoricalStrategyContextObservation] = []
         for observation in observations:
             if not isinstance(observation, HistoricalStrategyContextObservation):
                 raise TypeError(
@@ -606,18 +624,25 @@ class PairedTrendPullbackExitReplayRunner:
                 or context.symbol != decision.identity.symbol
             ):
                 raise PairedExitReplayError("current context and decision identity differ")
-            if not start < context.observed_at < end or context.observed_at <= entry_fill.fill_at:
+            if (
+                not start < context.observed_at < end
+                or context.observed_at <= decision.identity.observed_at
+            ):
                 raise PairedExitReplayError("current context lies outside causal replay chronology")
             if previous is not None and context.observed_at <= previous:
                 raise PairedExitReplayError(
                     "current context timestamps must strictly increase without duplicates"
                 )
+            previous = context.observed_at
+            if context.observed_at <= entry_fill.fill_at:
+                continue
             historical_candle = candles_by_close.get(context.candle_15m.close_time)
             if historical_candle is None or historical_candle != context.candle_15m:
                 raise PairedExitReplayError(
                     "sealed strategy context candle differs from shared historical path"
                 )
-            previous = context.observed_at
+            eligible.append(observation)
+        return tuple(eligible)
 
     def _run_branch(
         self,
@@ -813,6 +838,22 @@ def _comparison_state(
     if candidate.position_closed:
         return PairedExitComparisonState.BASELINE_OPEN_CANDIDATE_CLOSED
     return PairedExitComparisonState.BOTH_OPEN
+
+
+def _closed_pair_deltas(
+    baseline: HistoricalExitBranchResult,
+    candidate: HistoricalExitBranchResult,
+) -> tuple[Decimal, timedelta]:
+    if (
+        baseline.realized_net_pnl is None
+        or candidate.realized_net_pnl is None
+        or baseline.exit_fill is None
+        or candidate.exit_fill is None
+    ):
+        raise PairedExitReplayError("closed pair lacks authoritative branch outcome facts")
+    with localcontext(_RESEARCH_DECIMAL_CONTEXT):
+        net_delta = candidate.realized_net_pnl - baseline.realized_net_pnl
+    return net_delta, candidate.exit_fill.fill_at - baseline.exit_fill.fill_at
 
 
 def _revalidate_candle(candle: Candle) -> None:
