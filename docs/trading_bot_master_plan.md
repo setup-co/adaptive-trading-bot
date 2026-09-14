@@ -197,6 +197,18 @@ Dashboard/API observes the system; it does not bypass core decision/risk layers.
 
 Create a project-owned `ExchangeAdapter` interface. A CCXT-backed adapter may be used where appropriate, but exchange-specific behavior must remain isolated.
 
+## V1 venue policy
+
+- WEEX is the primary V1 venue.
+- Futures/Perpetual is the primary V1 trading mode; Spot is secondary.
+- Research and signal data should come from authoritative WEEX public endpoints when WEEX supplies the required series.
+- Future execution, account state, positions, order lifecycle, and funding/liquidation-sensitive controls will use WEEX.
+- Other exchanges must not become implicit dependencies of the primary V1 signal path merely to simplify backfill.
+- Strategy, Risk, Safety, Feature, Replay, and accounting contracts remain exchange-neutral. WEEX-specific transport and mapping belong only in exchange/source adapters.
+- Cross-exchange data is deferred to a separately approved validation or redundancy feature; it is not part of the V1 authority chain.
+
+Using one primary data and execution venue reduces venue-basis, candle/timestamp, mark/index/funding, and operational mismatches. This policy does not approve leverage, private API integration, or Live trading. A public endpoint must still pass its own qualification and integrity gates before it becomes an accepted data source.
+
 ## Frontend
 
 Keep V1 dashboard lightweight. React is acceptable, but dashboard sophistication must not delay the trading/research core.
@@ -1359,6 +1371,14 @@ Approved:
 - GitHub Actions retained for CI/quality checks.
 - Direct Codex deployment to a restricted Staging server is preferred for development speed.
 - Direct autonomous production/live deployment remains prohibited during V1.
+
+### 2026-09-14 — WEEX-first V1 venue policy
+
+- WEEX selected as the single primary V1 venue, with Futures/Perpetual primary and Spot secondary.
+- Authoritative WEEX data is preferred for research and signals to reduce research/execution venue mismatch.
+- WEEX-specific behavior remains confined to adapters; Strategy, Risk, Safety, Feature, Replay, and accounting remain exchange-neutral.
+- Other exchanges are excluded from the primary V1 path. Any future cross-exchange validation or redundancy requires a separate explicit decision.
+- Venue selection does not waive public-data qualification, historical integrity, or staged Live-readiness gates.
 
 ---
 
