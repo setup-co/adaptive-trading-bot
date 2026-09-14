@@ -8,12 +8,15 @@ WEEX_FUTURES_5M_LAST_CANONICAL = NOT_QUALIFIED
 
 The complete locked-window audit found missing, conflicting-duplicate, and malformed authoritative V3 5m LAST rows for both required symbols. Neither previously identified missing BTCUSDT native 15m candle can be reconstructed because all three of its required 5m constituents are absent.
 
+The corrected official V2 historical diagnostic also omits both target 15m candles while returning every predeclared nearby control. The two known gaps are therefore present in both WEEX V2 and V3 historical archives; they are not demonstrated to be a V3-only aggregation defect.
+
 This result stops the canonical-source proposal. No fallback, repair, interpolation, accepted corpus import, or strategy study was performed.
 
 ## Provenance and scope
 
 - Starting git SHA: `e156b7cb6a93600ee8d78b880a6e6b862f5ef051`
 - Final complete audit execution: `2026-09-14T21:50:12.416140Z` through `2026-09-14T21:57:24.770380Z`
+- Corrected V2 diagnostic execution: `2026-09-14T22:26:05.650868Z` through `2026-09-14T22:26:07.526000Z`
 - Locked half-open range: `[2024-01-01T00:00:00Z, 2026-01-08T00:00:00Z)`
 - Symbols: `BTCUSDT`, `ETHUSDT`
 - Canonical candidate: WEEX Futures V3, `interval=5m`, `priceType=LAST`
@@ -27,8 +30,7 @@ Official sources:
 
 - [WEEX Futures V3 historical Klines](https://www.weex.com/api-doc/contract/Market_API/GetHistoryKlines)
 - [WEEX Futures V3 Kline response schema](https://www.weex.com/api-doc/contract/Market_API/GetKlines)
-- [WEEX Futures V2 candlestick data](https://www.weex.com/api-doc/contract/V2/Market_API/GetKLineData)
-- [WEEX Futures V2 change log](https://www.weex.com/api-doc/contract/V2/log/changelog)
+- [WEEX Futures V2 historical candlesticks](https://www.weex.com/api-doc/contract/V2/Market_API/GetHistoryKLineData)
 
 The V3 row schema used here is the documented 11-field array: open time, OHLC, base volume, close time, quote volume, trade count, taker-buy base volume, and taker-buy quote volume. Decimal fields were parsed and compared with exact `Decimal` semantics.
 
@@ -148,9 +150,18 @@ These fixed monthly samples show that deterministic aggregation is possible when
 
 ## V2 diagnostic control
 
-The official V2 public endpoint was reachable and returned HTTP 200 with 1,000 latest BTCUSDT 15m LAST rows, spanning `2026-09-04T12:00Z` through `2026-09-14T21:45Z` in this observation.
+The diagnostic used the official public `GET /capi/v2/market/historyCandles` endpoint. Its documented contract accepts `symbol`, `granularity`, `startTime`, `endTime`, `limit`, and `priceType`; the documented V2 symbol format is `cmt_btcusdt`. The documentation also states that when both time boundaries are supplied, `endTime` takes precedence and `startTime` is ignored.
 
-The official V2 parameter contract currently documents `symbol`, `granularity`, `limit`, and `priceType`, but no historical time boundary or cursor. The official change log states that Kline time filters were removed on 2025-08-25. Therefore, there is no documented mechanism to request the two 2024 targets. No undocumented parameter was invented. The targets were not in the latest-window response, so V2 could not distinguish a V3 aggregation defect from underlying historical absence.
+Exactly two requests were made, one per predeclared target. Each used `granularity=15m`, `limit=5`, `priceType=LAST`, `startTime=target-30m`, and `endTime=target+30m`. No retries were required. Both returned HTTP 200, five descending seven-field V2 rows, and all four expected nearby controls at `target-30m`, `target-15m`, `target+15m`, and `target+30m`.
+
+| Target open | Request bounds | Target present | Nearby controls present | Result |
+| --- | --- | --- | --- | --- |
+| `2024-01-01T02:45:00Z` | 02:15Z through 03:15Z | No | 4 of 4 | V2 omits target |
+| `2024-01-02T03:45:00Z` | 03:15Z through 04:15Z | No | 4 of 4 | V2 omits target |
+
+For the first request, V2 returned opens at 03:15, 03:00, 02:30, 02:15, and 02:00 UTC. For the second, it returned 04:15, 04:00, 03:30, 03:15, and 03:00 UTC. Each missing target is exactly the absent grid point between the two adjacent controls. The extra older row in each response is consistent with the documented rule that `startTime` is ignored when `endTime` is also supplied.
+
+The two candles are therefore absent from the official V2 historical response as well as V3. This distinguishes them from a V3-only higher-timeframe aggregation defect and supports the conclusion that the gaps exist in WEEX's available historical archive.
 
 V2 data was not merged with V3, persisted, or treated as a production/research fallback.
 
@@ -168,6 +179,8 @@ The full normalized unique-row captures, complete missing lists, comparison deta
 | `ethusdt-5m-missing-open-times.json` | 1,666 | `7ff8af160970c2c2fbf21373f1905ac0f85fe8b06565f7a6197231761e67c195` |
 | `ethusdt-monthly-native-comparison-details.json.gz` | 75 | `f4b6d0bcaa2273f947c8fe4a9b52727a812570cf6f73c01405ffda041fb612c6` |
 | `weex_5m_audit.py` | 30,710 | `8fc72203840e24367270a926c16a29e0cb8dff197c3ac4ca66e393e287aa8b42` |
+| `v2-history-candles-control.json` | 5,899 | `6fd7391bf425804fffba3811e4a4b8ac95960546388dba8062071ded23f31333` |
+| `weex_v2_historical_control.py` | 3,486 | `9b0af6579c5dc1ff954f6571e1d817c48438f5e74ec6050f59c8fcf3ca2bf016` |
 
 ## Acceptance conclusion
 
@@ -177,6 +190,7 @@ The proposal fails multiple mandatory conditions:
 2. Both series contain conflicting duplicates and malformed in-range rows.
 3. BTCUSDT contains one negative additive-field row.
 4. The two known missing native BTCUSDT 15m windows have no authoritative 5m constituents and are not reconstructable.
+5. The same two native 15m targets are absent from the bounded official V2 historical responses despite complete surrounding controls, so the gaps are not V3-specific.
 
 The result is therefore `WEEX_FUTURES_5M_LAST_CANONICAL = NOT_QUALIFIED`. Implementing a canonical 5m importer or weakening integrity requirements is not authorized by this audit. A separate explicit data-governance decision is required before further real-data research.
 
