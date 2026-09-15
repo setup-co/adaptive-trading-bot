@@ -1,0 +1,35 @@
+name: Issue 113 WEEX Old History Revalidation
+
+on:
+  push:
+    branches:
+      - issue-113-weex-old-history-cloud-revalidation
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        run_label: [run1, run2]
+    runs-on: ubuntu-latest
+    env:
+      RUN_LABEL: ${{ matrix.run_label }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile audit runner
+        run: python -m py_compile scripts/research/weex_old_history_cloud_audit.py
+      - name: Run old-history audit
+        run: python scripts/research/weex_old_history_cloud_audit.py
+      - name: Hash evidence
+        run: sha256sum .audit/issue-113/${RUN_LABEL}/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-113-${{ matrix.run_label }}
+          path: .audit/issue-113/${{ matrix.run_label }}/result.json
+          retention-days: 30
