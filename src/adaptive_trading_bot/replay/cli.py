@@ -1,4 +1,4 @@
-"""Operator CLI for local Parquet replay stepping or paced playback."""
+"""Operator CLI for local historical replay stepping or paced playback."""
 
 import argparse
 import json
@@ -8,6 +8,10 @@ from datetime import datetime
 
 from adaptive_trading_bot.config import get_settings
 from adaptive_trading_bot.domain import FrozenClock, Timeframe, TradingSymbol
+from adaptive_trading_bot.historical_sources import (
+    HistoricalSourceSelectionError,
+    open_historical_store,
+)
 from adaptive_trading_bot.replay.control import PacedReplayController, ReplaySpeed
 from adaptive_trading_bot.replay.core import (
     HistoricalReplaySource,
@@ -16,7 +20,7 @@ from adaptive_trading_bot.replay.core import (
     ReplayError,
     ReplaySeries,
 )
-from adaptive_trading_bot.storage import ParquetHistoricalCandleStore, SourceId
+from adaptive_trading_bot.storage import SourceId
 
 _SERIES_FORMAT = "SOURCE_ID,SYMBOL,TIMEFRAME,START_UTC,END_UTC"
 
@@ -50,13 +54,20 @@ def _series(value: str) -> ReplaySeries:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Replay local historical Parquet candles")
+    parser = argparse.ArgumentParser(description="Replay local historical candles")
     parser.add_argument(
         "--series",
         action="append",
         type=_series,
         required=True,
         help=f"repeatable {_SERIES_FORMAT}",
+    )
+    parser.add_argument(
+        "--dataset-version",
+        help=(
+            "required for qualified WEEX source IDs; opens the immutable version under "
+            "ATB_QUALIFIED_RESEARCH_CORPUS_ROOT"
+        ),
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--speed", choices=[speed.label for speed in ReplaySpeed])
@@ -94,7 +105,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         requested = tuple(args.series)
         clock = FrozenClock(min(series.start for series in requested))
-        store = ParquetHistoricalCandleStore(get_settings().historical_market_data_root)
+        settings = get_settings()
+        store = open_historical_store(
+            source_ids=tuple(series.source_id for series in requested),
+            generic_root=settings.historical_market_data_root,
+            qualified_corpus_root=settings.qualified_research_corpus_root,
+            dataset_version=args.dataset_version,
+        )
         session = ReplayEngine(HistoricalReplaySource(store)).prepare(requested, clock=clock)
         speed = ReplaySpeed.X1 if args.speed is None else ReplaySpeed.parse(args.speed)
         controller = PacedReplayController(session, speed)
@@ -103,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _write_batches((batch,))
         else:
             _write_batches(controller.run())
-    except (ReplayError, ValueError) as error:
+    except (HistoricalSourceSelectionError, ReplayError, ValueError) as error:
         print(f"replay failed: {error}", file=sys.stderr)
         return 1
     return 0
