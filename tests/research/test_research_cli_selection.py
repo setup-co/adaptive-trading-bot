@@ -5,7 +5,6 @@ import pytest
 import adaptive_trading_bot.research.cli as research_cli
 from adaptive_trading_bot.config import Settings
 
-
 WEEX_SOURCE = "weex-v3-last-e5b0c4035a19d5a80ca7"
 
 

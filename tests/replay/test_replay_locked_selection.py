@@ -5,7 +5,6 @@ import pytest
 import adaptive_trading_bot.replay.cli as replay_cli
 from adaptive_trading_bot.config import Settings
 
-
 WEEX_SERIES = (
     "weex-v3-last-e5b0c4035a19d5a80ca7,BTC/USDT,15m,2025-04-10T08:00:00Z,2025-04-10T08:15:00Z"
 )
