@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
+import adaptive_trading_bot.research.cli as research_cli
 from adaptive_trading_bot.config import Settings
-from adaptive_trading_bot.research import cli
 
 
 WEEX_SOURCE = "weex-v3-last-e5b0c4035a19d5a80ca7"
@@ -15,7 +15,7 @@ def configure_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         historical_market_data_root=tmp_path / "generic",
         qualified_research_corpus_root=tmp_path / "qualified",
     )  # type: ignore[call-arg]
-    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(research_cli, "get_settings", lambda: settings)
 
 
 def test_research_cli_rejects_qualified_weex_without_dataset_version(
@@ -25,7 +25,7 @@ def test_research_cli_rejects_qualified_weex_without_dataset_version(
 ) -> None:
     configure_roots(tmp_path, monkeypatch)
 
-    exit_code = cli.main(
+    exit_code = research_cli.main(
         [
             "--source",
             WEEX_SOURCE,

@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
+import adaptive_trading_bot.replay.cli as replay_cli
 from adaptive_trading_bot.config import Settings
-from adaptive_trading_bot.replay import cli
 
 
 WEEX_SERIES = (
@@ -17,7 +17,7 @@ def configure_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         historical_market_data_root=tmp_path / "generic",
         qualified_research_corpus_root=tmp_path / "qualified",
     )  # type: ignore[call-arg]
-    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(replay_cli, "get_settings", lambda: settings)
 
 
 def test_replay_cli_rejects_qualified_weex_without_dataset_version(
@@ -27,7 +27,7 @@ def test_replay_cli_rejects_qualified_weex_without_dataset_version(
 ) -> None:
     configure_roots(tmp_path, monkeypatch)
 
-    exit_code = cli.main(["--series", WEEX_SERIES, "--step"])
+    exit_code = replay_cli.main(["--series", WEEX_SERIES, "--step"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
