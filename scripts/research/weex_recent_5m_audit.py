@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import http.client
 import json
-import math
 import time
 import urllib.error
 import urllib.parse
@@ -115,11 +113,9 @@ def raw_open_time(raw: Any) -> int | None:
 
 
 def fetch_rows(params: dict[str, Any]) -> tuple[list[Any], int, list[str]]:
-    query = urllib.parse.urlencode(params)
-    url = f"{ENDPOINT}?{query}"
-    attempt_errors: list[str] = []
+    url = f"{ENDPOINT}?{urllib.parse.urlencode(params)}"
+    errors: list[str] = []
     retries = 0
-
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             request = urllib.request.Request(
@@ -127,15 +123,15 @@ def fetch_rows(params: dict[str, Any]) -> tuple[list[Any], int, list[str]]:
                 headers={"User-Agent": "adaptive-trading-bot-research-audit/1.0"},
             )
             with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
                 if response.status != 200:
                     raise RuntimeError(f"unexpected HTTP status {response.status}")
-                payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, list):
                 raise RuntimeError(f"unexpected response shape: {type(payload).__name__}")
-            return payload, retries, attempt_errors
+            return payload, retries, errors
         except urllib.error.HTTPError as exc:
             retryable = exc.code == 429 or 500 <= exc.code <= 599
-            attempt_errors.append(f"HTTP {exc.code}: {exc.reason}")
+            errors.append(f"HTTP {exc.code}: {exc.reason}")
             if not retryable or attempt == MAX_ATTEMPTS:
                 raise
         except (
@@ -145,35 +141,31 @@ def fetch_rows(params: dict[str, Any]) -> tuple[list[Any], int, list[str]]:
             http.client.IncompleteRead,
             http.client.RemoteDisconnected,
         ) as exc:
-            attempt_errors.append(f"{type(exc).__name__}: {exc}")
+            errors.append(f"{type(exc).__name__}: {exc}")
             if attempt == MAX_ATTEMPTS:
                 raise
-
         retries += 1
         time.sleep(2 ** (attempt - 1))
-
     raise AssertionError("unreachable")
 
 
 def validate_symbol(symbol: str) -> dict[str, Any]:
     observed_at_ms = int(time.time() * 1000)
-    expected_count = (END_MS - START_MS) // STEP_MS
     rows_by_open: dict[int, ParsedRow] = {}
-    duplicate_raws: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
-
+    duplicate_rows: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
     malformed: list[dict[str, Any]] = []
-    off_grid: list[int] = []
-    invalid_ohlc: list[int] = []
-    non_positive_price: list[int] = []
-    invalid_additive: list[int] = []
-    close_misalignment: list[int] = []
-    still_open: list[int] = []
+    off_grid: set[int] = set()
+    invalid_ohlc: set[int] = set()
+    non_positive_price: set[int] = set()
+    invalid_additive: set[int] = set()
+    close_misalignment: set[int] = set()
+    still_open: set[int] = set()
     out_of_page_rows = 0
     request_count = 0
     retry_count = 0
     recovered_after_error = 0
-    attempt_error_breakdown: dict[str, int] = defaultdict(int)
-    unrecovered_requests: list[dict[str, Any]] = []
+    error_breakdown: dict[str, int] = defaultdict(int)
+    unrecovered: list[dict[str, Any]] = []
 
     page_end = END_MS - STEP_MS
     while page_end >= START_MS:
@@ -188,9 +180,9 @@ def validate_symbol(symbol: str) -> dict[str, Any]:
         }
         request_count += 1
         try:
-            raw_rows, retries, attempt_errors = fetch_rows(params)
-        except Exception as exc:  # audit must record and fail closed
-            unrecovered_requests.append(
+            raw_rows, retries, errors = fetch_rows(params)
+        except Exception as exc:  # fail-closed audit evidence
+            unrecovered.append(
                 {
                     "page_start": iso_ms(page_start),
                     "page_end": iso_ms(page_end),
@@ -202,8 +194,8 @@ def validate_symbol(symbol: str) -> dict[str, Any]:
         retry_count += retries
         if retries:
             recovered_after_error += 1
-        for error in attempt_errors:
-            attempt_error_breakdown[error.split(":", 1)[0]] += 1
+        for error in errors:
+            error_breakdown[error.split(":", 1)[0]] += 1
 
         for raw in raw_rows:
             candidate_open = raw_open_time(raw)
@@ -229,26 +221,21 @@ def validate_symbol(symbol: str) -> dict[str, Any]:
                 out_of_page_rows += 1
                 continue
             if (row.open_time - START_MS) % STEP_MS != 0:
-                off_grid.append(row.open_time)
+                off_grid.add(row.open_time)
             if row.close_time != row.open_time + STEP_MS:
-                close_misalignment.append(row.open_time)
+                close_misalignment.add(row.open_time)
             if row.close_time > observed_at_ms:
-                still_open.append(row.open_time)
+                still_open.add(row.open_time)
 
-            prices = (
-                row.open_price,
-                row.high_price,
-                row.low_price,
-                row.close_price,
-            )
+            prices = (row.open_price, row.high_price, row.low_price, row.close_price)
             if any(price <= 0 for price in prices):
-                non_positive_price.append(row.open_time)
+                non_positive_price.add(row.open_time)
             if not (
                 row.high_price >= max(row.open_price, row.close_price)
                 and row.low_price <= min(row.open_price, row.close_price)
                 and row.high_price >= row.low_price
             ):
-                invalid_ohlc.append(row.open_time)
+                invalid_ohlc.add(row.open_time)
 
             additive = (
                 row.base_volume,
@@ -258,81 +245,76 @@ def validate_symbol(symbol: str) -> dict[str, Any]:
                 row.taker_buy_quote,
             )
             if any(value < 0 for value in additive):
-                invalid_additive.append(row.open_time)
+                invalid_additive.add(row.open_time)
 
             existing = rows_by_open.get(row.open_time)
             if existing is None:
                 rows_by_open[row.open_time] = row
             else:
-                duplicate_raws[row.open_time].append(row.canonical_tuple())
-                if not duplicate_raws[row.open_time]:
-                    duplicate_raws[row.open_time].append(existing.canonical_tuple())
+                duplicate_rows[row.open_time].append(row.canonical_tuple())
 
         if request_count % 100 == 0:
             print(
-                f"{symbol}: {request_count} pages, current page "
+                f"{symbol}: {request_count} pages; "
                 f"{iso_ms(page_start)}..{iso_ms(page_end)}",
                 flush=True,
             )
-
         page_end = page_start - STEP_MS
         time.sleep(REQUEST_PAUSE_SECONDS)
 
     expected = set(range(START_MS, END_MS, STEP_MS))
     missing = sorted(expected.difference(rows_by_open))
-
-    duplicate_times = sorted(duplicate_raws)
-    conflicting_duplicates: list[int] = []
-    for open_time, duplicates in duplicate_raws.items():
-        baseline = rows_by_open[open_time].canonical_tuple()
-        if any(candidate != baseline for candidate in duplicates):
-            conflicting_duplicates.append(open_time)
+    duplicate_times = sorted(duplicate_rows)
+    conflicting = sorted(
+        open_time
+        for open_time, candidates in duplicate_rows.items()
+        if any(candidate != rows_by_open[open_time].canonical_tuple() for candidate in candidates)
+    )
 
     first_open = min(rows_by_open) if rows_by_open else None
     last_open = max(rows_by_open) if rows_by_open else None
-
     return {
         "symbol": symbol,
-        "expected_grid_points": expected_count,
+        "expected_grid_points": (END_MS - START_MS) // STEP_MS,
         "received_in_range_unique_rows": len(rows_by_open),
         "missing_count": len(missing),
         "missing_timestamps": [iso_ms(value) for value in missing],
         "duplicate_open_time_count": len(duplicate_times),
         "duplicate_open_times": [iso_ms(value) for value in duplicate_times],
-        "conflicting_duplicate_count": len(conflicting_duplicates),
-        "conflicting_duplicate_times": [iso_ms(value) for value in sorted(conflicting_duplicates)],
-        "off_grid_count": len(set(off_grid)),
-        "off_grid_times": [iso_ms(value) for value in sorted(set(off_grid))],
+        "conflicting_duplicate_count": len(conflicting),
+        "conflicting_duplicate_times": [iso_ms(value) for value in conflicting],
+        "off_grid_count": len(off_grid),
+        "off_grid_times": [iso_ms(value) for value in sorted(off_grid)],
         "malformed_row_count": len(malformed),
         "malformed_rows": malformed,
-        "invalid_ohlc_count": len(set(invalid_ohlc)),
-        "invalid_ohlc_times": [iso_ms(value) for value in sorted(set(invalid_ohlc))],
-        "non_positive_price_count": len(set(non_positive_price)),
-        "non_positive_price_times": [iso_ms(value) for value in sorted(set(non_positive_price))],
-        "negative_or_invalid_additive_count": len(set(invalid_additive)),
+        "invalid_ohlc_count": len(invalid_ohlc),
+        "invalid_ohlc_times": [iso_ms(value) for value in sorted(invalid_ohlc)],
+        "non_positive_price_count": len(non_positive_price),
+        "non_positive_price_times": [iso_ms(value) for value in sorted(non_positive_price)],
+        "negative_or_invalid_additive_count": len(invalid_additive),
         "negative_or_invalid_additive_times": [
-            iso_ms(value) for value in sorted(set(invalid_additive))
+            iso_ms(value) for value in sorted(invalid_additive)
         ],
-        "close_time_misalignment_count": len(set(close_misalignment)),
+        "close_time_misalignment_count": len(close_misalignment),
         "close_time_misalignment_times": [
-            iso_ms(value) for value in sorted(set(close_misalignment))
+            iso_ms(value) for value in sorted(close_misalignment)
         ],
-        "still_open_count": len(set(still_open)),
-        "still_open_times": [iso_ms(value) for value in sorted(set(still_open))],
+        "still_open_count": len(still_open),
+        "still_open_times": [iso_ms(value) for value in sorted(still_open)],
         "first_valid_open": iso_ms(first_open) if first_open is not None else None,
         "last_valid_open": iso_ms(last_open) if last_open is not None else None,
         "request_count": request_count,
         "retry_count": retry_count,
         "requests_recovered_after_error": recovered_after_error,
-        "attempt_error_breakdown": dict(sorted(attempt_error_breakdown.items())),
-        "unrecovered_request_count": len(unrecovered_requests),
-        "unrecovered_requests": unrecovered_requests,
+        "attempt_error_breakdown": dict(sorted(error_breakdown.items())),
+        "unrecovered_request_count": len(unrecovered),
+        "unrecovered_requests": unrecovered,
         "out_of_page_rows_discarded": out_of_page_rows,
     }
 
 
 def symbol_qualified(result: dict[str, Any]) -> bool:
-    required_zero = (
+    zero_keys = (
         "missing_count",
         "conflicting_duplicate_count",
         "off_grid_count",
@@ -344,26 +326,18 @@ def symbol_qualified(result: dict[str, Any]) -> bool:
         "still_open_count",
         "unrecovered_request_count",
     )
-    return all(result[key] == 0 for key in required_zero)
+    return all(result[key] == 0 for key in zero_keys)
 
 
 def write_outputs(result: dict[str, Any]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     json_path = OUTPUT_DIR / "weex_recent_5m_audit_result.json"
-    json_text = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
-    json_path.write_text(json_text + "\n", encoding="utf-8")
-
-    sha256 = hashlib.sha256(json_path.read_bytes()).hexdigest()
-    result["artifact"] = {
-        "path": str(json_path),
-        "bytes": json_path.stat().st_size,
-        "sha256": sha256,
-    }
     json_path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
+    by_symbol = {entry["symbol"]: entry for entry in result["symbols"]}
     lines = [
         "# WEEX recent 5m audit summary",
         "",
@@ -389,49 +363,46 @@ def write_outputs(result: dict[str, Any]) -> None:
         ("Unrecovered requests", "unrecovered_request_count"),
         ("Retries", "retry_count"),
     )
-    by_symbol = {entry["symbol"]: entry for entry in result["symbols"]}
     for label, key in metrics:
         lines.append(
             f"| {label} | {by_symbol['BTCUSDT'][key]} | {by_symbol['ETHUSDT'][key]} |"
         )
     lines.extend(["", "## Offending timestamps", ""])
+    timestamp_keys = (
+        "missing_timestamps",
+        "duplicate_open_times",
+        "conflicting_duplicate_times",
+        "off_grid_times",
+        "invalid_ohlc_times",
+        "non_positive_price_times",
+        "negative_or_invalid_additive_times",
+        "close_time_misalignment_times",
+    )
     for symbol in SYMBOLS:
         entry = by_symbol[symbol]
         lines.append(f"### {symbol}")
-        for key in (
-            "missing_timestamps",
-            "duplicate_open_times",
-            "conflicting_duplicate_times",
-            "off_grid_times",
-            "invalid_ohlc_times",
-            "non_positive_price_times",
-            "negative_or_invalid_additive_times",
-            "close_time_misalignment_times",
-        ):
-            values = entry[key]
-            lines.append(f"- `{key}`: {json.dumps(values, ensure_ascii=False)}")
-        lines.append(f"- `malformed_rows`: {json.dumps(entry['malformed_rows'], ensure_ascii=False)}")
+        for key in timestamp_keys:
+            lines.append(f"- `{key}`: {json.dumps(entry[key], ensure_ascii=False)}")
+        lines.append(
+            f"- `malformed_rows`: {json.dumps(entry['malformed_rows'], ensure_ascii=False)}"
+        )
         lines.append("")
     (OUTPUT_DIR / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
-    execution_started = datetime.now(UTC)
-    print(
-        f"Auditing {SYMBOLS} over [{START.isoformat()}, {END.isoformat()})",
-        flush=True,
-    )
+    started = datetime.now(UTC)
+    print(f"Auditing {SYMBOLS} over [{START.isoformat()}, {END.isoformat()})", flush=True)
     symbol_results = [validate_symbol(symbol) for symbol in SYMBOLS]
     qualified = all(symbol_qualified(entry) for entry in symbol_results)
-    execution_finished = datetime.now(UTC)
     result = {
         "schema": "atb.weex_recent_5m_last_audit.v1",
         "endpoint": ENDPOINT,
         "interval": INTERVAL,
         "price_type": PRICE_TYPE,
         "locked_interval": f"[{START.isoformat()}, {END.isoformat()})",
-        "execution_started_at": execution_started.isoformat(),
-        "execution_finished_at": execution_finished.isoformat(),
+        "execution_started_at": started.isoformat(),
+        "execution_finished_at": datetime.now(UTC).isoformat(),
         "symbols": symbol_results,
         "status": (
             "WEEX_FUTURES_RECENT_5M_LAST = QUALIFIED"
