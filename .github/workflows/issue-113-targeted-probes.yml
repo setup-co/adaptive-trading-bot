@@ -1,0 +1,60 @@
+name: Issue 113 Targeted WEEX Cloud Probes
+
+on:
+  push:
+    branches:
+      - issue-113-weex-targeted-cloud-probes
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        run_label: [probe1, probe2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Probe known problematic timestamps
+        env:
+          RUN_LABEL: ${{ matrix.run_label }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, time, urllib.parse, urllib.request
+          from datetime import datetime, timezone, timedelta
+
+          endpoint = 'https://api-contract.weex.com/capi/v3/market/historyKlines'
+          targets = [
+              ('BTCUSDT','15m','2024-01-01T02:45:00Z',15),
+              ('BTCUSDT','15m','2024-01-02T03:45:00Z',15),
+              ('BTCUSDT','5m','2024-06-26T18:40:00Z',5),
+              ('BTCUSDT','5m','2024-06-26T18:45:00Z',5),
+              ('ETHUSDT','5m','2025-03-04T11:20:00Z',5),
+              ('ETHUSDT','5m','2025-03-04T15:50:00Z',5),
+              ('ETHUSDT','5m','2025-03-04T15:55:00Z',5),
+          ]
+          out=[]
+          for sym, interval, ts, mins in targets:
+              dt=datetime.fromisoformat(ts.replace('Z','+00:00'))
+              step=timedelta(minutes=mins)
+              start=int((dt-2*step).timestamp()*1000)
+              end=int((dt+2*step).timestamp()*1000)
+              reps=[]
+              for i in range(3):
+                  params=dict(symbol=sym, interval=interval, startTime=start, endTime=end, limit=5, priceType='LAST')
+                  url=endpoint+'?'+urllib.parse.urlencode(params)
+                  req=urllib.request.Request(url, headers={'User-Agent':'atb-targeted-cloud-probe/1.0'})
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      rows=json.loads(r.read().decode())
+                  opens=[]
+                  for row in rows:
+                      opens.append(datetime.fromtimestamp(int(row[0])/1000, tz=timezone.utc).isoformat().replace('+00:00','Z'))
+                  reps.append({'opens':opens,'target_present':ts in opens,'sha256':hashlib.sha256(json.dumps(rows,separators=(',',':')).encode()).hexdigest()})
+                  time.sleep(0.2)
+              out.append({'symbol':sym,'interval':interval,'target':ts,'stable':len({x['sha256'] for x in reps})==1,'repetitions':reps})
+          print(json.dumps({'run_label':os.environ['RUN_LABEL'],'results':out}, indent=2))
+          PY
