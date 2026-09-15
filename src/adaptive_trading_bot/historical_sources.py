@@ -9,7 +9,11 @@ from adaptive_trading_bot.research.weex_historical_corpus import (
     LockedWeexResearchCorpusStore,
     WeexHistoricalCorpusError,
 )
-from adaptive_trading_bot.storage import HistoricalCandleStore, ParquetHistoricalCandleStore, SourceId
+from adaptive_trading_bot.storage import (
+    HistoricalCandleStore,
+    ParquetHistoricalCandleStore,
+    SourceId,
+)
 
 _LOCKED_WEEX_SOURCE_PREFIX = "weex-v3-last-"
 

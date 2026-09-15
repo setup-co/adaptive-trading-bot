@@ -65,9 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         source_ids = tuple(SourceId(value) for value in arguments.source)
-        symbols = tuple(
-            TradingSymbol(*value.split("/", maxsplit=1)) for value in arguments.symbol
-        )
+        symbols = tuple(TradingSymbol(*value.split("/", maxsplit=1)) for value in arguments.symbol)
         settings = get_settings()
         store = open_historical_store(
             source_ids=source_ids,
