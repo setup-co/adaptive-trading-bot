@@ -1,0 +1,27 @@
+name: Ruff import debug
+
+on:
+  push:
+    branches:
+      - issue-115-weex-qualified-corpus
+    paths:
+      - .github/workflows/ruff-import-debug.yml
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-115-weex-qualified-corpus
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff==0.16.7
+      - name: Show Ruff import fix
+        run: |
+          ruff check tests/replay/test_replay_locked_selection.py tests/research/test_research_cli_selection.py --select I --fix
+          git diff -- tests/replay/test_replay_locked_selection.py tests/research/test_research_cli_selection.py
