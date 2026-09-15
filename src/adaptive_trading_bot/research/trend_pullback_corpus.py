@@ -7,7 +7,6 @@ authorities.  Historical operational facts unavailable from OHLCV remain explici
 
 from __future__ import annotations
 
-from argparse import ArgumentParser
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timedelta
@@ -16,7 +15,6 @@ from enum import Enum, StrEnum
 from hashlib import sha256
 from hmac import compare_digest
 from json import dumps
-from pathlib import Path
 
 from adaptive_trading_bot.domain import (
     FrozenClock,
@@ -68,7 +66,6 @@ from adaptive_trading_bot.risk import (
 )
 from adaptive_trading_bot.storage import (
     HistoricalCandleStore,
-    ParquetHistoricalCandleStore,
     SourceId,
 )
 from adaptive_trading_bot.strategies import (
@@ -871,51 +868,12 @@ def _canonical_integrity_value(
     )
 
 
-def _parse_utc(value: str) -> datetime:
-    return require_utc(
-        datetime.fromisoformat(value.strip().replace("Z", "+00:00")),
-        field="CLI timestamp",
-    )
-
-
-def _parser() -> ArgumentParser:
-    parser = ArgumentParser(description="Generate a research-only Trend Pullback corpus")
-    parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--source", action="append", required=True)
-    parser.add_argument(
-        "--symbol", action="append", choices=("BTC/USDT", "ETH/USDT"), required=True
-    )
-    parser.add_argument("--start", type=_parse_utc, required=True)
-    parser.add_argument("--end", type=_parse_utc, required=True)
-    parser.add_argument("--research-equity", type=Decimal, required=True)
-    parser.add_argument(
-        "--speed", choices=tuple(speed.label for speed in ReplaySpeed), default="100x"
-    )
-    parser.add_argument("--output", type=Path)
-    return parser
-
-
 def main(argv: list[str] | None = None) -> int:
-    """Generate a deterministic JSON research artifact without market-data mutation."""
+    """Delegate legacy module execution to the fail-closed operator CLI."""
 
-    arguments = _parser().parse_args(argv)
-    symbols = tuple(TradingSymbol(*value.split("/", maxsplit=1)) for value in arguments.symbol)
-    configuration = ResearchAdmissionConfiguration(
-        source_ids=tuple(SourceId(value) for value in arguments.source),
-        symbols=symbols,
-        start=arguments.start,
-        end=arguments.end,
-        research_equity_quote=arguments.research_equity,
-    )
-    corpus = TrendPullbackHistoricalCorpusGenerator(
-        ParquetHistoricalCandleStore(arguments.data_root)
-    ).generate(configuration, replay_speed=ReplaySpeed.parse(arguments.speed))
-    artifact = corpus.to_json()
-    if arguments.output is None:
-        print(artifact)
-    else:
-        arguments.output.write_text(artifact + "\n", encoding="utf-8")
-    return 0
+    from adaptive_trading_bot.research.cli import main as cli_main
+
+    return cli_main(argv)
 
 
 if __name__ == "__main__":  # pragma: no cover

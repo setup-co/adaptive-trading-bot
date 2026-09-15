@@ -5,12 +5,32 @@ accepted Trend Pullback decision corpus, extends the same Replay → Feature →
 Technical Regime → MTF Regime context path beyond the decision window, and runs the existing
 paired exit replay once for every research-admissible identity.
 
+History uses the same fail-closed selector as Replay and Research Corpus. Qualified
+`weex-v3-last-*` sources require the exact `--dataset-version` and resolve only through
+`LockedWeexResearchCorpusStore` under `ATB_QUALIFIED_RESEARCH_CORPUS_ROOT`; `--data-root` remains
+available only for generic sources and cannot override qualified WEEX bytes.
+
 The decision window and evaluation horizon are deliberately separate. `--follow-up-hours`
 must be positive and divisible by four. Every admitted decision receives exactly that horizon,
 including a decision observed at the corpus end. Missing extended 15m/1h/4h history fails closed;
 an open branch at the fixed end remains unresolved and is never force-closed.
 
-Example:
+Qualified WEEX example:
+
+```console
+atb-research-exit-robustness \
+  --source weex-v3-last-e5b0c4035a19d5a80ca7 \
+  --dataset-version weex-v1-5m-last-a629a29b580b2e103adba918 \
+  --symbol BTC/USDT --symbol ETH/USDT \
+  --start 2025-04-10T08:00:00Z \
+  --end 2026-01-01T00:00:00Z \
+  --research-equity 10000 \
+  --follow-up-hours 168 \
+  --spread-bps 2 --slippage-bps 3 --fee-bps 10 \
+  --output artifacts/trend-pullback-exit-robustness.json
+```
+
+Generic-source example:
 
 ```console
 atb-research-exit-robustness \

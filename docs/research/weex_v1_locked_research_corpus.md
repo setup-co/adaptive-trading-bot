@@ -26,8 +26,10 @@ synthetic candle, native higher-timeframe row, MARK/INDEX row, or data from anot
 - Manifest schema: `weex-v1-research-corpus-v1`
 - Canonical schema: `weex-futures-v3-last-5m-v1`
 - Recorded build time: `2026-09-15T18:00:00Z`
-- Accepted build root (outside Git):
+- Original accepted qualification build root:
   `study-artifacts/issue-115-weex-qualified-corpus-defbf03-run3`
+- Durable repository snapshot:
+  `data/research_corpus/weex-v1-5m-last-a629a29b580b2e103adba918/`
 
 The public WEEX archive has changed historically, so these hashes—not a future API response—are
 the authority for this dataset version.
@@ -138,15 +140,19 @@ passed independently for every derived interval.
   `e4558a5ace6d7a7216dc33cd5833370995bd15fcff83c7e686b99943cd5f9264`
 - Committed full artifact inventory:
   `docs/research/manifests/weex-v1-5m-last-a629a29b580b2e103adba918.json`
+- Committed immutable snapshot:
+  `data/research_corpus/weex-v1-5m-last-a629a29b580b2e103adba918/`
 
 An independent post-build load revalidated the manifest/version, all 107 artifact hashes and
 sizes, every derived interval scan, and aggregate row counts. Result: `PASS`.
 
 ## Locked research behavior
 
-`atb-build-weex-corpus` is the only networked build step. It uses the public endpoint only and
-requires a fresh output root. `LockedWeexResearchCorpusStore` accepts a local root plus an exact
-dataset version; it has no network/source dependency and cannot merge.
+`atb-build-weex-corpus` is the networked qualification/build tool. It uses the public endpoint
+only and requires a fresh output root; it is not a fallback used by normal research reads. The
+approved bytes are durably committed under the versioned repository corpus directory.
+`LockedWeexResearchCorpusStore` accepts that local version root plus the exact dataset version;
+it has no network/source dependency and cannot merge.
 
 The locked store fails closed when:
 
@@ -157,9 +163,30 @@ The locked store fails closed when:
 - a requested range crosses an excluded or unqualified boundary;
 - a Parquet schema/integrity check fails.
 
-There is no silent fresh-WEEX fallback. Replay and research consume the locked store through the
-existing `HistoricalCandleStore` contract; Strategy, Risk, Safety, Experience, execution, Paper,
-and Live code remain unchanged.
+There is no silent fresh-WEEX fallback. The shared historical-source selector is used by Replay,
+primary Research Corpus, and Exit Robustness. A `weex-v3-last-*` source must supply the exact
+qualified version and resolves only to `LockedWeexResearchCorpusStore` under
+`ATB_QUALIFIED_RESEARCH_CORPUS_ROOT`; a generic Parquet root is ignored for that namespace.
+Missing/unknown versions, source/version mismatches, mixed generic/qualified sources, changed
+manifest or artifact bytes, and unavailable/excluded ranges fail closed. Strategy, Risk, Safety,
+Experience, execution, Paper, and Live code remain unchanged.
+
+### Operator-entry-point audit
+
+The production CLI audit covered every `ParquetHistoricalCandleStore` construction and every
+Replay/Research command entry point:
+
+- `atb-replay`: shared selector; qualified namespace is locked;
+- `atb-research-corpus`: shared selector; qualified namespace is locked;
+- legacy `trend_pullback_corpus` module execution: delegates to the same Research Corpus CLI;
+- `atb-research-exit-robustness`: shared selector; qualified namespace is locked;
+- `atb-import-ohlcv`: a bounded generic public-data writer, not a qualified research reader;
+- corpus builder and locked-store internals: deliberate lower-level construction used to create
+  derived artifacts and then expose them read-only;
+- remaining direct constructions: unit-test fixtures or deliberately generic lower-level APIs.
+
+No other normal research/replay CLI can open a `weex-v3-last-*` source through generic Parquet.
+The one-time corpus-materialization workflow was removed after the durable snapshot was committed.
 
 ## Reproduction
 
@@ -174,8 +201,10 @@ atb-build-weex-corpus \
 ```
 
 Because the public archive is mutable, a later build may correctly produce different hashes or
-fail qualification. It must receive a new dataset version and must never overwrite or silently
-replace this accepted version.
+fail qualification. It must receive a new reviewed dataset version and must never overwrite or
+silently replace the committed accepted directory. The repository marks corpus and manifest
+files as byte-preserving Git content so checkout newline conversion cannot change the approved
+manifest SHA-256.
 
 ## Limitations and prohibited interpretations
 
@@ -183,7 +212,7 @@ replace this accepted version.
 - The two accepted ETH segments are independent. Research must not treat the exclusion as a
   continuous market path or carry indicator/position state across it.
 - Data qualification says nothing about profitability or strategy robustness.
-- No accepted corpus file is committed to Git; the manifest, hashes, exact build tool, and storage
-  procedure are committed.
+- The accepted immutable corpus bytes are committed under the exact version directory; mutation
+  in place invalidates the manifest/hash gate and is prohibited.
 - No private endpoint, credential, order, Paper/Live behavior, leverage, Experience authority
   change, strategy/backtest performance run, or deployment occurred.

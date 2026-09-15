@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from argparse import ArgumentParser
 from collections import defaultdict
 from copy import deepcopy
@@ -19,10 +20,11 @@ from adaptive_trading_bot.backtest import (
     ExecutionSeries,
     HistoricalExecutionSource,
 )
+from adaptive_trading_bot.config import get_settings
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.journal import DecisionIdentity
-from adaptive_trading_bot.replay import ReplaySpeed
+from adaptive_trading_bot.replay import ReplayError, ReplaySpeed
 from adaptive_trading_bot.research.paired_exit_replay import (
     HistoricalExitCause,
     PairedExitComparisonState,
@@ -35,10 +37,10 @@ from adaptive_trading_bot.research.trend_pullback_corpus import (
     ResearchAdmissionConfiguration,
     TrendPullbackHistoricalCorpusGenerator,
     TrendPullbackHistoricalResearchCorpus,
+    TrendPullbackResearchCorpusError,
 )
 from adaptive_trading_bot.storage import (
     HistoricalCandleStore,
-    ParquetHistoricalCandleStore,
     SourceId,
 )
 
@@ -953,8 +955,19 @@ def _parse_utc(value: str) -> datetime:
 
 def _parser() -> ArgumentParser:
     parser = ArgumentParser(description="Run research-only Trend Pullback exit robustness")
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        help="optional generic historical root override; never used for qualified WEEX history",
+    )
     parser.add_argument("--source", action="append", required=True)
+    parser.add_argument(
+        "--dataset-version",
+        help=(
+            "required for qualified WEEX source IDs; opens the immutable version under "
+            "ATB_QUALIFIED_RESEARCH_CORPUS_ROOT"
+        ),
+    )
     parser.add_argument(
         "--symbol", action="append", choices=("BTC/USDT", "ETH/USDT"), required=True
     )
@@ -970,33 +983,57 @@ def _parser() -> ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Generate a deterministic research report from local historical Parquet data."""
+    """Generate a deterministic report from an explicitly selected historical store."""
+
+    from adaptive_trading_bot.historical_sources import (
+        HistoricalSourceSelectionError,
+        open_historical_store,
+    )
 
     arguments = _parser().parse_args(argv)
-    store = ParquetHistoricalCandleStore(arguments.data_root)
-    admission = ResearchAdmissionConfiguration(
-        source_ids=tuple(SourceId(value) for value in arguments.source),
-        symbols=tuple(TradingSymbol(*value.split("/", maxsplit=1)) for value in arguments.symbol),
-        start=arguments.start,
-        end=arguments.end,
-        research_equity_quote=arguments.research_equity,
-    )
-    corpus = TrendPullbackHistoricalCorpusGenerator(store).generate(admission)
-    configuration = TrendPullbackExitRobustnessConfiguration(
-        source_corpus_id=corpus.corpus_id,
-        source_corpus_digest=corpus.corpus_digest,
-        execution_costs=ExecutionCostConfiguration(
-            spread_bps=arguments.spread_bps,
-            slippage_bps=arguments.slippage_bps,
-            fee_bps=arguments.fee_bps,
-        ),
-        follow_up_duration=timedelta(hours=arguments.follow_up_hours),
-    )
-    artifact = TrendPullbackExitRobustnessRunner(store).run(corpus, configuration).to_json()
-    if arguments.output is None:
-        print(artifact)
-    else:
-        arguments.output.write_text(artifact + "\n", encoding="utf-8")
+    try:
+        source_ids = tuple(SourceId(value) for value in arguments.source)
+        settings = get_settings()
+        store = open_historical_store(
+            source_ids=source_ids,
+            generic_root=arguments.data_root or settings.historical_market_data_root,
+            qualified_corpus_root=settings.qualified_research_corpus_root,
+            dataset_version=arguments.dataset_version,
+        )
+        admission = ResearchAdmissionConfiguration(
+            source_ids=source_ids,
+            symbols=tuple(
+                TradingSymbol(*value.split("/", maxsplit=1)) for value in arguments.symbol
+            ),
+            start=arguments.start,
+            end=arguments.end,
+            research_equity_quote=arguments.research_equity,
+        )
+        corpus = TrendPullbackHistoricalCorpusGenerator(store).generate(admission)
+        configuration = TrendPullbackExitRobustnessConfiguration(
+            source_corpus_id=corpus.corpus_id,
+            source_corpus_digest=corpus.corpus_digest,
+            execution_costs=ExecutionCostConfiguration(
+                spread_bps=arguments.spread_bps,
+                slippage_bps=arguments.slippage_bps,
+                fee_bps=arguments.fee_bps,
+            ),
+            follow_up_duration=timedelta(hours=arguments.follow_up_hours),
+        )
+        artifact = TrendPullbackExitRobustnessRunner(store).run(corpus, configuration).to_json()
+        if arguments.output is None:
+            print(artifact)
+        else:
+            arguments.output.write_text(artifact + "\n", encoding="utf-8")
+    except (
+        HistoricalSourceSelectionError,
+        ReplayError,
+        TrendPullbackExitRobustnessError,
+        TrendPullbackResearchCorpusError,
+        ValueError,
+    ) as error:
+        print(f"exit robustness failed: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
