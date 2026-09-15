@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
-from adaptive_trading_bot.domain import Timeframe, TradingSymbol
+import adaptive_trading_bot.research.weex_historical_corpus as corpus_module
+from adaptive_trading_bot.domain import FrozenClock, Timeframe, TradingSymbol
+from adaptive_trading_bot.replay import HistoricalReplaySource, ReplayEngine, ReplaySeries
 from adaptive_trading_bot.research.weex_historical_corpus import (
     CanonicalFiveMinuteCandle,
     CorpusHashMismatchError,
@@ -116,6 +120,15 @@ def configuration(root: Path, *, built_at: datetime = START) -> WeexCorpusBuildC
     )
 
 
+def trust_test_manifest(monkeypatch: pytest.MonkeyPatch, root: Path, dataset_version: str) -> None:
+    digest = sha256((root / "manifest.json").read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        corpus_module,
+        "QUALIFIED_DATASET_MANIFEST_SHA256",
+        MappingProxyType({dataset_version: digest}),
+    )
+
+
 def test_wire_row_rejects_blank_additive_field() -> None:
     row: list[object] = [
         int(START.timestamp() * 1000),
@@ -185,7 +198,9 @@ def test_public_source_filters_older_server_spill_before_domain_validation() -> 
     assert len(result.candles) == 1
 
 
-def test_builder_derives_only_complete_buckets_and_records_hashes(tmp_path: Path) -> None:
+def test_builder_derives_only_complete_buckets_and_records_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = FakeQualifiedSource()
     manifest = WeexQualifiedCorpusBuilder(source).build(configuration(tmp_path))
 
@@ -201,6 +216,7 @@ def test_builder_derives_only_complete_buckets_and_records_hashes(tmp_path: Path
     assert all(len(item.sha256) == 64 and item.row_count > 0 for item in manifest.artifacts)
     assert [call[0] for call in source.calls] == ["BTCUSDT", "ETHUSDT", "ETHUSDT"]
 
+    trust_test_manifest(monkeypatch, tmp_path, manifest.dataset_version)
     locked = LockedWeexResearchCorpusStore(tmp_path, dataset_version=manifest.dataset_version)
     candles = locked.read(
         locked.source_id,
@@ -213,12 +229,18 @@ def test_builder_derives_only_complete_buckets_and_records_hashes(tmp_path: Path
     assert candles[0].volume == Decimal("30.0")
 
 
-def test_locked_store_rejects_unknown_version_and_quarantine_crossing(tmp_path: Path) -> None:
+def test_locked_store_rejects_unknown_version_and_quarantine_crossing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     manifest = WeexQualifiedCorpusBuilder(FakeQualifiedSource()).build(configuration(tmp_path))
 
     with pytest.raises(CorpusManifestError, match="unknown"):
         LockedWeexResearchCorpusStore(tmp_path, dataset_version="unknown")
 
+    with pytest.raises(CorpusManifestError, match="not project-qualified"):
+        LockedWeexResearchCorpusStore(tmp_path, dataset_version=manifest.dataset_version)
+
+    trust_test_manifest(monkeypatch, tmp_path, manifest.dataset_version)
     locked = LockedWeexResearchCorpusStore(tmp_path, dataset_version=manifest.dataset_version)
     with pytest.raises(CorpusRangeError, match="unqualified"):
         locked.read(
@@ -232,8 +254,11 @@ def test_locked_store_rejects_unknown_version_and_quarantine_crossing(tmp_path: 
         locked.scan_integrity(locked.source_id, BTC, Timeframe.MINUTES_15)
 
 
-def test_locked_store_rechecks_artifact_hash_before_every_read(tmp_path: Path) -> None:
+def test_locked_store_rechecks_artifact_hash_before_every_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     manifest = WeexQualifiedCorpusBuilder(FakeQualifiedSource()).build(configuration(tmp_path))
+    trust_test_manifest(monkeypatch, tmp_path, manifest.dataset_version)
     locked = LockedWeexResearchCorpusStore(tmp_path, dataset_version=manifest.dataset_version)
     artifact_path = tmp_path / manifest.artifacts[0].path
     artifact_path.chmod(0o666)
@@ -248,6 +273,29 @@ def test_locked_store_rechecks_artifact_hash_before_every_read(tmp_path: Path) -
             start=START,
             end=START + timedelta(hours=1),
         )
+
+
+def test_replay_consumes_exact_locked_version_without_a_network_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = WeexQualifiedCorpusBuilder(FakeQualifiedSource()).build(configuration(tmp_path))
+    trust_test_manifest(monkeypatch, tmp_path, manifest.dataset_version)
+    locked = LockedWeexResearchCorpusStore(tmp_path, dataset_version=manifest.dataset_version)
+    requested = ReplaySeries(
+        source_id=locked.source_id,
+        symbol=BTC,
+        timeframe=Timeframe.MINUTES_15,
+        start=START,
+        end=START + timedelta(hours=1),
+    )
+
+    session = ReplayEngine(HistoricalReplaySource(locked)).prepare(
+        (requested,), clock=FrozenClock(START)
+    )
+
+    assert [batch.observed_at for batch in session] == [
+        START + index * timedelta(minutes=15) for index in range(1, 5)
+    ]
 
 
 def test_dataset_version_is_independent_of_build_timestamp(tmp_path: Path) -> None:

@@ -231,6 +231,20 @@ Each replay batch is emitted as one JSON line with source provenance, symbol/tim
 boundaries, batch size, and OHLCV encoded as decimal strings. Integrity or input failures exit
 non-zero before replay output.
 
+### Locked WEEX research corpus
+
+The qualified WEEX research-data boundary is separate from the generic importer. The networked
+`atb-build-weex-corpus` command snapshots only predeclared WEEX Futures V3 `5m LAST` intervals
+into a fresh external root and derives V1 `15m`, `1h`, and `4h` Parquet series from complete UTC
+buckets. Its manifest binds exact source provenance, qualification/exclusion boundaries, warm-up
+policy, row counts, build-code commit, artifact sizes, and SHA-256 values to one dataset version.
+
+Research and Replay open that data through `LockedWeexResearchCorpusStore` with an exact version.
+The store is read-only, rechecks the manifest and all artifact hashes, rejects ranges crossing an
+unqualified boundary, and has no API client or fresh-download fallback. Large Parquet artifacts
+remain outside Git; the complete accepted manifest and qualification report are committed under
+`docs/research/`.
+
 ## Safety
 
 - No committed secrets.

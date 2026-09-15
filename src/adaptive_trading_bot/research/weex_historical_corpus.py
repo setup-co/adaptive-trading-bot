@@ -24,7 +24,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Final, Protocol
 
@@ -70,6 +70,16 @@ _CANONICAL_SCHEMA: Final = pa.schema(
         b"adaptive_trading_bot.schema_version": CANONICAL_SCHEMA_VERSION.encode(),
         b"adaptive_trading_bot.source_endpoint": WEEX_HISTORY_ENDPOINT.encode(),
         b"adaptive_trading_bot.price_type": PRICE_TYPE.encode(),
+    }
+)
+
+# This registry is the reviewable project-owned authority for datasets accepted by name.
+# Adding a future corpus requires a new qualification issue and code review.
+QUALIFIED_DATASET_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "weex-v1-5m-last-a629a29b580b2e103adba918": (
+            "98705bd49ec05f912ef6c0257ea9a9886b706f3c80ca84c82faace4e20415e95"
+        )
     }
 )
 
@@ -430,6 +440,22 @@ class WeexResearchCorpusManifest:
             raise CorpusManifestError("artifacts must be non-empty and canonically ordered")
         if len({item.path for item in self.artifacts}) != len(self.artifacts):
             raise CorpusManifestError("artifact paths must be unique")
+        for artifact in self.artifacts:
+            relative = PurePosixPath(artifact.path)
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not artifact.path.endswith(".parquet")
+                or len(artifact.sha256) != 64
+                or any(character not in "0123456789abcdef" for character in artifact.sha256)
+                or type(artifact.size_bytes) is not int
+                or artifact.size_bytes <= 0
+                or type(artifact.row_count) is not int
+                or artifact.row_count <= 0
+                or artifact.symbol not in {"BTCUSDT", "ETHUSDT"}
+                or artifact.timeframe not in {"5m", "15m", "1h", "4h"}
+            ):
+                raise CorpusManifestError("artifact inventory entry is invalid")
         for mapping in (self.canonical_intervals, self.quarantines, self.warmup_exclusions):
             _validate_interval_mapping(mapping)
         for counts in (
@@ -601,9 +627,15 @@ class LockedWeexResearchCorpusStore(HistoricalCandleStore):
 
     def __init__(self, root: Path, *, dataset_version: str) -> None:
         self._root = root
-        self._manifest = WeexResearchCorpusManifest.from_path(root / "manifest.json")
+        manifest_path = root / "manifest.json"
+        self._manifest = WeexResearchCorpusManifest.from_path(manifest_path)
         if dataset_version != self._manifest.dataset_version:
             raise CorpusManifestError("requested dataset version is unknown")
+        accepted_manifest_hash = QUALIFIED_DATASET_MANIFEST_SHA256.get(dataset_version)
+        if accepted_manifest_hash is None:
+            raise CorpusManifestError("requested dataset version is not project-qualified")
+        if _file_sha256(manifest_path) != accepted_manifest_hash:
+            raise CorpusHashMismatchError("qualified corpus manifest hash mismatch")
         self._source_id = SourceId(self._manifest.source_id)
         self._store = ParquetHistoricalCandleStore(root / "derived")
         self._verify_artifacts()
