@@ -1,0 +1,45 @@
+name: Issue 113 Parallel WEEX Old Audit
+
+on:
+  push:
+    branches:
+      - issue-113-weex-parallel-old-audit
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        run_label: [run1, run2]
+        symbol: [BTCUSDT, ETHUSDT]
+        chunk: [c1, c2, c3, c4, c5]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Select chunk
+        shell: bash
+        run: |
+          case "${{ matrix.chunk }}" in
+            c1) echo "START=2024-01-01T00:00:00Z" >> "$GITHUB_ENV"; echo "END=2024-04-01T00:00:00Z" >> "$GITHUB_ENV" ;;
+            c2) echo "START=2024-04-01T00:00:00Z" >> "$GITHUB_ENV"; echo "END=2024-07-01T00:00:00Z" >> "$GITHUB_ENV" ;;
+            c3) echo "START=2024-07-01T00:00:00Z" >> "$GITHUB_ENV"; echo "END=2024-10-01T00:00:00Z" >> "$GITHUB_ENV" ;;
+            c4) echo "START=2024-10-01T00:00:00Z" >> "$GITHUB_ENV"; echo "END=2025-01-01T00:00:00Z" >> "$GITHUB_ENV" ;;
+            c5) echo "START=2025-01-01T00:00:00Z" >> "$GITHUB_ENV"; echo "END=2025-04-02T00:00:00Z" >> "$GITHUB_ENV" ;;
+          esac
+      - name: Run chunk audit
+        env:
+          RUN_LABEL: ${{ matrix.run_label }}
+          SYMBOL: ${{ matrix.symbol }}
+          CHUNK: ${{ matrix.chunk }}
+        run: python scripts/research/weex_chunk_audit.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-113-${{ matrix.run_label }}-${{ matrix.symbol }}-${{ matrix.chunk }}
+          path: .audit/*.json
+          retention-days: 30
