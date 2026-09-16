@@ -7,11 +7,13 @@ This file defines mandatory operating rules for any coding agent (including Code
 Before implementing any issue or changing architecture:
 
 1. Read `docs/trading_bot_master_plan.md`.
-2. Read the GitHub issue assigned to the task in full.
-3. Inspect existing interfaces and tests relevant to the task.
-4. Do not expand scope beyond the issue.
+2. Read `docs/architect_workflow.md`.
+3. Read `docs/project_state.md`, then verify its snapshot against current GitHub `main`, active Issues/PRs and latest architect comments.
+4. Read the GitHub issue assigned to the task in full, including the latest architect instruction when present.
+5. Inspect existing interfaces and tests relevant to the task.
+6. Do not expand scope beyond the issue.
 
-If an issue conflicts with the Master Plan, STOP and report the conflict. Do not silently change architecture.
+If an issue conflicts with the Master Plan, STOP and report the conflict. Do not silently change architecture. If workflow/state documentation conflicts with current GitHub facts, STOP and surface the mismatch rather than guessing.
 
 ## 2. Core architecture locks for Version 1
 
@@ -143,6 +145,8 @@ At minimum as the project grows, CI should run relevant combinations of:
 - formatting check
 - type check
 - security/static checks where appropriate
+
+Codex must run the required local validation, publish/update the PR and ensure GitHub Actions is triggered, but must not waste tokens polling or waiting for GitHub CI merely to finish. The architect reviews the exact-head GitHub CI result later according to `docs/architect_workflow.md`.
 
 A deployment must not be treated as successful merely because the service starts.
 
