@@ -1448,7 +1448,7 @@ Approved:
 - Three initial strategy families selected.
 - Hybrid fundamental architecture selected.
 - Statistical/Bayesian Experience Engine selected for V1.
-- ML/DL/RL/leverage excluded from V1.
+- ML/DL/RL/leverage excluded from V1. The leverage portion of this historical decision was superseded by the 2026-09-17 Master Plan v1.2 decision below.
 - Replay/Backtest/Paper/Shadow are mandatory gates.
 - Self-modification prohibited.
 
@@ -1484,9 +1484,13 @@ Approved:
 
 # 38. Next action
 
-Start **Phase 1 — Project Foundation** through small GitHub Issues and PRs.
+The current critical-path sequence is:
 
-The first implementation issue must establish the minimum Python project baseline, typed configuration, testing/lint/type-check tooling, health endpoint, structured logging baseline and CI without introducing trading logic, exchange code, strategies, market-data collection or unnecessary infrastructure.
+1. Complete architect review and merge of Master Plan v1.2 / Issue #123.
+2. Execute and review Issue #124 as the next architecture decision: OpenAI-first, cost-aware AI architecture.
+3. After #124, the architect must define the minimum representative leveraged-perpetual mechanics required before any new primary trading study. At minimum, this must cover leverage/notional authority, margin, funding, mark-price/liquidation semantics, protective-stop/liquidation safety, and account-survival correctness without unnecessary overengineering.
+
+Issue #118 is permanently stopped and must never be resumed. No new full EMA50 or other primary study may begin until the architect explicitly predeclares it from the then-current locked code SHA and confirms that the required representative leveraged-perpetual mechanics are in place.
 
 ---
 
