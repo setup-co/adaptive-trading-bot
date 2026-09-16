@@ -231,6 +231,23 @@ Each replay batch is emitted as one JSON line with source provenance, symbol/tim
 boundaries, batch size, and OHLCV encoded as decimal strings. Integrity or input failures exit
 non-zero before replay output.
 
+### Locked WEEX research corpus
+
+The qualified WEEX research-data boundary is separate from the generic importer. The approved
+immutable snapshot is committed under
+`data/research_corpus/weex-v1-5m-last-a629a29b580b2e103adba918/`. It contains canonical WEEX
+Futures V3 `5m LAST` data plus V1 `15m`, `1h`, and `4h` series derived from complete UTC buckets.
+Its manifest binds exact source provenance, qualification/exclusion boundaries, warm-up policy,
+row counts, build-code commit, artifact sizes, and SHA-256 values to that dataset version.
+
+Replay, Research Corpus, and Exit Robustness use one shared fail-closed source selector. A
+qualified `weex-v3-last-*` source requires the exact dataset version and can open only
+`LockedWeexResearchCorpusStore` below the configured qualified-corpus root; it cannot use an
+arbitrary generic Parquet root or be mixed with generic history. The locked store is read-only,
+rechecks the manifest and all artifact hashes, rejects unqualified ranges, and has no API client
+or fresh-download fallback. Changed bytes require a newly reviewed dataset version rather than
+mutation in place. The complete qualification report is under `docs/research/`.
+
 ## Safety
 
 - No committed secrets.

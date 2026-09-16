@@ -1,0 +1,2 @@
+data/research_corpus/** -text
+docs/research/manifests/*.json -text

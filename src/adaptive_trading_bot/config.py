@@ -36,6 +36,7 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://adaptive_bot:local-dev-only@localhost:5432/adaptive_trading_bot"
     )
     historical_market_data_root: Path = Path("data/market_data")
+    qualified_research_corpus_root: Path = Path("data/research_corpus")
     ccxt_request_timeout_ms: int = Field(default=10_000, ge=1, le=60_000)
     ccxt_ohlcv_page_limit: int = Field(default=500, ge=1, le=1_000)
     live_trading_enabled: bool = False
