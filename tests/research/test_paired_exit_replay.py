@@ -33,6 +33,8 @@ from adaptive_trading_bot.regime import (
     RegimeLabel,
 )
 from adaptive_trading_bot.research import (
+    EntryFillInvalidationAudit,
+    EntryFillInvalidationReason,
     ExitReplayBranchPolicy,
     HistoricalExitCause,
     HistoricalStrategyContextObservation,
@@ -267,6 +269,146 @@ def test_entry_unfilled_is_explicit_and_creates_no_branch_position() -> None:
     assert result.baseline is None
     assert result.ema50_candidate is None
     assert result.comparison_state is PairedExitComparisonState.ENTRY_UNFILLED
+
+
+@pytest.mark.parametrize(
+    ("side", "execution_open", "expected_fill"),
+    (
+        (CandidateAction.LONG_CANDIDATE, Decimal(70), Decimal("70.175")),
+        (CandidateAction.SHORT_CANDIDATE, Decimal(140), Decimal("139.650")),
+    ),
+)
+def test_entry_fill_beyond_sealed_stop_is_explicitly_invalidated(
+    side: CandidateAction,
+    execution_open: Decimal,
+    expected_fill: Decimal,
+) -> None:
+    decision = _decision(side=side)
+    result, _ = _run((), decision=decision, candles=_execution_path(100, int(execution_open)))
+
+    assert result.status is PairedExitReplayStatus.ENTRY_FILL_INVALIDATED
+    assert result.comparison_state is PairedExitComparisonState.ENTRY_FILL_INVALIDATED
+    assert result.entry_fill is not None
+    assert result.entry_fill.fill_price == expected_fill
+    assert result.entry_fill_invalidation is not None
+    assert (
+        result.entry_fill_invalidation.reason
+        is EntryFillInvalidationReason.STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL
+    )
+    assert result.entry_intent.stop_basis == decision.risk_decision.approved_risk_stop_basis
+    assert result.entry_fill_invalidation.stop_basis == result.entry_intent.stop_basis
+    assert result.entry_fill_invalidation.decision_reference_price == (
+        decision.risk_decision.reference_price
+    )
+    assert result.entry_fill_invalidation.actual_fill_price == result.entry_fill.fill_price
+    assert result.entry_fill_invalidation.actual_fill_at == result.entry_fill.fill_at
+    assert result.entry_fill_invalidation.execution_candle_open_time == (
+        result.entry_fill.execution_candle_open_time
+    )
+    assert result.entry_fill_invalidation.reference_open_price == (
+        result.entry_fill.reference_open_price
+    )
+    assert result.entry_order.quantity == result.entry_fill.quantity
+    assert result.execution_costs.spread_bps == result.entry_fill.spread_bps
+    assert result.execution_costs.slippage_bps == result.entry_fill.slippage_bps
+    assert result.execution_costs.fee_bps == result.entry_fill.fee_bps
+    assert result.entry_unfilled is None
+    assert result.baseline is None
+    assert result.ema50_candidate is None
+    assert result.realized_net_pnl_delta_candidate_minus_baseline is None
+    assert result.exit_fill_time_delta_candidate_minus_baseline is None
+
+
+@pytest.mark.parametrize(
+    ("side", "stop"),
+    (
+        (CandidateAction.LONG_CANDIDATE, Decimal(75)),
+        (CandidateAction.SHORT_CANDIDATE, Decimal(135)),
+    ),
+)
+def test_entry_fill_equal_to_sealed_stop_is_invalidated(
+    side: CandidateAction,
+    stop: Decimal,
+) -> None:
+    result, _ = _run(
+        (),
+        decision=_decision(side=side),
+        candles=_execution_path(100, int(stop)),
+        costs=ExecutionCostConfiguration(),
+    )
+
+    assert result.status is PairedExitReplayStatus.ENTRY_FILL_INVALIDATED
+    assert result.entry_fill is not None
+    assert result.entry_fill.fill_price == stop == result.entry_intent.stop_basis
+
+
+def test_invalidated_and_replayed_representations_reject_forged_geometry() -> None:
+    valid, _ = _run(())
+    assert valid.entry_fill is not None
+    forged_audit = EntryFillInvalidationAudit(
+        reason=EntryFillInvalidationReason.STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL,
+        entry_side=valid.entry_intent.side,
+        stop_basis=valid.entry_intent.stop_basis,
+        decision_reference_price=valid.entry_intent.reference_price,
+        actual_fill_price=valid.entry_fill.fill_price,
+        actual_fill_at=valid.entry_fill.fill_at,
+        execution_candle_open_time=valid.entry_fill.execution_candle_open_time,
+        reference_open_price=valid.entry_fill.reference_open_price,
+    )
+    with pytest.raises(PairedExitReplayError, match="valid stop geometry"):
+        replace(
+            valid,
+            status=PairedExitReplayStatus.ENTRY_FILL_INVALIDATED,
+            entry_fill_invalidation=forged_audit,
+            baseline=None,
+            ema50_candidate=None,
+            comparison_state=PairedExitComparisonState.ENTRY_FILL_INVALIDATED,
+            realized_net_pnl_delta_candidate_minus_baseline=None,
+            exit_fill_time_delta_candidate_minus_baseline=None,
+            identical_starting_entry_fill=False,
+            identical_execution_cost_configuration=False,
+        )
+
+    invalid, _ = _run((), candles=_execution_path(100, 70))
+    assert invalid.entry_fill is not None
+    assert valid.baseline is not None and valid.ema50_candidate is not None
+    with pytest.raises(PairedExitReplayError, match="invalid stop geometry"):
+        replace(
+            invalid,
+            status=PairedExitReplayStatus.REPLAYED,
+            entry_fill_invalidation=None,
+            baseline=valid.baseline,
+            ema50_candidate=valid.ema50_candidate,
+            comparison_state=valid.comparison_state,
+            realized_net_pnl_delta_candidate_minus_baseline=(
+                valid.realized_net_pnl_delta_candidate_minus_baseline
+            ),
+            exit_fill_time_delta_candidate_minus_baseline=(
+                valid.exit_fill_time_delta_candidate_minus_baseline
+            ),
+            identical_starting_entry_fill=True,
+            identical_execution_cost_configuration=True,
+        )
+
+
+def test_entry_fill_invalidation_is_decimal_context_invariant_and_schema_versioned() -> None:
+    original = getcontext().copy()
+    try:
+        setcontext(Context(prec=6, rounding=ROUND_DOWN))
+        first, _ = _run((), candles=_execution_path(100, 70))
+        setcontext(Context(prec=50, rounding=ROUND_HALF_EVEN))
+        second, _ = _run((), candles=_execution_path(100, 70))
+    finally:
+        setcontext(original)
+
+    assert first == second
+    assert first.replay_schema_version == "2.0.0"
+    assert first.entry_intent.stop_basis == _decision().risk_decision.approved_risk_stop_basis
+    copied = deepcopy(first)
+    copied.validate()
+    object.__setattr__(copied.entry_intent, "strategy_version", "forged")
+    with pytest.raises(PairedExitReplayError, match="provenance integrity"):
+        copied.validate()
 
 
 def test_closed_context_at_entry_fill_is_not_reused_as_exit_evidence() -> None:

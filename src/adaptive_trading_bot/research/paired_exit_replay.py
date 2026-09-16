@@ -32,12 +32,13 @@ from adaptive_trading_bot.backtest import (
     PositionSnapshot,
     UnfilledOrder,
 )
-from adaptive_trading_bot.domain import Candle, Timeframe
+from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import (
     EntryOrderIntent,
     EntryOrderIntentAuthorizer,
+    EntryOrderIntentIdentity,
     EntrySide,
     OrderIntentAuthorizationStatus,
 )
@@ -57,15 +58,18 @@ from adaptive_trading_bot.strategies import (
     PositionExitValidationError,
     PositionLifecycleStatus,
     PositionSide,
+    SourceIdentity,
     StrategyContextError,
     StrategyEvaluationContext,
     TrendPullbackEma50ExitStrategy,
     TrendPullbackStrategy,
 )
 
-_REPLAY_SCHEMA_VERSION = "1.0.0"
+_REPLAY_SCHEMA_VERSION = "2.0.0"
 _HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION = "1.0.0"
 _HISTORICAL_CONTEXT_INTEGRITY_SEAL_VERSION = "1.0.0"
+_ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION = "1.0.0"
+_ENTRY_INTENT_PROVENANCE_SEAL_VERSION = "1.0.0"
 _RESEARCH_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _AFTER_DECISION = timedelta(microseconds=1)
 
@@ -78,7 +82,14 @@ class PairedExitReplayStatus(StrEnum):
     """Top-level result of attempting the one authoritative entry."""
 
     ENTRY_UNFILLED = "ENTRY_UNFILLED"
+    ENTRY_FILL_INVALIDATED = "ENTRY_FILL_INVALIDATED"
     REPLAYED = "REPLAYED"
+
+
+class EntryFillInvalidationReason(StrEnum):
+    """Why a simulator fill cannot create a valid research position."""
+
+    STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL = "STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL"
 
 
 class ExitReplayBranchPolicy(StrEnum):
@@ -99,10 +110,116 @@ class PairedExitComparisonState(StrEnum):
     """Whether branch realized outcomes are descriptively comparable."""
 
     ENTRY_UNFILLED = "ENTRY_UNFILLED"
+    ENTRY_FILL_INVALIDATED = "ENTRY_FILL_INVALIDATED"
     BOTH_CLOSED = "BOTH_CLOSED"
     BOTH_OPEN = "BOTH_OPEN"
     BASELINE_CLOSED_CANDIDATE_OPEN = "BASELINE_CLOSED_CANDIDATE_OPEN"
     BASELINE_OPEN_CANDIDATE_CLOSED = "BASELINE_OPEN_CANDIDATE_CLOSED"
+
+
+@dataclass(frozen=True, slots=True)
+class EntryFillInvalidationAudit:
+    """Exact post-simulation facts proving entry-position admission failed."""
+
+    reason: EntryFillInvalidationReason
+    entry_side: EntrySide
+    stop_basis: Decimal
+    decision_reference_price: Decimal
+    actual_fill_price: Decimal
+    actual_fill_at: datetime
+    execution_candle_open_time: datetime
+    reference_open_price: Decimal
+
+    def __post_init__(self) -> None:
+        require_utc(self.actual_fill_at, field="invalidated entry fill time")
+        require_utc(
+            self.execution_candle_open_time,
+            field="invalidated execution candle open time",
+        )
+        if not isinstance(self.reason, EntryFillInvalidationReason):
+            raise TypeError("entry fill invalidation reason is invalid")
+        if not isinstance(self.entry_side, EntrySide):
+            raise TypeError("entry fill invalidation side is invalid")
+        for name, value in (
+            ("stop_basis", self.stop_basis),
+            ("decision_reference_price", self.decision_reference_price),
+            ("actual_fill_price", self.actual_fill_price),
+            ("reference_open_price", self.reference_open_price),
+        ):
+            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+                raise PairedExitReplayError(f"invalidated entry {name} must be positive and finite")
+
+
+@dataclass(frozen=True, slots=True)
+class EntryIntentProvenance:
+    """Detached exact facts from the authorizer-created entry intent."""
+
+    identity: EntryOrderIntentIdentity
+    decision_identity: DecisionIdentity
+    source_id: SourceIdentity
+    symbol: TradingSymbol
+    observed_at: datetime
+    authorized_at: datetime
+    strategy_id: str
+    strategy_version: str
+    risk_policy_version: str
+    safety_policy_version: str
+    side: EntrySide
+    quantity: Decimal
+    approved_notional_quote: Decimal
+    approved_risk_quote: Decimal
+    stop_basis: Decimal
+    reference_price: Decimal
+    quote_currency: str
+    authorized_for_execution: bool
+    provenance_schema_version: str = field(
+        init=False, default=_ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION
+    )
+    provenance_integrity_seal: str = field(init=False, repr=False)
+
+    @classmethod
+    def from_authorized_intent(cls, intent: EntryOrderIntent) -> EntryIntentProvenance:
+        """Detach an already-authorized intent without creating new authority."""
+
+        if not isinstance(intent, EntryOrderIntent):
+            raise TypeError("intent must be an EntryOrderIntent")
+        return cls(
+            identity=deepcopy(intent.identity),
+            decision_identity=deepcopy(intent.decision_identity),
+            source_id=deepcopy(intent.source_id),
+            symbol=deepcopy(intent.symbol),
+            observed_at=intent.observed_at,
+            authorized_at=intent.authorized_at,
+            strategy_id=intent.strategy_id,
+            strategy_version=intent.strategy_version,
+            risk_policy_version=intent.risk_policy_version,
+            safety_policy_version=intent.safety_policy_version,
+            side=intent.side,
+            quantity=intent.quantity,
+            approved_notional_quote=intent.approved_notional_quote,
+            approved_risk_quote=intent.approved_risk_quote,
+            stop_basis=intent.stop_basis,
+            reference_price=intent.reference_price,
+            quote_currency=intent.quote_currency,
+            authorized_for_execution=intent.authorized_for_execution,
+        )
+
+    def __post_init__(self) -> None:
+        _validate_entry_intent_provenance_facts(self)
+        object.__setattr__(
+            self,
+            "provenance_integrity_seal",
+            _entry_intent_integrity_seal(self),
+        )
+
+    def validate(self) -> None:
+        if self.provenance_schema_version != _ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION:
+            raise PairedExitReplayError("entry intent provenance schema mismatch")
+        if not isinstance(self.provenance_integrity_seal, str) or not compare_digest(
+            self.provenance_integrity_seal, _entry_intent_integrity_seal(self)
+        ):
+            raise PairedExitReplayError("entry intent provenance integrity mismatch")
+        _validate_entry_intent_provenance_facts(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,9 +431,11 @@ class PairedTrendPullbackExitReplayResult:
     execution_costs: ExecutionCostConfiguration
     start: datetime
     end: datetime
+    entry_intent: EntryIntentProvenance
     entry_order: MarketOrderRequest
     entry_fill: MarketFill | None
     entry_unfilled: UnfilledOrder | None
+    entry_fill_invalidation: EntryFillInvalidationAudit | None
     baseline: HistoricalExitBranchResult | None
     ema50_candidate: HistoricalExitBranchResult | None
     comparison_state: PairedExitComparisonState
@@ -339,10 +458,20 @@ class PairedTrendPullbackExitReplayResult:
             raise PairedExitReplayError(
                 "paired research cannot claim runtime or portfolio authority"
             )
+        _validate_entry_authority(
+            self.originating_decision_identity,
+            self.execution_series,
+            self.execution_costs,
+            self.entry_intent,
+            self.entry_order,
+            self.entry_fill,
+        )
         if self.status is PairedExitReplayStatus.ENTRY_UNFILLED:
             if (
                 self.entry_fill is not None
                 or self.entry_unfilled is None
+                or self.entry_unfilled.order != self.entry_order
+                or self.entry_fill_invalidation is not None
                 or self.baseline is not None
                 or self.ema50_candidate is not None
                 or self.comparison_state is not PairedExitComparisonState.ENTRY_UNFILLED
@@ -353,15 +482,38 @@ class PairedTrendPullbackExitReplayResult:
             ):
                 raise PairedExitReplayError("ENTRY_UNFILLED result is inconsistent")
             return
+        if self.status is PairedExitReplayStatus.ENTRY_FILL_INVALIDATED:
+            if (
+                self.entry_fill is None
+                or self.entry_unfilled is not None
+                or self.entry_fill_invalidation is None
+                or self.baseline is not None
+                or self.ema50_candidate is not None
+                or self.comparison_state is not PairedExitComparisonState.ENTRY_FILL_INVALIDATED
+                or self.realized_net_pnl_delta_candidate_minus_baseline is not None
+                or self.exit_fill_time_delta_candidate_minus_baseline is not None
+                or self.identical_starting_entry_fill
+                or self.identical_execution_cost_configuration
+            ):
+                raise PairedExitReplayError("ENTRY_FILL_INVALIDATED result is inconsistent")
+            _validate_entry_fill_invalidation(
+                self.entry_intent,
+                self.entry_fill,
+                self.entry_fill_invalidation,
+            )
+            return
         if (
             self.entry_fill is None
             or self.entry_unfilled is not None
+            or self.entry_fill_invalidation is not None
             or self.baseline is None
             or self.ema50_candidate is None
             or not self.identical_starting_entry_fill
             or not self.identical_execution_cost_configuration
         ):
             raise PairedExitReplayError("replayed pair lacks identical branch provenance")
+        if not _entry_fill_geometry_is_valid(self.entry_intent, self.entry_fill):
+            raise PairedExitReplayError("replayed entry fill has invalid stop geometry")
         if (
             self.baseline.entry_fill != self.entry_fill
             or self.ema50_candidate.entry_fill != self.entry_fill
@@ -495,9 +647,11 @@ class PairedTrendPullbackExitReplayRunner:
                 execution_costs=owned_costs,
                 start=start,
                 end=end,
+                entry_intent=_entry_intent_provenance(intent),
                 entry_order=entry_order,
                 entry_fill=None,
                 entry_unfilled=deepcopy(entry_execution.unfilled_orders[0]),
+                entry_fill_invalidation=None,
                 baseline=None,
                 ema50_candidate=None,
                 comparison_state=PairedExitComparisonState.ENTRY_UNFILLED,
@@ -509,6 +663,27 @@ class PairedTrendPullbackExitReplayRunner:
         if entry_execution.filled_count != 1 or entry_execution.unfilled_count != 0:
             raise PairedExitReplayError("entry execution returned contradictory fill counts")
         entry_fill = deepcopy(entry_execution.fills[0])
+        if not _entry_fill_geometry_is_valid(intent, entry_fill):
+            return PairedTrendPullbackExitReplayResult(
+                status=PairedExitReplayStatus.ENTRY_FILL_INVALIDATED,
+                originating_decision_identity=deepcopy(owned_decision.identity),
+                execution_series=deepcopy(series),
+                execution_costs=deepcopy(owned_costs),
+                start=start,
+                end=end,
+                entry_intent=_entry_intent_provenance(intent),
+                entry_order=deepcopy(entry_order),
+                entry_fill=deepcopy(entry_fill),
+                entry_unfilled=None,
+                entry_fill_invalidation=_entry_fill_invalidation_audit(intent, entry_fill),
+                baseline=None,
+                ema50_candidate=None,
+                comparison_state=PairedExitComparisonState.ENTRY_FILL_INVALIDATED,
+                realized_net_pnl_delta_candidate_minus_baseline=None,
+                exit_fill_time_delta_candidate_minus_baseline=None,
+                identical_starting_entry_fill=False,
+                identical_execution_cost_configuration=False,
+            )
         exit_contexts = self._validate_contexts(
             owned_contexts,
             owned_decision,
@@ -557,9 +732,11 @@ class PairedTrendPullbackExitReplayRunner:
             execution_costs=deepcopy(owned_costs),
             start=start,
             end=end,
+            entry_intent=_entry_intent_provenance(intent),
             entry_order=deepcopy(entry_order),
             entry_fill=deepcopy(entry_fill),
             entry_unfilled=None,
+            entry_fill_invalidation=None,
             baseline=baseline,
             ema50_candidate=candidate,
             comparison_state=comparison,
@@ -786,6 +963,136 @@ def _entry_order(intent: EntryOrderIntent) -> MarketOrderRequest:
     )
 
 
+def _entry_intent_provenance(intent: EntryOrderIntent) -> EntryIntentProvenance:
+    return EntryIntentProvenance.from_authorized_intent(intent)
+
+
+def _entry_order_from_provenance(intent: EntryIntentProvenance) -> MarketOrderRequest:
+    return MarketOrderRequest(
+        order_id=(
+            f"paired-entry:{intent.source_id.value}:{intent.symbol}:"
+            f"{intent.observed_at.isoformat()}:{intent.strategy_id}:{intent.strategy_version}"
+        ),
+        created_at=intent.authorized_at,
+        symbol=intent.symbol,
+        side=OrderSide.BUY if intent.side is EntrySide.BUY else OrderSide.SELL,
+        quantity=intent.quantity,
+    )
+
+
+def _validate_entry_intent_provenance_facts(intent: EntryIntentProvenance) -> None:
+    require_utc(intent.observed_at, field="entry intent observed_at")
+    require_utc(intent.authorized_at, field="entry intent authorized_at")
+    if (
+        not isinstance(intent.identity, EntryOrderIntentIdentity)
+        or not isinstance(intent.decision_identity, DecisionIdentity)
+        or intent.identity.decision_identity != intent.decision_identity
+        or intent.source_id != intent.decision_identity.source_id
+        or intent.symbol != intent.decision_identity.symbol
+        or intent.observed_at != intent.decision_identity.observed_at
+        or intent.strategy_id != intent.decision_identity.strategy_id
+        or intent.strategy_version != intent.decision_identity.strategy_version
+    ):
+        raise PairedExitReplayError("entry intent identity provenance is inconsistent")
+    if not isinstance(intent.side, EntrySide):
+        raise TypeError("entry intent provenance side must be an EntrySide")
+    for name, value in (
+        ("quantity", intent.quantity),
+        ("approved_notional_quote", intent.approved_notional_quote),
+        ("approved_risk_quote", intent.approved_risk_quote),
+        ("stop_basis", intent.stop_basis),
+        ("reference_price", intent.reference_price),
+    ):
+        if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+            raise PairedExitReplayError(f"entry intent {name} must be positive and finite")
+    for name, text_value in (
+        ("strategy_id", intent.strategy_id),
+        ("strategy_version", intent.strategy_version),
+        ("risk_policy_version", intent.risk_policy_version),
+        ("safety_policy_version", intent.safety_policy_version),
+        ("quote_currency", intent.quote_currency),
+    ):
+        if not isinstance(text_value, str) or not text_value.strip():
+            raise PairedExitReplayError(f"entry intent {name} must be non-empty")
+    if intent.authorized_for_execution is not True:
+        raise PairedExitReplayError("entry intent provenance lacks execution authorization")
+
+
+def _entry_fill_geometry_is_valid(
+    intent: EntryOrderIntent | EntryIntentProvenance,
+    fill: MarketFill,
+) -> bool:
+    if intent.side is EntrySide.BUY:
+        return intent.stop_basis < fill.fill_price
+    return intent.stop_basis > fill.fill_price
+
+
+def _entry_fill_invalidation_audit(
+    intent: EntryOrderIntent | EntryIntentProvenance,
+    fill: MarketFill,
+) -> EntryFillInvalidationAudit:
+    return EntryFillInvalidationAudit(
+        reason=EntryFillInvalidationReason.STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL,
+        entry_side=intent.side,
+        stop_basis=intent.stop_basis,
+        decision_reference_price=intent.reference_price,
+        actual_fill_price=fill.fill_price,
+        actual_fill_at=fill.fill_at,
+        execution_candle_open_time=fill.execution_candle_open_time,
+        reference_open_price=fill.reference_open_price,
+    )
+
+
+def _validate_entry_authority(
+    identity: DecisionIdentity,
+    series: ExecutionSeries,
+    costs: ExecutionCostConfiguration,
+    intent: EntryIntentProvenance,
+    order: MarketOrderRequest,
+    fill: MarketFill | None,
+) -> None:
+    intent.validate()
+    expected_order = _entry_order_from_provenance(intent)
+    if (
+        intent.decision_identity != identity
+        or getattr(intent.identity, "decision_identity", None) != identity
+        or not intent.authorized_for_execution
+        or expected_order != order
+        or series.source_id.value != intent.source_id.value
+        or series.symbol != intent.symbol
+        or series.timeframe is not Timeframe.MINUTES_15
+    ):
+        raise PairedExitReplayError("paired entry intent provenance is inconsistent")
+    if fill is None:
+        return
+    if (
+        fill.order_id != order.order_id
+        or fill.symbol != order.symbol
+        or fill.side is not order.side
+        or fill.quantity != order.quantity
+        or fill.created_at != order.created_at
+        or fill.source_id != series.source_id
+        or fill.execution_timeframe is not series.timeframe
+        or fill.spread_bps != costs.spread_bps
+        or fill.slippage_bps != costs.slippage_bps
+        or fill.fee_bps != costs.fee_bps
+    ):
+        raise PairedExitReplayError("paired entry fill provenance is inconsistent")
+
+
+def _validate_entry_fill_invalidation(
+    intent: EntryIntentProvenance,
+    fill: MarketFill,
+    audit: EntryFillInvalidationAudit,
+) -> None:
+    audit.__post_init__()
+    expected = _entry_fill_invalidation_audit(intent, fill)
+    if audit != expected:
+        raise PairedExitReplayError("entry fill invalidation audit contradicts authority")
+    if _entry_fill_geometry_is_valid(intent, fill):
+        raise PairedExitReplayError("entry fill invalidation contradicts valid stop geometry")
+
+
 def _exit_order_id(identity: DecisionIdentity, branch: ExitReplayBranchPolicy) -> str:
     return (
         f"paired-exit:{branch.value}:{identity.source_id.value}:{identity.symbol}:"
@@ -903,6 +1210,41 @@ def _historical_context_integrity_seal(context: StrategyEvaluationContext) -> st
             _HISTORICAL_CONTEXT_INTEGRITY_SEAL_VERSION,
             _HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION,
             _canonical_integrity_value(context),
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
+def _entry_intent_integrity_seal(intent: EntryIntentProvenance) -> str:
+    payload = dumps(
+        (
+            "adaptive-trading-bot/paired-entry-intent-provenance",
+            _ENTRY_INTENT_PROVENANCE_SEAL_VERSION,
+            _ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION,
+            _canonical_integrity_value(
+                (
+                    intent.identity,
+                    intent.decision_identity,
+                    intent.source_id,
+                    intent.symbol,
+                    intent.observed_at,
+                    intent.authorized_at,
+                    intent.strategy_id,
+                    intent.strategy_version,
+                    intent.risk_policy_version,
+                    intent.safety_policy_version,
+                    intent.side,
+                    intent.quantity,
+                    intent.approved_notional_quote,
+                    intent.approved_risk_quote,
+                    intent.stop_basis,
+                    intent.reference_price,
+                    intent.quote_currency,
+                    intent.authorized_for_execution,
+                )
+            ),
         ),
         ensure_ascii=True,
         separators=(",", ":"),
