@@ -17,6 +17,9 @@ from adaptive_trading_bot.research.experience_shadow_replay import (
     ResearchDecimalRate,
 )
 from adaptive_trading_bot.research.paired_exit_replay import (
+    EntryFillInvalidationAudit,
+    EntryFillInvalidationReason,
+    EntryIntentProvenance,
     ExitReplayBranchPolicy,
     HistoricalExitBranchResult,
     HistoricalExitCause,
@@ -88,6 +91,9 @@ __all__ = [
     "CorpusQualificationStatus",
     "CorpusRangeError",
     "DescriptiveResearchRate",
+    "EntryFillInvalidationAudit",
+    "EntryFillInvalidationReason",
+    "EntryIntentProvenance",
     "ExitReplayBranchPolicy",
     "ExperienceObservedOutcomeGroup",
     "ExperienceObservedOutcomeSummary",

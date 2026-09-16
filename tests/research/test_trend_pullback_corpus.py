@@ -701,6 +701,12 @@ def test_exit_robustness_preserves_unresolved_and_zero_comparable_strata(
 
     assert report.population.candidate_count == len(report.observations)
     assert report.population.entry_filled_count == len(report.observations)
+    assert report.population.entry_fill_invalidated_count == 0
+    assert report.population.candidate_count == (
+        report.population.entry_unfilled_count
+        + report.population.entry_fill_invalidated_count
+        + report.population.replayed_count
+    )
     assert report.population.both_open_count == len(report.observations)
     assert report.population.baseline_unresolved_count == len(report.observations)
     assert report.population.candidate_unresolved_count == len(report.observations)
@@ -722,6 +728,12 @@ def test_exit_robustness_preserves_unresolved_and_zero_comparable_strata(
     assert report.overlap_audit.raw_candidate_count_is_independent_sample_size is False
     assert report.overlap_audit.sensitivity_is_independence_proof is False
     artifact = report.to_json()
+    assert report.configuration.configuration_schema_version == "2.0.0"
+    assert report.configuration.report_schema_version == "2.0.0"
+    assert report.configuration.stratification_policy_version == "2.0.0"
+    assert report.report_schema_version == "2.0.0"
+    assert all(item.observation_schema_version == "2.0.0" for item in report.observations)
+    assert '"artifact_schema_version":"2.0.0"' in artifact
     assert '"artifact_kind":"trend_pullback_exit_robustness_report"' in artifact
     assert '"is_portfolio_performance":false' in artifact
     assert '"decimal"' in artifact
@@ -924,7 +936,10 @@ def test_all_comparison_states_and_authoritative_comparable_deltas_are_counted()
         *,
         delta: Decimal | None = None,
     ) -> SimpleNamespace:
-        replayed = state is not PairedExitComparisonState.ENTRY_UNFILLED
+        replayed = state not in {
+            PairedExitComparisonState.ENTRY_UNFILLED,
+            PairedExitComparisonState.ENTRY_FILL_INVALIDATED,
+        }
         baseline_closed = state in {
             PairedExitComparisonState.BOTH_CLOSED,
             PairedExitComparisonState.BASELINE_CLOSED_CANDIDATE_OPEN,
@@ -938,7 +953,7 @@ def test_all_comparison_states_and_authoritative_comparable_deltas_are_counted()
                 status=(
                     PairedExitReplayStatus.REPLAYED
                     if replayed
-                    else PairedExitReplayStatus.ENTRY_UNFILLED
+                    else PairedExitReplayStatus(state.value)
                 ),
                 comparison_state=state,
                 baseline=branch(baseline_closed) if replayed else None,
@@ -954,6 +969,7 @@ def test_all_comparison_states_and_authoritative_comparable_deltas_are_counted()
         tuple[PairedExitRobustnessObservation, ...],
         (
             observation(PairedExitComparisonState.ENTRY_UNFILLED),
+            observation(PairedExitComparisonState.ENTRY_FILL_INVALIDATED),
             observation(
                 PairedExitComparisonState.BOTH_CLOSED,
                 delta=Decimal(2),
@@ -966,13 +982,25 @@ def test_all_comparison_states_and_authoritative_comparable_deltas_are_counted()
     population = robustness_module._population(observations)
     deltas = robustness_module._deltas(observations)
 
-    assert population.candidate_count == 5
+    assert population.candidate_count == 6
     assert population.entry_unfilled_count == 1
+    assert population.entry_fill_invalidated_count == 1
+    assert population.entry_filled_count == 5
     assert population.replayed_count == 4
     assert population.both_closed_count == 1
     assert population.both_open_count == 1
     assert population.baseline_closed_candidate_open_count == 1
     assert population.baseline_open_candidate_closed_count == 1
+    assert population.entry_fill_invalidated_rate.numerator == 1
+    assert population.entry_fill_invalidated_rate.denominator == 6
+    assert population.comparable_fraction.denominator == 4
+    invalidated_only = cast(
+        tuple[PairedExitRobustnessObservation, ...],
+        (observation(PairedExitComparisonState.ENTRY_FILL_INVALIDATED),),
+    )
+    invalidated_overlap = robustness_module._overlap_audit(invalidated_only)
+    assert invalidated_overlap.raw_replayed_candidate_count == 0
+    assert invalidated_overlap.component_count == 0
     assert deltas.comparable_count == 1
     assert deltas.mean_net_pnl_delta == Decimal(2)
     assert deltas.median_exit_fill_time_delta_seconds == Decimal(-900)

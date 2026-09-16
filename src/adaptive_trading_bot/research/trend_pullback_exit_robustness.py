@@ -24,8 +24,13 @@ from adaptive_trading_bot.config import get_settings
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.journal import DecisionIdentity
+from adaptive_trading_bot.orders import (
+    EntryOrderIntentAuthorizer,
+    OrderIntentAuthorizationStatus,
+)
 from adaptive_trading_bot.replay import ReplayError, ReplaySpeed
 from adaptive_trading_bot.research.paired_exit_replay import (
+    EntryIntentProvenance,
     HistoricalExitCause,
     PairedExitComparisonState,
     PairedExitReplayStatus,
@@ -44,11 +49,11 @@ from adaptive_trading_bot.storage import (
     SourceId,
 )
 
-_CONFIGURATION_SCHEMA_VERSION = "1.0.0"
-_OBSERVATION_SCHEMA_VERSION = "1.0.0"
-_REPORT_SCHEMA_VERSION = "1.0.0"
-_ARTIFACT_SCHEMA_VERSION = "1.0.0"
-_STRATIFICATION_POLICY_VERSION = "1.0.0"
+_CONFIGURATION_SCHEMA_VERSION = "2.0.0"
+_OBSERVATION_SCHEMA_VERSION = "2.0.0"
+_REPORT_SCHEMA_VERSION = "2.0.0"
+_ARTIFACT_SCHEMA_VERSION = "2.0.0"
+_STRATIFICATION_POLICY_VERSION = "2.0.0"
 _OVERLAP_POLICY_VERSION = "1.0.0"
 _INTEGRITY_SEAL_VERSION = "1.0.0"
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
@@ -222,6 +227,7 @@ class PairedPopulationSummary:
     candidate_count: int
     entry_filled_count: int
     entry_unfilled_count: int
+    entry_fill_invalidated_count: int
     replayed_count: int
     both_closed_count: int
     both_open_count: int
@@ -238,6 +244,7 @@ class PairedPopulationSummary:
     baseline_exit_unfilled_count: int
     candidate_exit_unfilled_count: int
     entry_filled_rate: RobustnessRate
+    entry_fill_invalidated_rate: RobustnessRate
     baseline_closed_rate: RobustnessRate
     baseline_unresolved_rate: RobustnessRate
     candidate_closed_rate: RobustnessRate
@@ -505,6 +512,15 @@ def _validate_observation(observation: PairedExitRobustnessObservation) -> None:
     if not observation.decision.is_research_admissible_entry:
         raise TrendPullbackExitRobustnessError("paired observation decision is not admissible")
     result = observation.paired_result
+    authorization = EntryOrderIntentAuthorizer().authorize(observation.decision.decision)
+    if (
+        authorization.status is not OrderIntentAuthorizationStatus.AUTHORIZED
+        or authorization.intent is None
+        or result.entry_intent != EntryIntentProvenance.from_authorized_intent(authorization.intent)
+    ):
+        raise TrendPullbackExitRobustnessError(
+            "paired observation entry intent differs from decision authority"
+        )
     if (
         not isinstance(observation.source_corpus_digest, str)
         or not observation.source_corpus_digest
@@ -643,6 +659,12 @@ def _population(
 ) -> PairedPopulationSummary:
     results = tuple(item.paired_result for item in observations)
     replayed = tuple(item for item in results if item.status is PairedExitReplayStatus.REPLAYED)
+    invalidated_count = sum(
+        item.status is PairedExitReplayStatus.ENTRY_FILL_INVALIDATED for item in results
+    )
+    unfilled_count = sum(item.status is PairedExitReplayStatus.ENTRY_UNFILLED for item in results)
+    if len(results) != unfilled_count + invalidated_count + len(replayed):
+        raise TrendPullbackExitRobustnessError("paired population status partition is invalid")
     baseline_closed = sum(
         item.baseline is not None and item.baseline.position_closed for item in replayed
     )
@@ -656,8 +678,9 @@ def _population(
 
     return PairedPopulationSummary(
         candidate_count=len(results),
-        entry_filled_count=len(replayed),
-        entry_unfilled_count=state_count(PairedExitComparisonState.ENTRY_UNFILLED),
+        entry_filled_count=invalidated_count + len(replayed),
+        entry_unfilled_count=unfilled_count,
+        entry_fill_invalidated_count=invalidated_count,
         replayed_count=len(replayed),
         both_closed_count=state_count(PairedExitComparisonState.BOTH_CLOSED),
         both_open_count=state_count(PairedExitComparisonState.BOTH_OPEN),
@@ -699,12 +722,15 @@ def _population(
             item.ema50_candidate is not None and item.ema50_candidate.exit_unfilled is not None
             for item in replayed
         ),
-        entry_filled_rate=_rate(len(replayed), len(results)),
+        entry_filled_rate=_rate(invalidated_count + len(replayed), len(results)),
+        entry_fill_invalidated_rate=_rate(invalidated_count, len(results)),
         baseline_closed_rate=_rate(baseline_closed, len(replayed)),
         baseline_unresolved_rate=_rate(len(replayed) - baseline_closed, len(replayed)),
         candidate_closed_rate=_rate(candidate_closed, len(replayed)),
         candidate_unresolved_rate=_rate(len(replayed) - candidate_closed, len(replayed)),
-        comparable_fraction=_rate(state_count(PairedExitComparisonState.BOTH_CLOSED), len(results)),
+        comparable_fraction=_rate(
+            state_count(PairedExitComparisonState.BOTH_CLOSED), len(replayed)
+        ),
     )
 
 
