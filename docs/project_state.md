@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-09-16  
+**Snapshot date:** 2026-09-17
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -10,38 +10,33 @@
 
 Current verified `main`:
 
-`aa6d22402d3c462a28448c200ee5499d43fee222`
+`a9464145d5306ebb369828f095c26cd32c00bcb7`
 
-This commit is the squash merge of PR #119:
+This commit is the squash merge of PR #125:
 
-**Document stopped WEEX EMA50 locked study (#119)**
+**Handle paired entry fills that invalidate sealed stops (#120)**
 
-PR #119 is accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. It is **not** evidence for or against EMA50 performance.
+PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixes the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. Neither PR is evidence for or against EMA50 performance.
 
 ---
 
 ## 2. Current critical-path objective
 
-The project is currently clearing a research-tooling blocker before a fresh real-data EMA50 exit study can be predeclared.
+The demonstrated paired-research blocker is fixed and merged. Issue #120 is closed. The project must now complete two queued architecture decisions before any fresh primary trading study is predeclared:
 
-Active critical-path Issue:
+1. **#123 — Master Plan v1.2: make leveraged perpetual futures the V1 primary trading mode.**
+2. **#124 — Master Plan v1.3: OpenAI-first AI architecture with cost-aware model routing.**
 
-**#120 — Handle paired-replay entry fills that cross sealed invalidation**
+Execute and review #123 first, then #124. Do not begin either from this documentation refresh. Their accepted changes will determine the architecture and locked code state from which the architect can sequence the next primary study.
 
-Confirmed root cause:
+Merged #120 result:
 
-- Strategy → Risk → Safety can authorize an entry with a sealed `stop_basis`.
-- `BacktestExecutionSimulator` correctly fills the market order at the first causally eligible execution-candle open using shared execution costs.
-- Market movement and/or execution costs can make the actual fill cross the already-approved invalidation.
-- The paired research adapter previously had no explicit admission state for that case and later failed with:
+- actual fills that cross the sealed invalidation are recorded as research-only `ENTRY_FILL_INVALIDATED`;
+- the exact simulator fill and sealed Strategy → Risk → Safety provenance remain intact;
+- no research position, accounting branch, exit or PnL is fabricated;
+- robustness population accounting reports the state explicitly without including it in trade-outcome statistics.
 
-```text
-invalidation reference contradicts position side
-```
-
-The accepted semantic correction is research-only `ENTRY_FILL_INVALIDATED`: preserve the real simulated fill and provenance, create no research position/accounting branch, do not move the stop, do not resize, and do not fabricate an exit or PnL.
-
-Codex is implementing #120. The next architect action is to review the resulting focused PR, exact HEAD, tests and CI. Do not rerun the full EMA50 study before #120 is reviewed and merged.
+PR #122 is the continuity-document task carrying the stable architect workflow and this state snapshot. It does not authorize architecture implementation or research execution.
 
 ---
 
@@ -53,7 +48,7 @@ Status for scientific purposes: **STOPPED / BLOCKED**.
 
 Run A stopped once with exit code `1` before a valid JSON report existed. Runs B and C were not executed. The run must not be resumed after code changes.
 
-After the #120 correction is accepted and merged, the architect must create a **fresh predeclared study Issue with a new locked code SHA**. The old #118 run remains historical blocker evidence only.
+The #120 correction is now merged, but a fresh study must still wait until #123 and then #124 are completed and the architect explicitly predeclares the next study from the resulting locked code SHA. The old #118 run remains historical blocker evidence only.
 
 ---
 
@@ -122,11 +117,9 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Codex completes Issue #120 and opens/updates its focused PR.
-2. User asks architect to review.
-3. Architect independently checks patch, contracts, tests and exact-head CI.
-4. If accepted, architect authorizes merge of the #120 PR.
-5. After merge, architect updates this project state and creates a **fresh predeclared locked-WEEX EMA50 study** from the new `main` SHA.
-6. Only after a valid primary study exists should the project interpret exit robustness and decide the next validation gate.
-
-A separate documentation task, Issue #121, exists only to establish persistent workflow/state handoff and must not disturb the #120 critical path.
+1. Refresh and review PR #122 as the continuity-doc task; do not treat it as trading authority.
+2. Implement and review Issue #123 without beginning #124 concurrently.
+3. After #123 is accepted and merged, implement and review Issue #124.
+4. Only after both architecture decisions are merged may the architect predeclare the next primary trading study from the then-current exact `main` SHA.
+5. Keep Issue #118 stopped permanently; never resume its failed Run A or run its B/C commands retroactively.
+6. Only after a new valid primary study exists should the project interpret exit robustness and decide the next validation gate.
