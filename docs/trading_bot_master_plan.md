@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.1  
+**Document version:** 1.2
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -119,7 +119,12 @@ Very short timeframes such as 1m/3m/5m are not part of the V1 trading core.
 
 ## Leverage
 
-- OFF in V1.
+- Leveraged WEEX perpetual futures are the primary V1 trading mode; Spot is secondary.
+- Leverage is permitted only as an explicit, bounded, versioned and predeclared execution/margin parameter controlled by the Risk Manager.
+- No fixed or “optimal” leverage is selected by this plan. Leverage must not be selected or increased by a strategy, Router, Experience Engine, ML model, LLM, or post-result optimization.
+- Risk budget remains independent of leverage: position size follows approved risk and stop geometry, while leverage determines margin usage within the approved exposure.
+- Isolated margin is preferred for controlled V1 live readiness where WEEX supports it. Cross margin is not an implicit fallback and requires a separate explicit architecture decision.
+- Live remains disabled by default until the complete validation ladder and the leveraged-realism gates in this plan pass.
 
 ## Strategy families
 
@@ -207,7 +212,7 @@ Create a project-owned `ExchangeAdapter` interface. A CCXT-backed adapter may be
 - Strategy, Risk, Safety, Feature, Replay, and accounting contracts remain exchange-neutral. WEEX-specific transport and mapping belong only in exchange/source adapters.
 - Cross-exchange data is deferred to a separately approved validation or redundancy feature; it is not part of the V1 authority chain.
 
-Using one primary data and execution venue reduces venue-basis, candle/timestamp, mark/index/funding, and operational mismatches. This policy does not approve leverage, private API integration, or Live trading. A public endpoint must still pass its own qualification and integrity gates before it becomes an accepted data source.
+Using one primary data and execution venue reduces venue-basis, candle/timestamp, mark/index/funding, and operational mismatches. This policy permits bounded Risk-owned leverage as part of the V1 architecture; it does not approve private API integration or Live trading. A public endpoint must still pass its own qualification and integrity gates before it becomes an accepted data source.
 
 ## Frontend
 
@@ -237,11 +242,28 @@ Collect/store as needed:
 - volume
 - spread
 
-When reliable data is available, contextual derivatives data may be stored:
+For representative leveraged perpetual validation, the authoritative market/account/execution path must also provide or deterministically model, as applicable:
+
+- contract and notional semantics;
+- configured leverage and effective notional;
+- initial and maintenance margin;
+- margin mode;
+- mark price and venue liquidation semantics;
+- liquidation price and distance;
+- funding rates, timestamps and payments;
+- fees, spread, slippage and stop-execution assumptions;
+- execution latency;
+- position and account survival state.
+
+Missing, stale, unknown or inconsistent margin, mark-price, funding or liquidation facts must fail closed wherever they can materially affect a result or admission decision.
+
+Optional derivatives intelligence may be stored when reliable data is available:
 
 - funding rate
 - open interest
 - liquidations
+
+Funding required for cost/accounting realism is mandatory for representative leveraged validation; funding used as sentiment is optional strategy context. Open interest and liquidation-flow signals are also optional context and do not replace the mandatory execution, margin and liquidation mechanics above.
 
 Deep order-book microstructure is not a V1 requirement.
 
@@ -522,11 +544,12 @@ Risk is independent of strategy.
 
 Initial engineering defaults for controlled testing (configurable; not personal investment advice):
 
-- leverage: 0;
 - risk per trade around 0.25% of test account;
 - simultaneous risk around 0.5%;
 - daily loss limit around 1%;
 - larger drawdown threshold triggers halt/review.
+
+No default “optimal leverage” is declared. Any leverage configuration must be bounded, versioned and predeclared before research or validation.
 
 Responsibilities:
 
@@ -537,11 +560,18 @@ Responsibilities:
 - daily loss control;
 - drawdown control;
 - simultaneous/correlated exposure;
+- leverage and effective-notional caps;
+- initial/maintenance-margin and margin-usage limits;
+- margin-mode eligibility;
+- liquidation-price/distance validation;
+- funding-cost and funding-state validation;
 - cooldown logic;
 - spread/slippage tolerance;
 - data/exchange health gates.
 
 Position size follows risk budget and stop distance; risk budget does not follow desired position size.
+
+Leverage is not a risk budget and must never increase approved risk. The Risk Manager is sovereign over leverage, effective notional, size, margin usage, liquidation-distance requirements, simultaneous exposure/risk, and account/drawdown limits. A new position must be rejected unless its liquidation boundary is safely beyond the approved protective stop plus a conservative, versioned safety buffer. The buffer is not numerically selected by this architecture decision and must be established through a separately approved implementation/validation issue.
 
 ---
 
@@ -558,7 +588,12 @@ New entries are blocked under conditions such as:
 - risk-limit breach;
 - time synchronization fault;
 - corrupted/broken feed;
-- suspicious price anomaly.
+- suspicious price anomaly;
+- unavailable or inconsistent leverage/margin mode;
+- unavailable, stale or inconsistent mark price, maintenance margin or liquidation facts;
+- liquidation distance that does not clear the approved stop plus the configured safety buffer;
+- funding state unavailable where it materially affects admission or representative validation;
+- position/account survival state that cannot be reconciled.
 
 System state includes `SAFE_MODE` and later may mature into a richer risk-state machine.
 
@@ -583,6 +618,12 @@ Before entry, capture at minimum:
 - derivatives context when available
 - entry/stop/target
 - position size/risk
+- leverage configuration/effective notional
+- initial and maintenance margin
+- margin mode and margin usage
+- mark price and mark source
+- liquidation price/distance and safety-buffer policy version
+- funding rate/timestamp and estimated funding
 - expected R/R
 - spread/slippage/fee estimates
 - reasons_for
@@ -598,6 +639,8 @@ After exit:
 - MFE
 - MAE
 - fees
+- realized funding
+- realized margin/liquidation/account-survival facts
 - realized slippage
 - duration
 - process score
@@ -660,9 +703,17 @@ Must model relevant real-world effects:
 - spread;
 - slippage;
 - position sizing;
+- configured leverage and effective notional;
+- initial and maintenance margin;
+- isolated-margin behavior (and cross margin only after a separate explicit approval);
+- mark-price and venue liquidation behavior;
+- liquidation distance relative to protective stop and the versioned safety buffer;
+- funding accrual/payment timing;
 - stop execution assumptions;
 - execution latency assumptions where meaningful;
 - partial fills if/when strategy requires them.
+
+Representative leveraged results must include fees, spread, slippage, funding, latency, stop behavior, margin usage and liquidation/account-survival effects. An unleveraged artifact remains useful research evidence but is not sufficient proof of leveraged Live readiness. Signal quality must be reported separately from leverage/margin effects, and leverage must not be tuned together with strategy thresholds after observing results.
 
 Prevent:
 
@@ -711,6 +762,10 @@ Replay must allow inspection of:
 - risk rejections;
 - `NO_TRADE` decisions;
 - simulated entries/exits.
+- leverage/effective-notional and margin state;
+- mark-price, funding and liquidation-distance state;
+- protective-stop/liquidation-buffer admission outcomes;
+- position/account survival transitions.
 
 Use a clock abstraction so historical/replay/live time do not require strategy rewrites.
 
@@ -734,11 +789,11 @@ Preserve chronological ordering and prohibit future information from training/pa
 
 ## Paper Trading
 
-Validate real data feeds, state transitions, order lifecycle simulation, failure handling and journaling.
+Validate real data feeds, state transitions, order lifecycle simulation, failure handling and journaling. For the primary perpetual mode, Paper must exercise versioned leverage, effective notional, isolated-margin assumptions, mark price, funding, liquidation distance and account-survival behavior without sending orders.
 
 ## Shadow Trading
 
-Produce genuine live-market decisions but do not send real orders. Compare hypothetical execution/outcomes to the live market.
+Produce genuine live-market decisions but do not send real orders. Compare hypothetical execution/outcomes to the live market, including observable WEEX perpetual funding/mark/liquidation and margin-state assumptions. Shadow must remain non-executable.
 
 ---
 
@@ -750,6 +805,11 @@ Real-money live execution remains disabled unless all critical gates pass:
 - backtest reproducibility;
 - no known look-ahead/data leakage;
 - risk manager coverage;
+- bounded/versioned leverage and effective-notional enforcement;
+- representative initial/maintenance-margin and preferred isolated-margin validation;
+- funding, mark-price and venue-liquidation realism;
+- protective-stop/liquidation-buffer gate coverage;
+- position/account survival and reconciliation coverage;
 - replay correctness;
 - paper stability;
 - shadow stability;
@@ -774,6 +834,7 @@ Minimum areas:
 
 ## Market
 - BTC/ETH price
+- perpetual contract, mark price and funding state
 - regime
 - volatility
 - technical score
@@ -796,9 +857,11 @@ Minimum areas:
 - fundamental context
 - historical edge
 - risk rejection explanation
+- approved leverage/effective notional, margin mode/usage and liquidation-distance gate explanation
 
 ## Trades
 - complete journal
+- funding, margin, mark/liquidation and account-survival facts where applicable
 
 ## Experience
 - performance by strategy/regime/context
@@ -810,6 +873,7 @@ Minimum areas:
 - errors
 - safe mode
 - active workers/services
+- leverage/margin configuration version and perpetual-mechanics data health
 
 ---
 
@@ -825,12 +889,16 @@ Every decision should later be reconstructable from:
 - fundamental events;
 - experience statistics;
 - risk checks;
+- leverage/effective-notional and margin checks;
+- mark-price, funding and liquidation facts used;
+- protective-stop/liquidation-buffer result;
 - final decision.
 
 Version:
 
 - strategies;
 - configurations;
+- leverage, margin, funding and liquidation-safety policies;
 - ML models when introduced;
 - local LLM models relevant to decision pipeline;
 - fundamental prompts/schemas.
@@ -919,6 +987,7 @@ The actual directories should be created only as phases require them; do not cre
 - common strategy interface
 - execution simulation
 - fees/spread/slippage
+- perpetual funding, margin, mark-price/liquidation and account-survival realism
 - results/metrics
 
 ## Phase 6 — Market Regime Engine
@@ -942,6 +1011,9 @@ Formalize and implement:
 - position sizing
 - risk/trade
 - simultaneous risk
+- bounded/versioned leverage and effective-notional caps
+- initial/maintenance-margin and margin-usage controls
+- protective-stop/liquidation-distance safety gate
 - daily loss
 - drawdown
 - spread/slippage gates
@@ -959,6 +1031,7 @@ Formalize and implement:
 - live market feed
 - simulated execution
 - paper positions/orders
+- non-executable perpetual leverage/margin/funding/mark/liquidation simulation
 
 ## Phase 11 — Dashboard
 
@@ -1011,16 +1084,18 @@ Only critical/ambiguous/multi-source events.
 - parameter robustness
 - out-of-sample tests
 - regime stability
+- leverage-independent signal reporting and predeclared perpetual-mechanics assumptions
 
 ## Phase 19 — Shadow Trading
 
 - live decision generation
 - no real orders
 - reconciliation of hypothetical outcomes
+- live-observed perpetual mark/funding/liquidation inputs without order submission
 
 ## Phase 20 — V1 Acceptance Review
 
-Live remains disabled until explicitly approved after all required gates.
+Live remains disabled until explicitly approved after all required gates, including representative leveraged perpetual margin, funding, mark-price, liquidation, protective-stop-buffer and account-survival validation.
 
 ---
 
@@ -1128,6 +1203,8 @@ Potentially add 5m only for execution timing plus 1d context, without turning th
 - reliable positioning indicators
 
 Primarily as context/risk inputs initially.
+
+This maturity item concerns optional derivatives intelligence used as alpha/context, such as open-interest or liquidation-flow signals. It does not defer the perpetual execution mechanics already required by V1: leverage/notional, margin, mark price, venue liquidation, funding costs and account survival are core Risk/execution/validation facts whenever they can materially affect outcomes.
 
 ## V1.6 — On-chain Intelligence
 
@@ -1289,6 +1366,11 @@ Even in the mature state:
 
 - Martingale / doubling after losses
 - raising leverage to recover drawdown
+- strategy-, Router-, Experience-, ML- or LLM-selected leverage
+- post-result leverage optimization or joint tuning of leverage with strategy thresholds
+- treating leverage as permission to exceed the approved risk budget
+- implicit cross-margin use or fallback without a separate explicit architecture decision
+- admitting a position when liquidation is not safely beyond the approved stop plus its versioned safety buffer
 - unlimited averaging-down without risk cap
 - autonomous production code modification
 - autonomous production strategy deployment
@@ -1324,6 +1406,11 @@ Eventually monitor:
 - NO_TRADE counts;
 - risk rejection counts;
 - exposure;
+- configured leverage and effective notional;
+- initial/maintenance margin, margin mode and margin usage;
+- mark price, funding and liquidation distance;
+- protective-stop/liquidation-buffer headroom;
+- position/account survival and reconciliation state;
 - PnL/drawdown;
 - fundamental update age;
 - safe-mode state;
@@ -1361,7 +1448,7 @@ Approved:
 - Three initial strategy families selected.
 - Hybrid fundamental architecture selected.
 - Statistical/Bayesian Experience Engine selected for V1.
-- ML/DL/RL/leverage excluded from V1.
+- ML/DL/RL/leverage excluded from V1. The leverage portion of this historical decision was superseded by the 2026-09-17 Master Plan v1.2 decision below.
 - Replay/Backtest/Paper/Shadow are mandatory gates.
 - Self-modification prohibited.
 
@@ -1380,13 +1467,30 @@ Approved:
 - Other exchanges are excluded from the primary V1 path. Any future cross-exchange validation or redundancy requires a separate explicit decision.
 - Venue selection does not waive public-data qualification, historical integrity, or staged Live-readiness gates.
 
+### 2026-09-17 — Leveraged WEEX perpetual futures as primary V1 mode
+
+- Date: 2026-09-17
+- Change ID: Issue #123 / Master Plan v1.2
+- Old Decision: V1 selected WEEX Futures/Perpetual as its primary venue/mode while separately declaring leverage OFF.
+- New Decision: Leveraged WEEX perpetual futures are the primary V1 trading mode. Leverage is permitted only as a bounded, versioned, predeclared Risk Manager parameter; isolated margin is preferred for controlled V1 live readiness, and representative margin/funding/mark-price/liquidation/account-survival validation is mandatory. Live remains disabled until all gates pass.
+- Reason: Remove the internal architecture contradiction and define the safety authority and realism required for the already-selected perpetual venue path.
+- Expected Benefit: A coherent, auditable V1 target whose research, validation and eventual execution assumptions match the intended venue and instrument.
+- Risk: Leverage magnifies execution, liquidation and account-survival failures; incomplete or stale derivatives facts could make research or admission unsafe. These conditions therefore fail closed under Risk/Safety controls.
+- Affected Modules: Master Plan, agent governance, future Market Data, Risk, Safety, Journal, Backtest, Replay, Paper, Shadow, Dashboard and observability work. No runtime module changes in this decision.
+- Target Version: V1 / Master Plan v1.2
+- Approved: Architect-approved Issue #123; implementation remains subject to subsequent scoped issues and the full validation ladder.
+
 ---
 
 # 38. Next action
 
-Start **Phase 1 — Project Foundation** through small GitHub Issues and PRs.
+The current critical-path sequence is:
 
-The first implementation issue must establish the minimum Python project baseline, typed configuration, testing/lint/type-check tooling, health endpoint, structured logging baseline and CI without introducing trading logic, exchange code, strategies, market-data collection or unnecessary infrastructure.
+1. Complete architect review and merge of Master Plan v1.2 / Issue #123.
+2. Execute and review Issue #124 as the next architecture decision: OpenAI-first, cost-aware AI architecture.
+3. After #124, the architect must define the minimum representative leveraged-perpetual mechanics required before any new primary trading study. At minimum, this must cover leverage/notional authority, margin, funding, mark-price/liquidation semantics, protective-stop/liquidation safety, and account-survival correctness without unnecessary overengineering.
+
+Issue #118 is permanently stopped and must never be resumed. No new full EMA50 or other primary study may begin until the architect explicitly predeclares it from the then-current locked code SHA and confirms that the required representative leveraged-perpetual mechanics are in place.
 
 ---
 

@@ -29,7 +29,11 @@ If an issue conflicts with the Master Plan, STOP and report the conflict. Do not
   - Trend Pullback
   - Breakout + Retest
   - Range Mean Reversion
-- Leverage: OFF in V1.
+- V1 primary trading mode: leveraged WEEX perpetual futures; Spot is secondary.
+- Leverage is permitted only as an explicit, bounded, versioned configuration owned and capped by `RiskManager`; it is never strategy- or LLM-owned.
+- Risk budget is independent of leverage. Position size follows approved risk and stop geometry; leverage must not increase approved risk.
+- Isolated margin is preferred for controlled V1 live readiness where supported. Cross margin requires a separate explicit architecture decision.
+- Live trading remains disabled until representative leveraged validation covers margin, funding, mark-price and liquidation behavior and every acceptance gate passes.
 - Machine Learning: OFF in V1 unless a later approved issue explicitly enables a research-only experiment.
 - Deep Learning: OFF in V1.
 - Reinforcement Learning: OFF in V1.
