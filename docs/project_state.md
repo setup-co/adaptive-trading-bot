@@ -10,24 +10,23 @@
 
 Current verified `main`:
 
-`a9464145d5306ebb369828f095c26cd32c00bcb7`
+`ee68967f35e154f1f4b6b6ecd7d77e2861937c75`
 
-This commit is the squash merge of PR #125:
+This commit is the squash merge of PR #126:
 
-**Handle paired entry fills that invalidate sealed stops (#120)**
+**Master Plan v1.2 — leveraged WEEX perpetual futures as the primary V1 mode (#123)**
 
-PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixes the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. Neither PR is evidence for or against EMA50 performance.
+PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
 ---
 
 ## 2. Current critical-path objective
 
-The demonstrated paired-research blocker is fixed and merged. Issue #120 is closed. The project must now complete two queued architecture decisions before any fresh primary trading study is predeclared:
+Issue #123 is closed and Master Plan v1.2 is merged. The active critical-path decision is:
 
-1. **#123 — Master Plan v1.2: make leveraged perpetual futures the V1 primary trading mode.**
-2. **#124 — Master Plan v1.3: OpenAI-first AI architecture with cost-aware model routing.**
+**#124 — Master Plan v1.3: OpenAI-first AI architecture with cost-aware model routing.**
 
-Execute and review #123 first, then #124. Do not begin either from this documentation refresh. Their accepted changes will determine the architecture and locked code state from which the architect can sequence the next primary study.
+Issue #124 is architecture/documentation only. It must preserve deterministic trading authority and the accepted leveraged-perpetual architecture. After #124 is reviewed and merged, the architect will define the minimum representative leveraged-perpetual mechanics required before any fresh primary study is predeclared.
 
 Merged #120 result:
 
@@ -36,7 +35,7 @@ Merged #120 result:
 - no research position, accounting branch, exit or PnL is fabricated;
 - robustness population accounting reports the state explicitly without including it in trade-outcome statistics.
 
-PR #122 is the continuity-document task carrying the stable architect workflow and this state snapshot. It does not authorize architecture implementation or research execution.
+PR #122 established the durable architect workflow and project-state snapshot pattern. Those documents do not independently authorize architecture implementation or research execution.
 
 ---
 
@@ -48,7 +47,7 @@ Status for scientific purposes: **STOPPED / BLOCKED**.
 
 Run A stopped once with exit code `1` before a valid JSON report existed. Runs B and C were not executed. The run must not be resumed after code changes.
 
-The #120 correction is now merged, but a fresh study must still wait until #123 and then #124 are completed and the architect explicitly predeclares the next study from the resulting locked code SHA. The old #118 run remains historical blocker evidence only.
+The #120 correction and #123 architecture decision are merged, but a fresh study must still wait until #124 is completed, the architect-defined representative leveraged-perpetual mechanics are implemented and validated, and the architect explicitly predeclares the next study from the resulting locked code SHA. The old #118 run remains historical blocker evidence only.
 
 ---
 
@@ -117,9 +116,8 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Refresh and review PR #122 as the continuity-doc task; do not treat it as trading authority.
-2. Implement and review Issue #123 without beginning #124 concurrently.
-3. After #123 is accepted and merged, implement and review Issue #124.
-4. Only after both architecture decisions are merged may the architect predeclare the next primary trading study from the then-current exact `main` SHA.
-5. Keep Issue #118 stopped permanently; never resume its failed Run A or run its B/C commands retroactively.
-6. Only after a new valid primary study exists should the project interpret exit robustness and decide the next validation gate.
+1. Implement and review Issue #124; do not claim it complete before its PR is accepted and merged.
+2. After #124, the architect defines the minimum representative leveraged-perpetual mechanics needed before a fresh study.
+3. Only after those required mechanics are implemented and validated may the architect predeclare the next primary trading study from the then-current exact `main` SHA.
+4. Keep Issue #118 stopped permanently; never resume its failed Run A or run its B/C commands retroactively.
+5. Only after a new valid primary study exists should the project interpret exit robustness and decide the next validation gate.
