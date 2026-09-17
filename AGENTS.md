@@ -197,11 +197,14 @@ If elevated privileges are required, explain why and request the smallest requir
 
 ## 13. Fundamental / LLM rules
 
-- Fundamental pipeline is Hybrid: local collection/filtering first, optional Local LLM, Cloud LLM only by escalation.
-- LLM outputs must be structured and auditable.
-- LLM analysis must be cacheable/versioned where practical.
+- OpenAI is the V1 AI provider behind a project-owned routing boundary. Local LLM, Ollama, vLLM and GPU inference infrastructure are not required or preferred V1 dependencies.
+- Deterministic Tier-0 project code remains the sole authority for indicators/features, sizing, risk, leverage/margin/liquidation, funding/fees/PnL/accounting, stop/target geometry, Risk/Safety gates, order authorization, reconciliation/state-machine invariants and backtest/replay accounting. An LLM may explain these facts but must never supply their authoritative arithmetic or execution authority.
+- Logical tiers are `AI_ROUTINE`, `AI_BALANCED`, `AI_COMPLEX` and optional `AI_FRONTIER`. Concrete model IDs belong only in typed, versioned configuration, never strategy logic or permanent architecture constants.
+- Use the cheapest tier validated for each task. Retry and escalation must be bounded, predeclared, versioned and auditable; a required unavailable stronger tier must not be silently replaced by a weaker tier.
+- LLM outputs must be structured, validated and auditable, with explicit unavailable/unknown semantics on failure.
+- LLM analysis must use caching, deduplication and explicit token/spend budgets where semantically safe.
 - News deduplication/event clustering is required so multiple articles about one event do not become multiple signals.
-- LLM confidence is evidence, not authorization to trade.
+- AI confidence is evidence, not authorization to trade, select leverage, or bypass Risk/Safety.
 
 ## 14. Definition of done for an issue
 

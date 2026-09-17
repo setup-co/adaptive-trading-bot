@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.2
+**Document version:** 1.3
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -47,6 +47,7 @@ Build an adaptive, explainable, risk-controlled crypto trading platform that can
 - replay historical markets through the same strategy interfaces used by paper/live execution;
 - backtest and walk-forward validate strategies while preventing future leakage;
 - provide human-readable explanations for trade and no-trade decisions;
+- use OpenAI through a cost-aware, versioned routing boundary for approved language/reasoning tasks while keeping deterministic trading computation in project code;
 - progressively mature into a multi-asset, multi-strategy, portfolio-aware research and trading platform.
 
 ---
@@ -78,6 +79,8 @@ No strategy, LLM, ML model, operator convenience, or news event may bypass the R
 ## 3.5 LLM is an analyst, not an execution engine
 
 LLMs may analyze news, summarize context, generate hypotheses, and explain decisions. They may not directly authorize/send orders.
+
+Tier 0 is deterministic project code. Indicators/features, position sizing, approved risk, leverage/margin/liquidation calculations, funding/fees/PnL/accounting, stop/target geometry, hard Risk/Safety gates, order quantity/side authorization, exchange reconciliation/state-machine invariants and backtest/replay accounting must never depend on LLM arithmetic. AI may explain authoritative values produced by those systems but may not replace or override them.
 
 ## 3.6 No autonomous self-modification
 
@@ -201,6 +204,14 @@ Dashboard/API observes the system; it does not bypass core decision/risk layers.
 ## Exchange abstraction
 
 Create a project-owned `ExchangeAdapter` interface. A CCXT-backed adapter may be used where appropriate, but exchange-specific behavior must remain isolated.
+
+## V1 AI provider
+
+- OpenAI is the V1 AI provider behind a project-owned provider/model-routing boundary.
+- Local LLM, Ollama, vLLM and GPU inference infrastructure are not required or preferred V1 paths.
+- Provider, logical tier, concrete model mapping, reasoning/effort settings and task policy must be typed, versioned configuration.
+- Concrete model IDs are reviewed configuration values, not permanent Master Plan or business-logic constants.
+- AI integration remains subordinate to Tier-0 deterministic code, Risk Manager and Operational Safety authority.
 
 ## V1 venue policy
 
@@ -430,7 +441,7 @@ A strategy’s historical success in one regime must not automatically generaliz
 
 # 13. Fundamental architecture
 
-Use a **Hybrid** architecture.
+Use an **OpenAI-first, tiered and cost-aware** architecture. Deterministic collection, normalization, deduplication, clustering and importance/rule filtering happen before paid model calls whenever practical.
 
 ```text
 News / Macro / On-chain / Market Context
@@ -443,24 +454,70 @@ News / Macro / On-chain / Market Context
                   ↓
           Event Clustering
                   ↓
-          Importance Filter
-            ┌─────┴──────────┐
-            │                │
-       Low importance     Important
-            │                │
-          Rules          Local LLM
-                             │
-                         Critical /
-                         Ambiguous
-                             │
-                         Cloud LLM
-                             │
-                    Fundamental Event DB
-                             ↓
-                     Fundamental Score
+       Importance / Rule Filter
+                  ↓
+             AI_ROUTINE
+                  ↓
+       Bounded policy evaluation
+          ┌───────┴────────┐
+          │                │
+       Accepted      Predeclared escalation
+          │                ↓
+          │      AI_BALANCED / AI_COMPLEX
+          │                ↓
+          │       optional AI_FRONTIER
+          └───────┬────────┘
+                  ↓
+       Structured Fundamental Event DB
+                  ↓
+          Fundamental Score
 ```
 
-Cloud LLM is escalation-only, not per candle/tick.
+OpenAI calls are event/task driven, not per candle/tick.
+
+## Logical AI tiers
+
+- `AI_ROUTINE`: cheapest approved tier for validated high-volume structured work such as extraction, normalization assistance, event classification, entity tagging, straightforward summaries, schema filling and explanation drafting from authoritative facts.
+- `AI_BALANCED`: intermediate tier for moderately difficult synthesis, ambiguity or counter-evidence.
+- `AI_COMPLEX`: strong reasoning tier for difficult, high-impact, contradictory or multi-source analysis and approved research diagnosis.
+- `AI_FRONTIER`: optional highest approved tier only when predeclared task criticality and measured incremental value justify its cost.
+
+Concrete model IDs and snapshots live in typed, versioned configuration. Changing a model mapping requires review and task evaluation; it must not require strategy changes.
+
+## Routing and escalation
+
+Each task defaults to the cheapest tier that has passed its versioned evaluation gate. Routing is deterministic/rule-based or otherwise explicitly versioned and auditable. Bounded escalation may occur only under predeclared conditions such as structured-output validation failure after bounded retry, conflicting high-quality evidence, low confidence, ambiguous material impact, task complexity outside the tier's validated class, failed deterministic validation or an architect-approved research requirement.
+
+Do not escalate merely because a larger model exists. Do not silently substitute a weaker tier when a required stronger tier is unavailable, and do not represent such outputs as equivalent.
+
+## Task evaluation gates
+
+Before production use, every AI task class requires a small versioned evaluation set and acceptance criteria covering, as applicable:
+
+- structured-output validity;
+- labeled extraction/classification accuracy;
+- consistency/reproducibility characteristics;
+- escalation rate;
+- latency;
+- token and estimated-cost consumption;
+- materially harmful miss/error rate.
+
+Tier selection is evidence-based rather than price-only. Cost optimization must not violate the validated quality requirement.
+
+## Cost controls
+
+- cache identical or safely reusable analysis with cache provenance;
+- deduplicate/cluster before invocation;
+- use structured outputs to reduce retry/parsing ambiguity;
+- bound retry and escalation counts;
+- configure maximum input/output token budgets by task class;
+- enforce per-task and global spend budgets/alerts;
+- avoid unnecessary historical context and batch offline work when appropriate;
+- prefer deterministic rules/code when language reasoning is unnecessary.
+
+## Failure semantics
+
+Invalid or unparseable output after bounded retries, outage/timeout, stale output, exhausted budget or unavailable required tier produces an explicit `UNAVAILABLE`/`UNKNOWN` result with no fabricated analysis. If AI evidence is required by a hard uncertainty gate, failure closes that gate. Decision/Risk policy may block or reduce confidence; AI failure must never be converted into affirmative evidence or a forced trade.
 
 ## Fundamental event output
 
@@ -504,6 +561,8 @@ Fundamental context mainly:
 
 It does not independently authorize orders.
 
+AI outputs are structured evidence only. No tier may choose risk, leverage, margin, order quantity/side or execution action; bypass Risk/Safety; or self-modify/deploy strategy code.
+
 ---
 
 # 14. Decision Engine
@@ -522,6 +581,8 @@ Examples:
 - execution context acceptable?
 
 A critical failure produces `NO_TRADE`/rejection.
+
+Required AI evidence that is stale, invalid, unavailable, over budget or awaiting a required escalation remains explicit uncertainty. The Decision Engine must not silently replace it with weaker output, treat it as neutral/positive evidence, or bypass Risk/Safety policy.
 
 ## Soft decision after gates
 
@@ -613,6 +674,12 @@ Before entry, capture at minimum:
 - higher-timeframe context
 - technical score/evidence
 - fundamental score/events
+- AI provider, logical task/tier, concrete configured model identifier and reasoning/effort setting where applicable
+- AI routing-policy, prompt and schema versions
+- AI source identities/canonical event IDs and input/output digests
+- AI request time, validation/confidence result and freshness
+- AI retry/escalation path and reason
+- AI token/estimated-cost metadata and cache provenance
 - historical/context edge
 - volatility/volume state
 - derivatives context when available
@@ -874,6 +941,8 @@ Minimum areas:
 - safe mode
 - active workers/services
 - leverage/margin configuration version and perpetual-mechanics data health
+- OpenAI availability, routing-policy/configuration version and current task tiers
+- AI calls, retries/escalations, latency, validation failures, tokens, estimated cost, cache status and budget state
 
 ---
 
@@ -887,6 +956,9 @@ Every decision should later be reconstructable from:
 - strategy version;
 - configuration version;
 - fundamental events;
+- AI provider, task class, logical tier and concrete configured model identifier;
+- AI routing-policy, prompt and schema versions;
+- AI source identities/digests, validation, escalation reason, token/cost and cache provenance;
 - experience statistics;
 - risk checks;
 - leverage/effective-notional and margin checks;
@@ -900,7 +972,7 @@ Version:
 - configurations;
 - leverage, margin, funding and liquidation-safety policies;
 - ML models when introduced;
-- local LLM models relevant to decision pipeline;
+- AI provider/model mappings and routing/evaluation policies;
 - fundamental prompts/schemas.
 
 ---
@@ -1067,16 +1139,21 @@ Formalize and implement:
 - time decay
 - fundamental score
 
-## Phase 16 — Local LLM Fundamental Analysis
+## Phase 16 — OpenAI Fundamental Analysis
 
-- structured schema
-- caching
-- versioned prompts/model
-- confidence/audit logs
+- project-owned OpenAI provider boundary
+- structured outputs and explicit unavailable states
+- caching/deduplication
+- typed/versioned prompt, schema, tier and model configuration
+- task evaluation sets and acceptance gates
+- provenance/confidence/audit logs
 
-## Phase 17 — Optional Cloud LLM Escalation
+## Phase 17 — Cost-Aware AI Router and Escalation
 
-Only critical/ambiguous/multi-source events.
+- `AI_ROUTINE`, `AI_BALANCED`, `AI_COMPLEX` and optional `AI_FRONTIER` routing
+- bounded predeclared retry/escalation and no silent weaker-tier substitution
+- token/spend budgets, alerts and cost/latency observability
+- complex/ambiguous/multi-source/high-impact escalation only after validation
 
 ## Phase 18 — Walk Forward + Robustness Lab
 
@@ -1224,8 +1301,9 @@ Only measurable/backtestable signals such as exchange flows, stablecoin flows, w
 - richer event taxonomy
 - better source verification
 - confidence calibration
-- improved local models
-- stricter cloud escalation/cost monitoring
+- improved OpenAI task evaluation and logical-tier mappings
+- stricter routing, escalation, caching and cost controls
+- prompt/schema quality and model-drift monitoring
 
 ---
 
@@ -1376,6 +1454,8 @@ Even in the mature state:
 - autonomous production strategy deployment
 - bypassing risk because of news
 - treating LLM confidence as trade authorization
+- delegating authoritative Tier-0 trading arithmetic or state invariants to AI
+- granting AI Risk, Safety, leverage, margin or order authority
 - adding unlimited assets/strategies without validation
 - deep learning/RL merely for marketing complexity
 
@@ -1392,6 +1472,10 @@ Even in the mature state:
 - server DB/API ports not publicly exposed without architecture approval;
 - backups and restore testing before live maturity;
 - direct server deployment user is non-root.
+- OpenAI API keys remain server-side secrets and never enter Git, browsers, clients or frontend payloads;
+- use least-privilege secret storage and rotation for OpenAI credentials;
+- never send exchange API secrets, signing material or unnecessary personal/account data to an AI provider;
+- minimize request data and sanitize/redact sensitive operational facts unless explicitly required and approved.
 
 ---
 
@@ -1413,6 +1497,12 @@ Eventually monitor:
 - position/account survival and reconciliation state;
 - PnL/drawdown;
 - fundamental update age;
+- OpenAI/API availability, errors and latency;
+- AI calls by task, logical tier and configured model identifier;
+- retry/escalation counts and reasons;
+- structured-output/validation failure and unavailable rates;
+- input/output tokens, estimated cost by task/model/day, spend budgets and alerts;
+- cache hit/miss and model/prompt/schema/routing-policy versions;
 - safe-mode state;
 - system/service health;
 - deployed Git SHA.
@@ -1446,7 +1536,7 @@ Approved:
 - PostgreSQL + Parquet selected.
 - BTC/ETH, 15m entry with 1h/4h context selected for V1.
 - Three initial strategy families selected.
-- Hybrid fundamental architecture selected.
+- Hybrid fundamental architecture selected. This historical decision was superseded by the 2026-09-17 Master Plan v1.3 decision below.
 - Statistical/Bayesian Experience Engine selected for V1.
 - ML/DL/RL/leverage excluded from V1. The leverage portion of this historical decision was superseded by the 2026-09-17 Master Plan v1.2 decision below.
 - Replay/Backtest/Paper/Shadow are mandatory gates.
@@ -1480,15 +1570,27 @@ Approved:
 - Target Version: V1 / Master Plan v1.2
 - Approved: Architect-approved Issue #123; implementation remains subject to subsequent scoped issues and the full validation ladder.
 
+### 2026-09-17 — OpenAI-first, cost-aware V1 AI architecture
+
+- Date: 2026-09-17
+- Change ID: Issue #124 / Master Plan v1.3
+- Old Decision: Hybrid Fundamental AI used Rules → Local LLM → Cloud LLM escalation, with local inference as a preferred architecture path.
+- New Decision: OpenAI is the V1 AI provider behind a project-owned boundary. Tier-0 deterministic trading computation remains code-owned; approved language/reasoning tasks use the cheapest validated logical tier and bounded, auditable escalation through `AI_ROUTINE`, `AI_BALANCED`, `AI_COMPLEX` and optional `AI_FRONTIER`. Concrete model IDs remain typed/versioned configuration.
+- Reason: Local inference infrastructure is not cost-effective for this project; OpenAI provides simpler operations and a range suitable for explicit task-level cost/quality routing.
+- Expected Benefit: Lower infrastructure burden, validated low-cost routine processing, stronger difficult-case reasoning, and explicit quality/cost control.
+- Risk: Provider dependency, usage-cost growth, latency/outages, model drift, routing errors and data-governance exposure. Mitigations are task evaluation gates, caching/deduplication, bounded retries/escalation, budgets/observability, explicit unavailable states, data minimization and provider abstraction.
+- Affected Modules: Master Plan, agent governance, future Fundamental/AI provider and routing boundaries, Journal, Dashboard, explainability, security and observability. No runtime module changes in this decision.
+- Target Version: V1 / Master Plan v1.3
+- Approved: Subject to architect review of Issue #124; runtime integration requires separately approved scoped issues.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. Complete architect review and merge of Master Plan v1.2 / Issue #123.
-2. Execute and review Issue #124 as the next architecture decision: OpenAI-first, cost-aware AI architecture.
-3. After #124, the architect must define the minimum representative leveraged-perpetual mechanics required before any new primary trading study. At minimum, this must cover leverage/notional authority, margin, funding, mark-price/liquidation semantics, protective-stop/liquidation safety, and account-survival correctness without unnecessary overengineering.
+1. Complete architect review and merge of Master Plan v1.3 / Issue #124.
+2. After #124, the architect must define the minimum representative leveraged-perpetual mechanics required before any new primary trading study. At minimum, this must cover leverage/notional authority, margin, funding, mark-price/liquidation semantics, protective-stop/liquidation safety, and account-survival correctness without unnecessary overengineering.
 
 Issue #118 is permanently stopped and must never be resumed. No new full EMA50 or other primary study may begin until the architect explicitly predeclares it from the then-current locked code SHA and confirms that the required representative leveraged-perpetual mechanics are in place.
 
