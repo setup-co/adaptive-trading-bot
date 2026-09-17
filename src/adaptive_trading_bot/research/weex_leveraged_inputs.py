@@ -83,7 +83,16 @@ _FUNDING_SCHEMA: Final = pa.schema(
 )
 
 # Review-owned registry. New accepted bytes require a qualification PR.
-QUALIFIED_LEVERAGED_INPUT_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType({})
+QUALIFIED_LEVERAGED_INPUT_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "weex-v1-5m-mark-97c879a06fc900676dc5c339": (
+            "3e5ed9bc81877fa9c1d45fe33145d82f36487afeb5e49e9502ae087ec0749275"
+        ),
+        "weex-v1-funding-87c1f6e88bd64d96c015fe39": (
+            "6ecc0c5717a0ec3e5c0c28a96c542226a48e007ccdda48934e5900d304746c52"
+        ),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -508,8 +517,7 @@ class LeveragedInputManifest:
                 or len(artifact.sha256) != 64
                 or artifact.row_count <= 0
                 or artifact.size_bytes <= 0
-                or artifact.timeframe
-                != ("5m-MARK" if self.input_kind == "MARK" else "FUNDING")
+                or artifact.timeframe != ("5m-MARK" if self.input_kind == "MARK" else "FUNDING")
             ):
                 raise CorpusManifestError("artifact entry is invalid")
         expected_artifact_symbols = {
@@ -584,9 +592,7 @@ class LockedWeexLeveragedInputDataset:
     def read_symbol(self, symbol: str) -> tuple[MarkFiveMinuteCandle | FundingEvent, ...]:
         _require_symbol(symbol)
         self._verify_artifacts()
-        artifact = next(
-            (item for item in self._manifest.artifacts if item.symbol == symbol), None
-        )
+        artifact = next((item for item in self._manifest.artifacts if item.symbol == symbol), None)
         if artifact is None:
             raise CorpusManifestError(
                 f"{symbol} has no qualified {self._manifest.input_kind} artifact"
@@ -628,9 +634,7 @@ def issue_128_mark_qualified_intervals() -> dict[str, tuple[CorpusInterval, ...]
 
     return {
         "BTCUSDT": (),
-        "ETHUSDT": (
-            CorpusInterval(_utc("2025-04-02T00:00:00Z"), _utc("2026-01-08T00:00:00Z")),
-        ),
+        "ETHUSDT": (CorpusInterval(_utc("2025-04-02T00:00:00Z"), _utc("2026-01-08T00:00:00Z")),),
     }
 
 
@@ -638,12 +642,8 @@ def issue_128_mark_unavailable_intervals() -> dict[str, tuple[CorpusInterval, ..
     """Whole accepted LAST intervals rejected after a missing MARK open was found."""
 
     return {
-        "BTCUSDT": (
-            CorpusInterval(_utc("2024-07-01T00:00:00Z"), _utc("2026-01-08T00:00:00Z")),
-        ),
-        "ETHUSDT": (
-            CorpusInterval(_utc("2024-07-01T00:00:00Z"), _utc("2025-01-01T00:00:00Z")),
-        ),
+        "BTCUSDT": (CorpusInterval(_utc("2024-07-01T00:00:00Z"), _utc("2026-01-08T00:00:00Z")),),
+        "ETHUSDT": (CorpusInterval(_utc("2024-07-01T00:00:00Z"), _utc("2025-01-01T00:00:00Z")),),
     }
 
 

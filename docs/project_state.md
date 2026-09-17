@@ -10,11 +10,12 @@
 
 Current verified `main`:
 
-`ee68967f35e154f1f4b6b6ecd7d77e2861937c75`
+`8ce7de8e037ffe798272256f4a8b51075c576658`
 
-This commit is the squash merge of PR #126:
+This commit is the squash merge of PR #127:
 
-**Master Plan v1.2 — leveraged WEEX perpetual futures as the primary V1 mode (#123)**
+**Master Plan v1.3 — OpenAI-first AI architecture with deterministic Tier-0
+trading authority (#124)**
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -22,11 +23,16 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issue #123 is closed and Master Plan v1.2 is merged. The active critical-path decision is:
+Issues #123 and #124 are closed and Master Plan v1.3 is merged. The active
+critical-path qualification is:
 
-**#124 — Master Plan v1.3: OpenAI-first AI architecture with cost-aware model routing.**
+**#128 — qualify and lock WEEX leveraged-perpetual research inputs and venue
+mechanics.**
 
-Issue #124 is architecture/documentation only. It must preserve deterministic trading authority and the accepted leveraged-perpetual architecture. After #124 is reviewed and merged, the architect will define the minimum representative leveraged-perpetual mechanics required before any fresh primary study is predeclared.
+Issue #128 must complete and pass architect review before any leveraged engine
+implementation. Local qualification evidence may legitimately be partial or
+blocked; this snapshot does not pre-authorize representative leveraged research
+or pre-claim Issue #128 acceptance.
 
 Merged #120 result:
 
@@ -47,7 +53,11 @@ Status for scientific purposes: **STOPPED / BLOCKED**.
 
 Run A stopped once with exit code `1` before a valid JSON report existed. Runs B and C were not executed. The run must not be resumed after code changes.
 
-The #120 correction and #123 architecture decision are merged, but a fresh study must still wait until #124 is completed, the architect-defined representative leveraged-perpetual mechanics are implemented and validated, and the architect explicitly predeclares the next study from the resulting locked code SHA. The old #118 run remains historical blocker evidence only.
+The #120 correction and #123/#124 architecture decisions are merged, but a
+fresh study must still wait for #128 architect review, any subsequently approved
+representative leveraged-perpetual mechanics, and an explicit architect
+predeclaration from the resulting locked code SHA. The old #118 run remains
+historical blocker evidence only.
 
 ---
 
@@ -116,8 +126,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Implement and review Issue #124; do not claim it complete before its PR is accepted and merged.
-2. After #124, the architect defines the minimum representative leveraged-perpetual mechanics needed before a fresh study.
+1. Complete and review Issue #128; preserve truthful `PARTIAL`/`NOT_QUALIFIED`
+   outcomes when official historical inputs are incomplete.
+2. Only after architect acceptance may a separate issue define and implement
+   the minimum representative leveraged-perpetual mechanics.
 3. Only after those required mechanics are implemented and validated may the architect predeclare the next primary trading study from the then-current exact `main` SHA.
 4. Keep Issue #118 stopped permanently; never resume its failed Run A or run its B/C commands retroactively.
 5. Only after a new valid primary study exists should the project interpret exit robustness and decide the next validation gate.

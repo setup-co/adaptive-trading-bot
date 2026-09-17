@@ -193,9 +193,7 @@ def test_funding_pages_deterministically_and_deduplicates_boundary() -> None:
     assert result.request_count == 2
     assert result.identical_duplicate_count == 1
     assert len(events) == 24
-    assert [item.funding_time for item in events] == sorted(
-        item.funding_time for item in events
-    )
+    assert [item.funding_time for item in events] == sorted(item.funding_time for item in events)
     assert all(parameters["limit"] == "1000" for parameters in source.parameters)
 
 
@@ -208,9 +206,7 @@ def test_funding_rejects_conflicting_duplicate() -> None:
             return [funding_item(0), funding_item(0, rate="0.00002")], 0
 
     with pytest.raises(WeexSourceIntegrityError, match="conflicting funding duplicate"):
-        ConflictSource().fetch_range(
-            "BTCUSDT", start=START, end=START + timedelta(hours=8)
-        )
+        ConflictSource().fetch_range("BTCUSDT", start=START, end=START + timedelta(hours=8))
 
 
 def test_funding_source_does_not_synthesize_events() -> None:
@@ -221,9 +217,7 @@ def test_funding_source_does_not_synthesize_events() -> None:
         def _request(self, endpoint: str, parameters: dict[str, str]) -> tuple[object, int]:
             return [funding_item(1), funding_item(0)], 0
 
-    result = SparseSource().fetch_range(
-        "BTCUSDT", start=START, end=START + timedelta(hours=12)
-    )
+    result = SparseSource().fetch_range("BTCUSDT", start=START, end=START + timedelta(hours=12))
     events = tuple(item for item in result.records if isinstance(item, FundingEvent))
 
     assert len(events) == 2
@@ -247,9 +241,7 @@ def test_manifest_rejects_eth_exclusion_bridge(
         manifest,
         required_intervals={
             "BTCUSDT": required["BTCUSDT"],
-            "ETHUSDT": (
-                CorpusInterval(START, START + timedelta(minutes=15)),
-            ),
+            "ETHUSDT": (CorpusInterval(START, START + timedelta(minutes=15)),),
         },
     )
 
@@ -274,9 +266,7 @@ def test_locked_dataset_rechecks_hash_and_has_no_network_fallback(
         "QUALIFIED_LEVERAGED_INPUT_MANIFEST_SHA256",
         MappingProxyType({manifest.dataset_version: manifest_hash}),
     )
-    locked = LockedWeexLeveragedInputDataset(
-        tmp_path, dataset_version=manifest.dataset_version
-    )
+    locked = LockedWeexLeveragedInputDataset(tmp_path, dataset_version=manifest.dataset_version)
     calls_after_build = source.calls
 
     assert len(locked.read_symbol("BTCUSDT")) == 2
@@ -297,12 +287,8 @@ def test_partial_mark_dataset_has_no_unqualified_symbol_or_api_fallback(
     qualified = {"BTCUSDT": (), "ETHUSDT": required["ETHUSDT"]}
     unavailable = {"BTCUSDT": required["BTCUSDT"], "ETHUSDT": ()}
     monkeypatch.setattr(inputs_module, "issue_128_required_intervals", lambda: required)
-    monkeypatch.setattr(
-        inputs_module, "issue_128_mark_qualified_intervals", lambda: qualified
-    )
-    monkeypatch.setattr(
-        inputs_module, "issue_128_mark_unavailable_intervals", lambda: unavailable
-    )
+    monkeypatch.setattr(inputs_module, "issue_128_mark_qualified_intervals", lambda: qualified)
+    monkeypatch.setattr(inputs_module, "issue_128_mark_unavailable_intervals", lambda: unavailable)
     source = FakeCompleteMarkSource()
     manifest = build_mark_dataset(
         tmp_path,
@@ -316,9 +302,7 @@ def test_partial_mark_dataset_has_no_unqualified_symbol_or_api_fallback(
         "QUALIFIED_LEVERAGED_INPUT_MANIFEST_SHA256",
         MappingProxyType({manifest.dataset_version: manifest_hash}),
     )
-    locked = LockedWeexLeveragedInputDataset(
-        tmp_path, dataset_version=manifest.dataset_version
-    )
+    locked = LockedWeexLeveragedInputDataset(tmp_path, dataset_version=manifest.dataset_version)
     calls_after_build = source.calls
 
     assert {artifact.symbol for artifact in manifest.artifacts} == {"ETHUSDT"}
@@ -383,6 +367,20 @@ def test_contract_quantity_notional_round_trip_is_exact() -> None:
 
     assert contracts == Decimal("123")
     assert specification.base_quantity_for_contracts(contracts) == Decimal("0.0123")
-    assert specification.effective_notional(
-        Decimal("0.0123"), Decimal("100000")
-    ) == Decimal("1230.0000")
+    assert specification.effective_notional(Decimal("0.0123"), Decimal("100000")) == Decimal(
+        "1230.0000"
+    )
+
+
+def test_repository_leveraged_input_snapshots_match_reviewed_registry() -> None:
+    root = Path(__file__).parents[2] / "data" / "research_inputs"
+    mark_version = "weex-v1-5m-mark-97c879a06fc900676dc5c339"
+    funding_version = "weex-v1-funding-87c1f6e88bd64d96c015fe39"
+
+    mark = LockedWeexLeveragedInputDataset(root / mark_version, dataset_version=mark_version)
+    funding = LockedWeexLeveragedInputDataset(
+        root / funding_version, dataset_version=funding_version
+    )
+
+    assert mark.manifest.artifacts[0].row_count == 80_928
+    assert [artifact.row_count for artifact in funding.manifest.artifacts] == [336, 336]
