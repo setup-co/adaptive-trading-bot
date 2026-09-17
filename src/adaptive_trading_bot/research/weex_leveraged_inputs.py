@@ -449,8 +449,8 @@ class LeveragedInputManifest:
             raise CorpusManifestError("symbol status set is invalid")
         expected_status = {
             "MARK": (
-                "QUALIFIED_WITH_BOUNDARIES",
-                {"BTCUSDT": "QUALIFIED", "ETHUSDT": "PARTIAL"},
+                "PARTIAL_INTEGRITY_GAPS",
+                {"BTCUSDT": "NOT_QUALIFIED", "ETHUSDT": "PARTIAL"},
             ),
             "FUNDING": (
                 "PARTIAL_RETENTION_BOUNDARY",
@@ -512,8 +512,13 @@ class LeveragedInputManifest:
                 != ("5m-MARK" if self.input_kind == "MARK" else "FUNDING")
             ):
                 raise CorpusManifestError("artifact entry is invalid")
-        if {artifact.symbol for artifact in self.artifacts} != {"BTCUSDT", "ETHUSDT"}:
-            raise CorpusManifestError("artifact inventory must contain both V1 symbols")
+        expected_artifact_symbols = {
+            symbol for symbol, intervals in self.qualified_intervals.items() if intervals
+        }
+        if {artifact.symbol for artifact in self.artifacts} != expected_artifact_symbols:
+            raise CorpusManifestError(
+                "artifact inventory must exactly match symbols with qualified intervals"
+            )
         digest = sha256(_canonical_json(_manifest_identity(self)).encode()).hexdigest()
         if self.dataset_version != f"{prefixes[self.input_kind]}{digest[:24]}":
             raise CorpusManifestError("dataset version does not match manifest facts")
@@ -579,7 +584,13 @@ class LockedWeexLeveragedInputDataset:
     def read_symbol(self, symbol: str) -> tuple[MarkFiveMinuteCandle | FundingEvent, ...]:
         _require_symbol(symbol)
         self._verify_artifacts()
-        artifact = next(item for item in self._manifest.artifacts if item.symbol == symbol)
+        artifact = next(
+            (item for item in self._manifest.artifacts if item.symbol == symbol), None
+        )
+        if artifact is None:
+            raise CorpusManifestError(
+                f"{symbol} has no qualified {self._manifest.input_kind} artifact"
+            )
         table = pq.read_table(self._root / artifact.path)
         records = table.to_pylist()
         if self._manifest.input_kind == "MARK":
@@ -612,6 +623,30 @@ def issue_128_funding_qualified_intervals() -> dict[str, tuple[CorpusInterval, .
     return {"BTCUSDT": (supported,), "ETHUSDT": (supported,)}
 
 
+def issue_128_mark_qualified_intervals() -> dict[str, tuple[CorpusInterval, ...]]:
+    """Intervals that independently passed the complete Issue #128 MARK grid audit."""
+
+    return {
+        "BTCUSDT": (),
+        "ETHUSDT": (
+            CorpusInterval(_utc("2025-04-02T00:00:00Z"), _utc("2026-01-08T00:00:00Z")),
+        ),
+    }
+
+
+def issue_128_mark_unavailable_intervals() -> dict[str, tuple[CorpusInterval, ...]]:
+    """Whole accepted LAST intervals rejected after a missing MARK open was found."""
+
+    return {
+        "BTCUSDT": (
+            CorpusInterval(_utc("2024-07-01T00:00:00Z"), _utc("2026-01-08T00:00:00Z")),
+        ),
+        "ETHUSDT": (
+            CorpusInterval(_utc("2024-07-01T00:00:00Z"), _utc("2025-01-01T00:00:00Z")),
+        ),
+    }
+
+
 def issue_128_funding_unavailable_intervals() -> dict[str, tuple[CorpusInterval, ...]]:
     boundary = _utc("2025-09-18T00:00:00Z")
     return {
@@ -630,18 +665,17 @@ def build_mark_dataset(
     built_at: datetime,
     source: WeexV3MarkHistorySource | None = None,
 ) -> LeveragedInputManifest:
-    required = issue_128_required_intervals()
     return _build_dataset(
         output_root,
         input_kind="MARK",
         source=source or WeexV3MarkHistorySource(),
         source_code_commit=source_code_commit,
         built_at=built_at,
-        required_intervals=required,
-        qualified_intervals=required,
-        unavailable_intervals={"BTCUSDT": (), "ETHUSDT": ()},
-        status="QUALIFIED_WITH_BOUNDARIES",
-        symbol_status={"BTCUSDT": "QUALIFIED", "ETHUSDT": "PARTIAL"},
+        required_intervals=issue_128_required_intervals(),
+        qualified_intervals=issue_128_mark_qualified_intervals(),
+        unavailable_intervals=issue_128_mark_unavailable_intervals(),
+        status="PARTIAL_INTEGRITY_GAPS",
+        symbol_status={"BTCUSDT": "NOT_QUALIFIED", "ETHUSDT": "PARTIAL"},
     )
 
 
@@ -736,6 +770,8 @@ def _build_dataset(
                     }
                 )
             )
+        if not ordered:
+            continue
         path = output_root / f"{symbol}-{'5m-MARK' if input_kind == 'MARK' else 'funding'}.parquet"
         if input_kind == "MARK":
             _write_mark(

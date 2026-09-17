@@ -126,6 +126,20 @@ def small_required() -> dict[str, tuple[CorpusInterval, ...]]:
     }
 
 
+def make_all_mark_intervals_qualified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, tuple[CorpusInterval, ...]]:
+    required = small_required()
+    monkeypatch.setattr(inputs_module, "issue_128_required_intervals", lambda: required)
+    monkeypatch.setattr(inputs_module, "issue_128_mark_qualified_intervals", lambda: required)
+    monkeypatch.setattr(
+        inputs_module,
+        "issue_128_mark_unavailable_intervals",
+        lambda: {"BTCUSDT": (), "ETHUSDT": ()},
+    )
+    return required
+
+
 def test_mark_parser_preserves_decimal_and_ignores_additive_fields() -> None:
     candle = MarkFiveMinuteCandle.from_wire_row("BTCUSDT", mark_row(0))
 
@@ -222,8 +236,7 @@ def test_funding_source_does_not_synthesize_events() -> None:
 def test_manifest_rejects_eth_exclusion_bridge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    required = small_required()
-    monkeypatch.setattr(inputs_module, "issue_128_required_intervals", lambda: required)
+    required = make_all_mark_intervals_qualified(monkeypatch)
     manifest = build_mark_dataset(
         tmp_path,
         source_code_commit="abc",
@@ -247,8 +260,7 @@ def test_manifest_rejects_eth_exclusion_bridge(
 def test_locked_dataset_rechecks_hash_and_has_no_network_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    required = small_required()
-    monkeypatch.setattr(inputs_module, "issue_128_required_intervals", lambda: required)
+    make_all_mark_intervals_qualified(monkeypatch)
     source = FakeCompleteMarkSource()
     manifest = build_mark_dataset(
         tmp_path,
@@ -278,11 +290,47 @@ def test_locked_dataset_rechecks_hash_and_has_no_network_fallback(
         locked.read_symbol(manifest.artifacts[0].symbol)
 
 
-def test_manifest_bytes_are_deterministic_and_tamper_evident(
+def test_partial_mark_dataset_has_no_unqualified_symbol_or_api_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     required = small_required()
+    qualified = {"BTCUSDT": (), "ETHUSDT": required["ETHUSDT"]}
+    unavailable = {"BTCUSDT": required["BTCUSDT"], "ETHUSDT": ()}
     monkeypatch.setattr(inputs_module, "issue_128_required_intervals", lambda: required)
+    monkeypatch.setattr(
+        inputs_module, "issue_128_mark_qualified_intervals", lambda: qualified
+    )
+    monkeypatch.setattr(
+        inputs_module, "issue_128_mark_unavailable_intervals", lambda: unavailable
+    )
+    source = FakeCompleteMarkSource()
+    manifest = build_mark_dataset(
+        tmp_path,
+        source_code_commit="abc",
+        built_at=START,
+        source=source,
+    )
+    manifest_hash = sha256((tmp_path / "manifest.json").read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        inputs_module,
+        "QUALIFIED_LEVERAGED_INPUT_MANIFEST_SHA256",
+        MappingProxyType({manifest.dataset_version: manifest_hash}),
+    )
+    locked = LockedWeexLeveragedInputDataset(
+        tmp_path, dataset_version=manifest.dataset_version
+    )
+    calls_after_build = source.calls
+
+    assert {artifact.symbol for artifact in manifest.artifacts} == {"ETHUSDT"}
+    with pytest.raises(CorpusManifestError, match="no qualified MARK artifact"):
+        locked.read_symbol("BTCUSDT")
+    assert source.calls == calls_after_build
+
+
+def test_manifest_bytes_are_deterministic_and_tamper_evident(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_all_mark_intervals_qualified(monkeypatch)
     manifest = build_mark_dataset(
         tmp_path,
         source_code_commit="abc",
@@ -302,8 +350,7 @@ def test_manifest_bytes_are_deterministic_and_tamper_evident(
 def test_manifest_rejects_forged_qualification_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    required = small_required()
-    monkeypatch.setattr(inputs_module, "issue_128_required_intervals", lambda: required)
+    make_all_mark_intervals_qualified(monkeypatch)
     manifest = build_mark_dataset(
         tmp_path,
         source_code_commit="abc",
