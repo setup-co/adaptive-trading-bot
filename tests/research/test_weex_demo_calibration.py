@@ -512,7 +512,7 @@ def test_bundle_round_trip_tamper_and_unknown_version_fail_closed(
     manifest_sha = calibration_module._file_sha256(root / "manifest.json")
     monkeypatch.setattr(
         calibration_module,
-        "QUALIFIED_DEMO_CALIBRATION_MANIFEST_SHA256",
+        "LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256",
         {bundle.bundle_version: manifest_sha},
     )
     assert (
@@ -595,3 +595,19 @@ def test_bundle_raw_mutation_invalidates_integrity_seal() -> None:
     object.__setattr__(bundle, "source_code_commit", "2" * 40)
     with pytest.raises(DemoCalibrationIntegrityError, match=r"version|seal"):
         bundle.validate()
+
+
+def test_committed_credential_blocked_calibration_bundle_is_locked_and_readable() -> None:
+    version = "weex-demo-calibration-e300b52fe0e43bfe8581ca58"
+    root = Path("data/research_calibration") / version
+    bundle = LockedWeexDemoCalibrationBundle(root, bundle_version=version).read()
+
+    assert bundle.source_code_commit == "43c508aff3aeaa256d80b6bb4b5bf0c8605bd12c"
+    assert bundle.statuses == (
+        DemoCalibrationStatus.DEMO_CREDENTIALS_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED,
+    )
+    assert bundle.source_observations == ()
+    assert bundle.open_submission is None
+    assert bundle.observed_position is None
+    assert bundle.cleanup_submission is None

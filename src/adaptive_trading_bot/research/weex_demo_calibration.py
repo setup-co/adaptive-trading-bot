@@ -47,7 +47,13 @@ MAX_POSITION_OBSERVATIONS: Final = 3
 POSITION_OBSERVATION_INTERVAL_SECONDS: Final = 2
 
 # Review-owned registry. A new accepted bundle requires an evidence PR.
-QUALIFIED_DEMO_CALIBRATION_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType({})
+LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "weex-demo-calibration-e300b52fe0e43bfe8581ca58": (
+            "025159eb178a9e036c3fb36b531a2210cc45c5abfb7d66b153477521274285b6"
+        )
+    }
+)
 
 _CODE_SHA = re.compile(r"[0-9a-f]{40}")
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -1508,7 +1514,7 @@ class LockedWeexDemoCalibrationBundle:
         self._manifest = _parse_manifest(_load_json_file(manifest_path))
         if self._manifest.bundle_version != bundle_version:
             raise CorpusManifestError("requested Demo calibration version is unknown")
-        accepted = QUALIFIED_DEMO_CALIBRATION_MANIFEST_SHA256.get(bundle_version)
+        accepted = LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256.get(bundle_version)
         if accepted is None:
             raise CorpusManifestError("Demo calibration version is not project-qualified")
         if _file_sha256(manifest_path) != accepted:

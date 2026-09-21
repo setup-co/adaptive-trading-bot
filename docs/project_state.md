@@ -10,11 +10,11 @@
 
 Current verified `main`:
 
-`18f161d4b0038e0242feb2ec9d8bd4e4d773f57a`
+`5fd26536c8c886bcdc9980883cf6bf08f5a8db53`
 
-This commit is the squash merge of PR #129 / Issue #128:
+This commit is the squash merge of PR #131 / Issue #130:
 
-**WEEX leveraged-perpetual research-input qualification.**
+**Fail-closed WEEX V3 forward mechanics evidence collector.**
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -22,16 +22,19 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124 and #128 are closed and Master Plan v1.3 is merged. Issue
-#128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
+Issues #123, #124, #128 and #130 are closed and Master Plan v1.3 is merged.
+Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
-The active critical path is:
+Issue #130 locked current public evidence while truthfully retaining
+`DEMO_CREDENTIALS_UNAVAILABLE`, `DEMO_SYMBOL_MAPPING_UNRESOLVED`, and
+`FORWARD_CALIBRATION_BLOCKED`. The active critical path is:
 
-**#130 — build a fail-closed WEEX V3 forward mechanics evidence collector.**
+**#132 — run one bounded WEEX Demo LONG mechanics calibration sample.**
 
-Issue #130 may qualify current public and read-only Demo evidence only. It does
-not authorize Demo orders, production USER_DATA, leveraged engine
-implementation, or a primary study.
+Issue #132 authorizes only its exact research-only Demo opening/cleanup
+protocol when every precondition passes. In the current execution environment,
+dedicated Demo credentials were unavailable, so no network request or order was
+made and the immutable result is truthfully `BLOCKED`.
 
 Merged #120 result:
 
@@ -99,6 +102,21 @@ Only ETH epoch B has qualified MARK coverage; funding is a retained suffix;
 historical MMR remains unqualified. These partial artifacts do not authorize a
 representative leveraged study.
 
+Issue #130 locked the separate current/forward bundle:
+
+```text
+forward bundle = weex-v3-forward-b88af4b81510850232656be7
+manifest_sha256 = a344bf9cf726b8b68070637bca1c7971eaf248bf3e56585e4b5acd712b9088ca
+```
+
+Issue #132 locked a separate non-trading blocked calibration report:
+
+```text
+calibration bundle = weex-demo-calibration-e300b52fe0e43bfe8581ca58
+manifest_sha256 = 025159eb178a9e036c3fb36b531a2210cc45c5abfb7d66b153477521274285b6
+statuses = DEMO_CREDENTIALS_UNAVAILABLE, DEMO_LONG_CALIBRATION_BLOCKED
+```
+
 ---
 
 ## 5. Current project discipline
@@ -139,9 +157,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete and review Issue #130 with truthful current/Demo evidence status.
-2. If explicitly authorized later, run a small predeclared Demo-only calibration
-   experiment; resolve Demo/production symbol semantics before comparison.
+1. Complete architect review of Issue #132's bounded harness and truthful
+   credential-blocked evidence.
+2. Do not repeat or vary the Demo experiment without a new explicit architect
+   instruction; Demo/production symbol semantics remain unresolved.
 3. Do not implement representative leveraged-perpetual mechanics until the
    evidence gates required by the architect are satisfied.
 4. Only after those mechanics are implemented and validated may the architect
