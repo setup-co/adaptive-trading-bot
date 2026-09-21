@@ -26,6 +26,7 @@ atb-replay = "adaptive_trading_bot.replay.cli:main"
 atb-research-corpus = "adaptive_trading_bot.research.cli:main"
 atb-research-exit-robustness = "adaptive_trading_bot.research.trend_pullback_exit_robustness:main"
 atb-build-weex-corpus = "adaptive_trading_bot.research.weex_historical_corpus:main"
+atb-build-weex-leveraged-inputs = "adaptive_trading_bot.research.weex_leveraged_inputs:main"
 
 [project.optional-dependencies]
 dev = [

@@ -1,2 +1,3 @@
 data/research_corpus/** -text
+data/research_inputs/** -text
 docs/research/manifests/*.json -text

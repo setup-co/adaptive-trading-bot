@@ -1,0 +1,54 @@
+{
+  "endpoint": "https://api-contract.weex.com/capi/v3/market/exchangeInfo",
+  "retrieved_at": "2026-09-17T09:27:00Z",
+  "scope": "current public point-in-time facts; not historical contract or MMR authority",
+  "response_field_observation": {
+    "apiMakerFeeRate": "ABSENT_FOR_BTCUSDT_AND_ETHUSDT",
+    "apiTakerFeeRate": "ABSENT_FOR_BTCUSDT_AND_ETHUSDT",
+    "meaning": "Absent means not returned by the captured public response, not zero. The returned makerFeeRate and takerFeeRate fields remain public point-in-time values and are not historical or account-specific fee authority."
+  },
+  "symbols": {
+    "BTCUSDT": {
+      "baseAsset": "BTC",
+      "baseAssetPrecision": 3,
+      "contractType": "PERPETUAL",
+      "contractVal": "0.0001",
+      "delivery": ["00:00:00", "08:00:00", "16:00:00"],
+      "makerFeeRate": "0.0002",
+      "marginAsset": "USDT",
+      "marketOpenLimitSize": "100",
+      "maxLeverage": 400,
+      "maxOrderSize": "1200",
+      "maxPositionSize": "1000000",
+      "minLeverage": 1,
+      "minOrderSize": "0.0001",
+      "pricePrecision": 1,
+      "quantityPrecision": 4,
+      "quoteAsset": "USDT",
+      "quotePrecision": 8,
+      "symbol": "BTCUSDT",
+      "takerFeeRate": "0.0008"
+    },
+    "ETHUSDT": {
+      "baseAsset": "ETH",
+      "baseAssetPrecision": 2,
+      "contractType": "PERPETUAL",
+      "contractVal": "0.001",
+      "delivery": ["00:00:00", "08:00:00", "16:00:00"],
+      "makerFeeRate": "0.0002",
+      "marginAsset": "USDT",
+      "marketOpenLimitSize": "2300",
+      "maxLeverage": 400,
+      "maxOrderSize": "1000000",
+      "maxPositionSize": "5000000",
+      "minLeverage": 1,
+      "minOrderSize": "0.001",
+      "pricePrecision": 2,
+      "quantityPrecision": 3,
+      "quoteAsset": "USDT",
+      "quotePrecision": 8,
+      "symbol": "ETHUSDT",
+      "takerFeeRate": "0.0008"
+    }
+  }
+}
