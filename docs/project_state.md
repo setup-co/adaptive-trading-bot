@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-09-17
+**Snapshot date:** 2026-09-21
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -10,12 +10,11 @@
 
 Current verified `main`:
 
-`8ce7de8e037ffe798272256f4a8b51075c576658`
+`18f161d4b0038e0242feb2ec9d8bd4e4d773f57a`
 
-This commit is the squash merge of PR #127:
+This commit is the squash merge of PR #129 / Issue #128:
 
-**Master Plan v1.3 — OpenAI-first AI architecture with deterministic Tier-0
-trading authority (#124)**
+**WEEX leveraged-perpetual research-input qualification.**
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -23,16 +22,16 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123 and #124 are closed and Master Plan v1.3 is merged. The active
-critical-path qualification is:
+Issues #123, #124 and #128 are closed and Master Plan v1.3 is merged. Issue
+#128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
+liquidation replay and representative leveraged research remain unqualified.
+The active critical path is:
 
-**#128 — qualify and lock WEEX leveraged-perpetual research inputs and venue
-mechanics.**
+**#130 — build a fail-closed WEEX V3 forward mechanics evidence collector.**
 
-Issue #128 must complete and pass architect review before any leveraged engine
-implementation. Local qualification evidence may legitimately be partial or
-blocked; this snapshot does not pre-authorize representative leveraged research
-or pre-claim Issue #128 acceptance.
+Issue #130 may qualify current public and read-only Demo evidence only. It does
+not authorize Demo orders, production USER_DATA, leveraged engine
+implementation, or a primary study.
 
 Merged #120 result:
 
@@ -86,6 +85,20 @@ Accepted ranges:
 - ETH epoch B: `[2025-04-02T00:00:00Z, 2026-01-08T00:00:00Z)`
 - ETH `[2025-01-01T00:00:00Z, 2025-04-02T00:00:00Z)` remains excluded and must not be bridged.
 
+Issue #128 also locked separate, partial leveraged-input evidence without
+changing LAST:
+
+```text
+MARK dataset = weex-v1-5m-mark-97c879a06fc900676dc5c339
+MARK manifest_sha256 = 3e5ed9bc81877fa9c1d45fe33145d82f36487afeb5e49e9502ae087ec0749275
+funding dataset = weex-v1-funding-87c1f6e88bd64d96c015fe39
+funding manifest_sha256 = 6ecc0c5717a0ec3e5c0c28a96c542226a48e007ccdda48934e5900d304746c52
+```
+
+Only ETH epoch B has qualified MARK coverage; funding is a retained suffix;
+historical MMR remains unqualified. These partial artifacts do not authorize a
+representative leveraged study.
+
 ---
 
 ## 5. Current project discipline
@@ -126,10 +139,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete and review Issue #128; preserve truthful `PARTIAL`/`NOT_QUALIFIED`
-   outcomes when official historical inputs are incomplete.
-2. Only after architect acceptance may a separate issue define and implement
-   the minimum representative leveraged-perpetual mechanics.
-3. Only after those required mechanics are implemented and validated may the architect predeclare the next primary trading study from the then-current exact `main` SHA.
-4. Keep Issue #118 stopped permanently; never resume its failed Run A or run its B/C commands retroactively.
-5. Only after a new valid primary study exists should the project interpret exit robustness and decide the next validation gate.
+1. Complete and review Issue #130 with truthful current/Demo evidence status.
+2. If explicitly authorized later, run a small predeclared Demo-only calibration
+   experiment; resolve Demo/production symbol semantics before comparison.
+3. Do not implement representative leveraged-perpetual mechanics until the
+   evidence gates required by the architect are satisfied.
+4. Only after those mechanics are implemented and validated may the architect
+   predeclare the next primary study from the then-current exact `main` SHA.
+5. Keep Issue #118 stopped permanently; never resume its failed Run A or run
+   its B/C commands retroactively.

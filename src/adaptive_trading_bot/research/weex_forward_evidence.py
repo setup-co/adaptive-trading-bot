@@ -54,7 +54,13 @@ PUBLIC_GET_PATHS: Final = frozenset(
 DEMO_GET_PATHS: Final = frozenset({DEMO_BALANCE_PATH, DEMO_POSITIONS_PATH, DEMO_ORDER_HISTORY_PATH})
 
 # Review-owned registry. A new locked bundle requires an evidence PR.
-QUALIFIED_FORWARD_EVIDENCE_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType({})
+QUALIFIED_FORWARD_EVIDENCE_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "weex-v3-forward-b88af4b81510850232656be7": (
+            "a344bf9cf726b8b68070637bca1c7971eaf248bf3e56585e4b5acd712b9088ca"
+        )
+    }
+)
 
 _CODE_SHA = re.compile(r"[0-9a-f]{40}")
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}")

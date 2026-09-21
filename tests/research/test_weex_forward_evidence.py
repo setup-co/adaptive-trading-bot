@@ -404,6 +404,22 @@ def test_locked_reader_verifies_version_hashes_and_never_has_network_fallback(
         reader.read()
 
 
+def test_committed_forward_evidence_bundle_is_locked_and_readable() -> None:
+    version = "weex-v3-forward-b88af4b81510850232656be7"
+    root = Path("data/research_evidence") / version
+    bundle = LockedWeexForwardEvidenceBundle(root, bundle_version=version).read()
+
+    assert bundle.statuses == (
+        ForwardEvidenceStatus.PUBLIC_CURRENT_EVIDENCE_QUALIFIED,
+        ForwardEvidenceStatus.DEMO_CREDENTIALS_UNAVAILABLE,
+        ForwardEvidenceStatus.DEMO_SYMBOL_MAPPING_UNRESOLVED,
+        ForwardEvidenceStatus.FORWARD_CALIBRATION_BLOCKED,
+    )
+    assert bundle.demo_balances == ()
+    assert bundle.demo_positions == ()
+    assert bundle.demo_order_history == ()
+
+
 def test_bundle_raw_mutation_of_status_fails_seal() -> None:
     bundle, _ = _capture(with_demo=False)
     object.__setattr__(
