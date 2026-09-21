@@ -1,8 +1,8 @@
 # WEEX Demo LONG mechanics calibration (#132)
 
-**Execution date:** 2026-09-21  
-**Baseline:** `5fd26536c8c886bcdc9980883cf6bf08f5a8db53`  
-**Producing code:** `43c508aff3aeaa256d80b6bb4b5bf0c8605bd12c`  
+**Execution date:** 2026-09-21
+**Baseline:** `5fd26536c8c886bcdc9980883cf6bf08f5a8db53`
+**Producing code:** `43c508aff3aeaa256d80b6bb4b5bf0c8605bd12c`
 **Final result:** `BLOCKED`
 
 ## Result
