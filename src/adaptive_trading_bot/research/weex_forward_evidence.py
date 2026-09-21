@@ -846,15 +846,11 @@ def _parse_contracts(payload: object) -> tuple[PublicContractEvidence, ...]:
     if isinstance(value, dict):
         items = value.get("symbols")
         if not isinstance(items, list):
-            raise ForwardEvidenceIntegrityError(
-                "exchangeInfo payload must contain a symbols array"
-            )
+            raise ForwardEvidenceIntegrityError("exchangeInfo payload must contain a symbols array")
     elif isinstance(value, list):
         items = value
     else:
-        raise ForwardEvidenceIntegrityError(
-            "exchangeInfo payload must be an object or array"
-        )
+        raise ForwardEvidenceIntegrityError("exchangeInfo payload must be an object or array")
     selected: list[PublicContractEvidence] = []
     for item in items:
         if not isinstance(item, dict):
