@@ -611,3 +611,38 @@ def test_committed_credential_blocked_calibration_bundle_is_locked_and_readable(
     assert bundle.open_submission is None
     assert bundle.observed_position is None
     assert bundle.cleanup_submission is None
+
+
+def test_committed_no_mark_calibration_bundle_is_locked_and_readable() -> None:
+    version = "weex-demo-calibration-d7eb4338f33b986cc54b1cb6"
+    root = Path("data/research_calibration") / version
+    bundle = LockedWeexDemoCalibrationBundle(root, bundle_version=version).read()
+
+    assert bundle.source_code_commit == "3840ecfbd0a99da2d58462d3135f389201ee7c07"
+    assert bundle.statuses == (
+        DemoCalibrationStatus.DEMO_CONTRACT_FACTS_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_MARK_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_CALIBRATION_BLOCKED_NO_MARK,
+        DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED,
+    )
+    assert bundle.baseline_balance_count == 1
+    assert bundle.baseline_position_count == 0
+    assert bundle.baseline_order_history_count == 0
+    assert tuple(
+        (observation.method, observation.endpoint) for observation in bundle.source_observations
+    ) == (
+        ("GET", "/capi/v3/sim/balance"),
+        ("GET", "/capi/v3/sim/position/allPosition"),
+        ("GET", "/capi/v3/sim/order/history"),
+    )
+    assert bundle.demo_contract is None
+    assert bundle.demo_mark is None
+    assert bundle.demo_premium is None
+    assert bundle.open_submission is None
+    assert bundle.observed_position is None
+    assert bundle.comparisons == ()
+    assert bundle.cleanup_submission is None
+    assert bundle.cleanup_confirmed is None
+    assert bundle.demo_only is True
+    assert bundle.production_equivalence_claimed is False
+    assert bundle.historical_authority_claimed is False

@@ -8,13 +8,12 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main`:
+Execution baseline verified for Issue #134:
 
-`5fd26536c8c886bcdc9980883cf6bf08f5a8db53`
+`3840ecfbd0a99da2d58462d3135f389201ee7c07`
 
-This commit is the squash merge of PR #131 / Issue #130:
-
-**Fail-closed WEEX V3 forward mechanics evidence collector.**
+This commit includes the merged Issue #130 fail-closed WEEX V3 forward
+mechanics evidence collector and Issue #132 bounded Demo calibration harness.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -22,19 +21,21 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128 and #130 are closed and Master Plan v1.3 is merged.
+Issues #123, #124, #128, #130 and #132 are closed and Master Plan v1.3 is merged.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
 `DEMO_CREDENTIALS_UNAVAILABLE`, `DEMO_SYMBOL_MAPPING_UNRESOLVED`, and
 `FORWARD_CALIBRATION_BLOCKED`. The active critical path is:
 
-**#132 — run one bounded WEEX Demo LONG mechanics calibration sample.**
+**#134 — execute the frozen bounded WEEX Demo LONG calibration once.**
 
-Issue #132 authorizes only its exact research-only Demo opening/cleanup
-protocol when every precondition passes. In the current execution environment,
-dedicated Demo credentials were unavailable, so no network request or order was
-made and the immutable result is truthfully `BLOCKED`.
+The dedicated credential presence gate passed. The one authorized execution
+completed its signed read-only Demo baseline but could not qualify a direct
+current `BTCSUSDT` MARK through the reviewed public boundary. It stopped with
+`DEMO_CALIBRATION_BLOCKED_NO_MARK` before transmitting any state-changing
+request. No opening, position observation, comparison, cleanup, retry, or rerun
+occurred.
 
 Merged #120 result:
 
@@ -117,6 +118,16 @@ manifest_sha256 = 025159eb178a9e036c3fb36b531a2210cc45c5abfb7d66b153477521274285
 statuses = DEMO_CREDENTIALS_UNAVAILABLE, DEMO_LONG_CALIBRATION_BLOCKED
 ```
 
+Issue #134 locked the single credential-present, pre-POST blocked result:
+
+```text
+calibration bundle = weex-demo-calibration-d7eb4338f33b986cc54b1cb6
+manifest_sha256 = 6119d7a1b7fca8624dfdb6c74b643fc46521e1e6badbd9f4b1e2d82ec8fd20f2
+statuses = DEMO_CONTRACT_FACTS_UNAVAILABLE, DEMO_MARK_UNAVAILABLE,
+           DEMO_CALIBRATION_BLOCKED_NO_MARK, DEMO_LONG_CALIBRATION_BLOCKED
+state-changing requests transmitted = 0
+```
+
 ---
 
 ## 5. Current project discipline
@@ -157,10 +168,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review of Issue #132's bounded harness and truthful
-   credential-blocked evidence.
-2. Do not repeat or vary the Demo experiment without a new explicit architect
-   instruction; Demo/production symbol semantics remain unresolved.
+1. Complete architect review of Issue #134's immutable, credential-present but
+   pre-POST blocked evidence.
+2. Do not repeat or vary the Demo experiment. Direct `BTCSUSDT` MARK authority
+   and Demo/production symbol semantics remain unresolved.
 3. Do not implement representative leveraged-perpetual mechanics until the
    evidence gates required by the architect are satisfied.
 4. Only after those mechanics are implemented and validated may the architect
