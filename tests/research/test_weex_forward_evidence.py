@@ -7,7 +7,9 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from types import MappingProxyType
 from typing import cast
 
@@ -26,10 +28,12 @@ from adaptive_trading_bot.research.weex_forward_evidence import (
     LockedWeexForwardEvidenceBundle,
     SecretValue,
     UnsafeWeexRouteError,
+    UrlLibGetTransport,
     WeexDemoCredentials,
     WeexDemoReadOnlyClient,
     WeexForwardEvidenceBundle,
     WeexForwardEvidenceCollector,
+    WeexForwardRequestError,
     WeexPublicCurrentClient,
     sign_weex_get,
     write_evidence_bundle,
@@ -289,6 +293,89 @@ def test_unapproved_and_mutating_routes_fail_before_network(
     with pytest.raises(UnsafeWeexRouteError):
         client.request(method, path)
     assert transport.calls == []
+
+
+def test_signed_demo_get_redirect_is_rejected_without_second_request_or_secret_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin_requests: list[tuple[str, Mapping[str, str]]] = []
+    target_requests: list[tuple[str, Mapping[str, str]]] = []
+
+    class RedirectTargetHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            target_requests.append((self.path, dict(self.headers.items())))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    target_server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectTargetHandler)
+    target_port = target_server.server_address[1]
+    untrusted_location = f"http://localhost:{target_port}/unapproved?token=redirect-secret"
+
+    class RedirectOriginHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            origin_requests.append((self.path, dict(self.headers.items())))
+            self.send_response(302)
+            self.send_header("Location", untrusted_location)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    origin_server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectOriginHandler)
+    servers = (origin_server, target_server)
+    threads = tuple(Thread(target=server.serve_forever, daemon=True) for server in servers)
+    for thread in threads:
+        thread.start()
+
+    credentials = _credentials()
+    monkeypatch.setattr(
+        evidence_module,
+        "WEEX_V3_BASE_URL",
+        f"http://127.0.0.1:{origin_server.server_address[1]}",
+    )
+    client = WeexDemoReadOnlyClient(
+        credentials,
+        UrlLibGetTransport(timeout_seconds=2),
+        timestamp_ms=lambda: 1789992000000,
+    )
+    try:
+        with pytest.raises(WeexForwardRequestError) as captured:
+            client.request("GET", DEMO_BALANCE_PATH)
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+    assert [request[0] for request in origin_requests] == [DEMO_BALANCE_PATH]
+    assert target_requests == []
+    origin_headers = origin_requests[0][1]
+    assert origin_headers["Access-Key"] == "fake-api-key"
+    assert origin_headers["Access-Passphrase"] == "fake-passphrase"
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    surfaced = f"{captured.value!s} {captured.value!r}"
+    serialized_error = json.dumps({"error": str(captured.value)})
+    for sensitive in (
+        "ACCESS-KEY",
+        "ACCESS-SIGN",
+        "ACCESS-PASSPHRASE",
+        "ACCESS-TIMESTAMP",
+        "fake-api-key",
+        "fake-secret-key",
+        "fake-passphrase",
+        origin_headers["Access-Sign"],
+        "1789992000000",
+        "redirect-secret",
+        untrusted_location,
+    ):
+        assert sensitive not in surfaced
+        assert sensitive not in serialized_error
 
 
 def test_only_reviewed_public_and_demo_gets_are_performed() -> None:

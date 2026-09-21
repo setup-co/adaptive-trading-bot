@@ -22,9 +22,10 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from hashlib import sha256
+from http.client import HTTPMessage
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol, cast
+from typing import IO, Final, Protocol, cast
 
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.research.weex_historical_corpus import (
@@ -152,11 +153,29 @@ class GetTransport(Protocol):
     ) -> object: ...
 
 
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before urllib can construct or send a second request."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        del req, code, msg, headers, newurl
+        fp.close()
+        raise WeexForwardRequestError("approved WEEX GET refused an HTTP redirect")
+
+
 class UrlLibGetTransport:
     def __init__(self, *, timeout_seconds: float = 20) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._timeout_seconds = timeout_seconds
+        self._opener = urllib.request.build_opener(_RejectRedirectHandler())
 
     def get(
         self,
@@ -169,15 +188,17 @@ class UrlLibGetTransport:
         suffix = f"?{query}" if query else ""
         request = urllib.request.Request(f"{base_url}{path}{suffix}", headers=dict(headers))
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
+            with self._opener.open(request, timeout=self._timeout_seconds) as response:
                 return json.load(response, parse_float=Decimal)
         except (
+            WeexForwardRequestError,
             urllib.error.HTTPError,
             urllib.error.URLError,
             TimeoutError,
             OSError,
-        ) as error:
-            raise WeexForwardRequestError(f"approved WEEX GET failed for {path}") from error
+        ):
+            pass
+        raise WeexForwardRequestError(f"approved WEEX GET failed for {path}")
 
 
 @dataclass(frozen=True, slots=True)

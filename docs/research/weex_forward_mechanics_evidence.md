@@ -76,6 +76,10 @@ also accepts only the three reviewed Demo GET paths. Consequently live order
 routes, `POST /capi/v3/sim/order`, live leverage/margin-mode changes, transfers,
 and arbitrary signed paths fail before network I/O.
 
+The shared real transport disables redirect following. Any HTTP 30x response
+fails with a sanitized typed error before a redirected request is constructed or
+sent, so signed headers cannot cross to an unreviewed path or host.
+
 Demo credentials are a separate runtime-only `WeexDemoCredentials` value read
 only from `ATB_WEEX_DEMO_API_KEY`, `ATB_WEEX_DEMO_SECRET_KEY`, and
 `ATB_WEEX_DEMO_PASSPHRASE`. Partial configuration fails closed. Secret string
@@ -109,6 +113,10 @@ balances, positions, or orders because credentials were unavailable. The
 exchange-information response did not expose `apiMakerFeeRate` or
 `apiTakerFeeRate`; those fields are explicitly `null`, while current public
 maker/taker values are retained as exact strings.
+
+The bounded MARK-kline rows are point-in-time observations and may include the
+currently forming candle whose interval closes after `captured_at`. They are not
+finalized historical candle evidence.
 
 The canonical JSON seal covers the complete sanitized bundle. The manifest
 pins its SHA-256 and byte size. `LockedWeexForwardEvidenceBundle` accepts only a
