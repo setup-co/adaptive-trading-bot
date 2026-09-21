@@ -66,7 +66,7 @@ class RecordingGetTransport:
         parameters = dict(item.split("=", 1) for item in query.split("&") if item)
         symbol = parameters.get("symbol", "BTCUSDT")
         if path == EXCHANGE_INFO_PATH:
-            return {"data": [_contract("BTCUSDT"), _contract("ETHUSDT")]}
+            return {"symbols": [_contract("BTCUSDT"), _contract("ETHUSDT")]}
         if path == PREMIUM_INDEX_PATH:
             return {"data": [_premium(symbol)]}
         if path == SYMBOL_PRICE_PATH:
