@@ -135,7 +135,7 @@ version and pass the reviewed manifest registry in
 
 The exact point-in-time V3 response subset is stored in
 `weex_v3_contract_snapshot_2026-09-17.json` (SHA-256
-`4bc206725f26510a34fc75bd133db3557a61407c978998b1cb03e4821519b23f`).
+`5cd95943d33e6a07210f981e100fe8dc77110f310f8f5f26e2fa752b09147a30`).
 Official exchange-information
 documentation states that `minOrderSize`, `maxOrderSize`, `maxPositionSize` and
 `marketOpenLimitSize` are base-asset quantities and that `contractVal` is the
@@ -157,11 +157,14 @@ without treating legacy lot count as V3 order quantity. Current facts are:
 | BTCUSDT | 0.0001 BTC | 1 | 4 | 0.0001 BTC | 1200 BTC | 1000000 BTC | 100 BTC |
 | ETHUSDT | 0.001 ETH | 2 | 3 | 0.001 ETH | 1000000 ETH | 5000000 ETH | 2300 ETH |
 
-The public response reports maker `0.0002` and taker `0.0008`. Those are a
-retrieval-time public schedule, not proof of the user's account/VIP/API fee or
-the historical schedule. Later research must use a separately predeclared,
-versioned cost configuration; it must not silently claim these current fields
-were historically observed.
+The captured public response reports `makerFeeRate=0.0002` and
+`takerFeeRate=0.0008`. It did **not** expose `apiMakerFeeRate` or
+`apiTakerFeeRate` for either BTCUSDT or ETHUSDT; absence means not returned,
+not a zero rate. The returned generic fields are a retrieval-time public
+schedule, not proof of the user's account/VIP/API fee or the historical
+schedule. Later research must use a separately predeclared, versioned cost
+configuration; it must not silently claim these current fields were
+historically observed.
 
 ## MMR/leverage history
 
@@ -169,20 +172,57 @@ Final status: **`MMR_HISTORY_NOT_QUALIFIED`**.
 
 Official evidence found:
 
-- A 2024-11-04 10:30 UTC+8 BTC announcement defines eleven exact tiers, from
-  `0–4,900,000 USDT` at max leverage 200/MMR 0.3% through
-  `840,000,001–10,000,000,000 USDT` at max leverage 1/MMR 50%.
-- A 2026-02-13 18:00 UTC+8 announcement publishes previous and updated BTC and
-  ETH tables. Its BTC **previous** table includes additional 400/300 tiers not
-  present in the 2024 announcement, proving at least one intervening schedule
-  state without a causally bounded effective record in the collected evidence.
-  Its ETH previous table likewise has no proven start time covering the locked
-  research intervals.
-- The current exchange-information snapshot reports min/max leverage `1/400`
-  for both symbols, but contains no MMR tiers and cannot be back-projected.
+| Effective time | Symbol | What the official announcement proves | Causal limitation |
+| --- | --- | --- | --- |
+| 2024-11-04 10:30 UTC+8 (`2024-11-04T02:30:00Z`) | BTCUSDT | An exact eleven-tier table, from `0–4,900,000 USDT` at max leverage 200/MMR 0.3% through `840,000,001–10,000,000,000 USDT` at max leverage 1/MMR 50%. | No collected announcement establishes the BTC schedule for the earlier accepted interval from 2024-07-01 to this effective time. |
+| 2025-01-07 14:00 UTC+8 (`2025-01-07T06:00:00Z`) | ETHUSDT | The exact eleven-tier table below. | This starts after accepted ETH interval A ends and falls inside the excluded ETH interval. It does not establish the schedule for accepted interval A. |
+| 2025-02-07 08:00 UTC+8 (`2025-02-07T00:00:00Z`) | BTCUSDT, ETHUSDT | Maximum leverage increased to 300x. | The announcement publishes no position boundaries or MMRs, so it proves a policy change but not the resulting complete tier schedule. |
+| 2025-02-21 18:00 UTC+8 (`2025-02-21T10:00:00Z`) | BTCUSDT, ETHUSDT | Maximum leverage increased to 400x. | The announcement publishes no position boundaries or MMRs, so the schedule applicable to accepted ETH interval B and the later BTC interval remains under-specified. |
+| 2026-02-13 18:00 UTC+8 (`2026-02-13T10:00:00Z`) | BTCUSDT, ETHUSDT | An announcement outside the locked windows publishes both previous and updated full tables. The previous tables include 400x/300x tiers. | It proves a later schedule state, but does not date when the 400x/300x position boundaries and MMRs began. It cannot be back-projected into the locked windows. |
 
-These point observations do not form complete historical schedules for either
-symbol. No current or February 2026 table may be applied to earlier dates.
+The causal BTC chain is therefore the exact 200x-era table effective
+2024-11-04, the maximum-only 300x change effective 2025-02-07, the
+maximum-only 400x change effective 2025-02-21, and the full table described as
+`previous` immediately before the 2026-02-13 change. The causal ETH chain is
+the exact 200x-era table effective 2025-01-07, the same two maximum-only
+changes, and the 2026 `previous` table. The ETH table remains relevant policy
+evidence even though its effective instant is in the candle-data exclusion: it
+establishes the schedule from that instant until the 300x announcement changed
+the declared maximum. Neither maximum-only event discloses the replacement
+boundaries/MMRs needed to bridge either chain.
+
+The exact ETH table effective `2025-01-07T06:00:00Z` is:
+
+| Position value (USDT) | Max leverage | MMR |
+| ---: | ---: | ---: |
+| 0–3,000,000 | 200 | 0.30% |
+| 3,000,001–4,000,000 | 100 | 0.50% |
+| 4,000,001–5,000,000 | 75 | 1% |
+| 5,000,001–6,000,000 | 50 | 1.50% |
+| 6,000,001–7,000,000 | 25 | 2% |
+| 7,000,001–9,000,000 | 10 | 5% |
+| 9,000,001–10,000,000 | 5 | 10% |
+| 10,000,001–24,000,000 | 4 | 12.50% |
+| 24,000,001–46,000,000 | 3 | 15% |
+| 46,000,001–164,000,000 | 2 | 25% |
+| 164,000,001–10,000,000,000 | 1 | 50% |
+
+On 2026-09-20, the official WEEX Help Center archive and official-domain
+search results around the accepted research windows were reviewed for BTC/ETH
+leverage, position-tier and MMR changes. Beyond the dated events above, no
+additional BTCUSDT- or ETHUSDT-specific tier/MMR/max-leverage announcement
+effective anywhere in the accepted 2024-07-01 through 2026-01-08 timelines was
+discovered. That is a bounded search result, **not** proof that no unindexed,
+amended or otherwise undiscovered change occurred.
+
+The current exchange-information snapshot reports min/max leverage `1/400`
+for both symbols, but contains no MMR tiers and cannot be back-projected.
+Accordingly, the known BTC and ETH events still do not form a complete causal
+schedule for either accepted research timeline. No maximum-only announcement,
+current snapshot, or February 2026 table may supply missing historical tier
+boundaries or MMRs. `MMR_HISTORY_NOT_QUALIFIED`, deterministic liquidation
+replay `NOT_QUALIFIED`, and representative leveraged research `BLOCKED` remain
+the required fail-closed statuses.
 
 ## Isolated margin and liquidation semantics
 
@@ -239,4 +279,7 @@ ambiguity rule. LLM output must never own any of this arithmetic or authority.
 - [Auto margin top-up](https://www.weex.com/help/articles/4417899831833)
 - [Futures terms](https://www.weex.com/help/articles/48842594089625)
 - [BTC tier change, 2024-11-04](https://www.weex.com/help/articles/39281474928921)
+- [ETH tier change, 2025-01-07](https://www.weex.com/help/articles/42043870126873)
+- [BTC/ETH maximum leverage 300x, 2025-02-07](https://www.weex.com/help/articles/43193704907929)
+- [BTC/ETH maximum leverage 400x, 2025-02-21](https://www.weex.com/help/articles/43739584116761)
 - [BTC/ETH tier change, 2026-02-13](https://www.weex.com/help/articles/55108075621273)
