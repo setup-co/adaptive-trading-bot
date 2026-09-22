@@ -386,24 +386,12 @@ def test_calibration_cli_rejects_unknown_mapping_before_runner(
     assert runner_constructed is False
 
 
-@pytest.mark.parametrize(
-    ("mapping_update", "message"),
-    (
-        ({"demo_symbol": "ETHSUSDT"}, "symbols are not reviewed"),
-        ({"reference_symbol": "ETHUSDT"}, "symbols are not reviewed"),
-        ({"authorized_facts": (DemoFeedFact.FEED_TIMESTAMP,)}, "lacks MARK authority"),
-        ({"contract_mechanics_qualified": True}, "claims forbidden authority"),
-    ),
-)
-def test_calibration_cli_rejects_semantically_unsafe_mapping(
+def _assert_calibration_cli_rejects_semantically_unsafe_mapping(
     monkeypatch: pytest.MonkeyPatch,
-    mapping_update: dict[str, object],
+    unsafe: DemoFeedMappingBundle,
     message: str,
 ) -> None:
     version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
-    root = Path("data/research_evidence") / version
-    accepted = LockedWeexDemoFeedMappingBundle(root, bundle_version=version).read()
-    unsafe = replace(accepted, mapping=replace(accepted.mapping, **mapping_update))
 
     class _UnsafeLockedBundle:
         def __init__(self, _root: Path, *, bundle_version: str) -> None:
@@ -420,6 +408,69 @@ def test_calibration_cli_rejects_semantically_unsafe_mapping(
 
     with pytest.raises(DemoCalibrationIntegrityError, match=message):
         calibration_module._open_locked_feed_mapping(version)
+
+
+def _accepted_mapping_bundle() -> DemoFeedMappingBundle:
+    version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    return LockedWeexDemoFeedMappingBundle(
+        Path("data/research_evidence") / version,
+        bundle_version=version,
+    ).read()
+
+
+def test_calibration_cli_rejects_wrong_demo_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(accepted.mapping, demo_symbol="ETHSUSDT"),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "symbols are not reviewed"
+    )
+
+
+def test_calibration_cli_rejects_wrong_reference_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(accepted.mapping, reference_symbol="ETHUSDT"),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "symbols are not reviewed"
+    )
+
+
+def test_calibration_cli_rejects_mapping_without_mark_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(
+            accepted.mapping,
+            authorized_facts=(DemoFeedFact.FEED_TIMESTAMP,),
+        ),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "lacks MARK authority"
+    )
+
+
+def test_calibration_cli_rejects_mapping_with_contract_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(accepted.mapping, contract_mechanics_qualified=True),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "claims forbidden authority"
+    )
 
 
 def test_mapping_does_not_substitute_reference_contract_facts() -> None:
