@@ -554,6 +554,9 @@ def test_existing_locked_evidence_manifest_hashes_are_unchanged() -> None:
             "data/research_calibration/weex-demo-calibration-31f710cf17bb784da2f3ecad/manifest.json"
         ): "2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815",
         Path(
+            "data/research_calibration/weex-demo-calibration-6306fd2c4ef4968a7532a005/manifest.json"
+        ): "46320e81425a461e20bd1b32096f8bae8bc9e75d7b590a0fd60b21940428c228",
+        Path(
             "data/research_evidence/weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9/manifest.json"
         ): "46a48e421d81c05d6ed59c106651bfa5fc8bb30b548d804a8a80ea2fb9c273c0",
     }

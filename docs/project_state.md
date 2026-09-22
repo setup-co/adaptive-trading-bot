@@ -38,10 +38,11 @@ The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
 qualify contract value, quantity, precision, fees, leverage, margin, MMR,
 liquidation, fills, historical policy, or general Demo/production equivalence.
-Issue #134 remains immutable and was not rerun. Issue #140 made exactly one
-opening request under the frozen protocol. Its response was unavailable, no
-position was observed in the bounded checks, the opening was not retried, and
-no cleanup request was eligible. No mechanics comparison was possible.
+Issue #134 remains immutable and was not rerun. Issue #140's local runner
+attempted exactly one opening through the reviewed POST path under the frozen
+protocol; WEEX receipt and acceptance remain `UNKNOWN`. No position was
+observed in the bounded checks, the opening was not retried, and no cleanup
+request was eligible. No mechanics comparison was possible.
 
 Merged #120 result:
 
@@ -147,11 +148,13 @@ historical/mechanics/production equivalence = not qualified
 Issue #140 locked the one mapped-feed calibration result:
 
 ```text
-calibration bundle = weex-demo-calibration-31f710cf17bb784da2f3ecad
-manifest_sha256 = 2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815
+calibration bundle = weex-demo-calibration-6306fd2c4ef4968a7532a005
+manifest_sha256 = 46320e81425a461e20bd1b32096f8bae8bc9e75d7b590a0fd60b21940428c228
 statuses = DEMO_CONTRACT_FACTS_UNAVAILABLE, DEMO_MARK_QUALIFIED,
            DEMO_OPEN_RESPONSE_UNAVAILABLE, DEMO_OPEN_NOT_OBSERVED,
            DEMO_LONG_CALIBRATION_BLOCKED
+ambiguous request SHA-256 = ce0019db0d6af534b52849f0ee11b4ba489879b0fc124ef2375f2f1d04d4f178
+venue receipt / acceptance = UNKNOWN / UNKNOWN
 position/comparisons/cleanup = unavailable / none / not applicable
 ```
 

@@ -40,8 +40,10 @@ DEMO_SYMBOL: Final = "BTCSUSDT"
 OPEN_QUANTITY: Final = Decimal("0.01")
 OPEN_CLIENT_ORDER_ID: Final = "atb-132-btcsusdt-long-open-v1"
 CLEANUP_CLIENT_ORDER_ID: Final = "atb-132-btcsusdt-long-clean-v1"
-LEGACY_CALIBRATION_SCHEMA_VERSION: Final = "weex-demo-long-calibration-v1"
-CALIBRATION_SCHEMA_VERSION: Final = "weex-demo-long-calibration-v2"
+LEGACY_CALIBRATION_SCHEMA_VERSIONS: Final = frozenset(
+    {"weex-demo-long-calibration-v1", "weex-demo-long-calibration-v2"}
+)
+CALIBRATION_SCHEMA_VERSION: Final = "weex-demo-long-calibration-v3"
 CALIBRATION_MANIFEST_SCHEMA_VERSION: Final = "weex-demo-calibration-manifest-v1"
 CALIBRATION_PROTOCOL_VERSION: Final = "issue-132-long-v1"
 MINIMUM_CLEANUP_DELAY_SECONDS: Final = 65
@@ -62,6 +64,9 @@ LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxy
         ),
         "weex-demo-calibration-31f710cf17bb784da2f3ecad": (
             "2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815"
+        ),
+        "weex-demo-calibration-6306fd2c4ef4968a7532a005": (
+            "46320e81425a461e20bd1b32096f8bae8bc9e75d7b590a0fd60b21940428c228"
         ),
     }
 )
@@ -133,6 +138,10 @@ class CalibrationDisposition(StrEnum):
     MATCH = "MATCH"
     MISMATCH = "MISMATCH"
     UNRESOLVED = "UNRESOLVED"
+
+
+class VenueKnowledgeState(StrEnum):
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +220,49 @@ class DemoCalibrationOrder:
         return json.dumps(
             payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode()
+
+
+@dataclass(frozen=True, slots=True)
+class AmbiguousOrderAttemptEvidence:
+    method: str
+    endpoint: str
+    phase: CalibrationOrderPhase
+    client_order_id: str
+    request_body_sha256: str
+    response_available: bool
+    venue_receipt: VenueKnowledgeState
+    venue_acceptance: VenueKnowledgeState
+
+    def __post_init__(self) -> None:
+        if self.method != "POST" or self.endpoint != DEMO_ORDER_PATH:
+            raise DemoCalibrationIntegrityError("ambiguous attempt route is not authorized")
+        if self.phase is not CalibrationOrderPhase.OPEN or (
+            self.client_order_id != OPEN_CLIENT_ORDER_ID
+        ):
+            raise DemoCalibrationIntegrityError("ambiguous attempt identity is not opening")
+        _require_sha256(self.request_body_sha256, "ambiguous request body SHA-256")
+        if self.response_available:
+            raise DemoCalibrationIntegrityError("ambiguous attempt cannot claim a response")
+        if (
+            self.venue_receipt is not VenueKnowledgeState.UNKNOWN
+            or self.venue_acceptance is not VenueKnowledgeState.UNKNOWN
+        ):
+            raise DemoCalibrationIntegrityError("ambiguous venue outcome must remain unknown")
+
+    @classmethod
+    def opening(cls, order: DemoCalibrationOrder) -> AmbiguousOrderAttemptEvidence:
+        if order != DemoCalibrationOrder.opening():
+            raise DemoCalibrationIntegrityError("ambiguous attempt order is not authorized")
+        return cls(
+            method="POST",
+            endpoint=DEMO_ORDER_PATH,
+            phase=CalibrationOrderPhase.OPEN,
+            client_order_id=OPEN_CLIENT_ORDER_ID,
+            request_body_sha256=sha256(order.canonical_body()).hexdigest(),
+            response_available=False,
+            venue_receipt=VenueKnowledgeState.UNKNOWN,
+            venue_acceptance=VenueKnowledgeState.UNKNOWN,
+        )
 
 
 class PostBytesTransport(Protocol):
@@ -592,6 +644,7 @@ class DemoCalibrationBundle:
     demo_premium: DemoSymbolPremiumEvidence | None
     demo_contract: DemoSymbolContractEvidence | None
     open_submission: DemoOrderSubmissionEvidence | None
+    ambiguous_open_attempt: AmbiguousOrderAttemptEvidence | None
     observed_position: forward.DemoPositionEvidence | None
     opening_order_attribution: CalibrationDisposition | None
     observed_order: forward.DemoOrderHistoryEvidence | None
@@ -607,10 +660,9 @@ class DemoCalibrationBundle:
     integrity_seal: str
 
     def validate(self) -> None:
-        if self.schema_version not in {
-            LEGACY_CALIBRATION_SCHEMA_VERSION,
-            CALIBRATION_SCHEMA_VERSION,
-        }:
+        if self.schema_version not in (
+            LEGACY_CALIBRATION_SCHEMA_VERSIONS | {CALIBRATION_SCHEMA_VERSION}
+        ):
             raise DemoCalibrationIntegrityError("unknown calibration schema")
         if self.protocol_version != CALIBRATION_PROTOCOL_VERSION:
             raise DemoCalibrationIntegrityError("unknown calibration protocol")
@@ -667,6 +719,7 @@ class DemoCalibrationBundle:
                         self.demo_premium,
                         self.demo_contract,
                         self.open_submission,
+                        self.ambiguous_open_attempt,
                         self.observed_position,
                         self.opening_order_attribution,
                         self.observed_order,
@@ -686,6 +739,19 @@ class DemoCalibrationBundle:
             self.open_submission is None
             and DemoCalibrationStatus.DEMO_OPEN_RESPONSE_UNAVAILABLE in self.statuses
         )
+        if self.schema_version in LEGACY_CALIBRATION_SCHEMA_VERSIONS:
+            if self.ambiguous_open_attempt is not None:
+                raise DemoCalibrationIntegrityError(
+                    "legacy calibration contains new ambiguous-attempt evidence"
+                )
+        elif ambiguous_open:
+            if self.ambiguous_open_attempt is None:
+                raise DemoCalibrationIntegrityError("ambiguous opening attempt evidence is missing")
+            expected_digest = sha256(self.authorized_open_order.canonical_body()).hexdigest()
+            if self.ambiguous_open_attempt.request_body_sha256 != expected_digest:
+                raise DemoCalibrationIntegrityError("ambiguous opening request body changed")
+        elif self.ambiguous_open_attempt is not None:
+            raise DemoCalibrationIntegrityError("unexpected ambiguous opening attempt evidence")
         if (
             self.open_submission is None
             and not ambiguous_open
@@ -895,6 +961,7 @@ class WeexDemoLongCalibrationRunner:
         try:
             submitted = self._writer.submit_opening(open_order)
         except (DemoCalibrationRequestError, DemoCalibrationIntegrityError):
+            ambiguous_attempt = AmbiguousOrderAttemptEvidence.opening(open_order)
             cleanup_delay_reference = require_utc(
                 self._now(), field="ambiguous opening completion time"
             )
@@ -911,6 +978,7 @@ class WeexDemoLongCalibrationRunner:
                     demo_mark=mark,
                     demo_premium=premium,
                     demo_contract=contract,
+                    ambiguous_open_attempt=ambiguous_attempt,
                     baseline=baseline,
                 )
             return self._finish_observed_position(
@@ -923,6 +991,7 @@ class WeexDemoLongCalibrationRunner:
                 premium=premium,
                 contract=contract,
                 submitted=None,
+                ambiguous_open_attempt=ambiguous_attempt,
                 observed=observed,
                 attribution=attribution,
                 cleanup_delay_reference=cleanup_delay_reference,
@@ -970,6 +1039,7 @@ class WeexDemoLongCalibrationRunner:
             premium=premium,
             contract=contract,
             submitted=submitted,
+            ambiguous_open_attempt=None,
             observed=observed,
             attribution=attribution,
             cleanup_delay_reference=submitted.evidence.submitted_at,
@@ -987,6 +1057,7 @@ class WeexDemoLongCalibrationRunner:
         premium: DemoSymbolPremiumEvidence | None,
         contract: DemoSymbolContractEvidence | None,
         submitted: _SubmittedOrder | None,
+        ambiguous_open_attempt: AmbiguousOrderAttemptEvidence | None,
         observed: forward.DemoPositionEvidence,
         attribution: CalibrationDisposition,
         cleanup_delay_reference: datetime,
@@ -1063,6 +1134,7 @@ class WeexDemoLongCalibrationRunner:
                 demo_premium=premium,
                 demo_contract=contract,
                 open_submission=None if submitted is None else submitted.evidence,
+                ambiguous_open_attempt=ambiguous_open_attempt,
                 observed_position=observed,
                 opening_order_attribution=attribution,
                 observed_order=observed_order,
@@ -1229,6 +1301,7 @@ class WeexDemoLongCalibrationRunner:
         demo_premium: DemoSymbolPremiumEvidence | None = None,
         demo_contract: DemoSymbolContractEvidence | None = None,
         open_submission: DemoOrderSubmissionEvidence | None = None,
+        ambiguous_open_attempt: AmbiguousOrderAttemptEvidence | None = None,
     ) -> DemoCalibrationBundle:
         final_statuses = list(statuses)
         _append_unique(final_statuses, DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED)
@@ -1252,6 +1325,7 @@ class WeexDemoLongCalibrationRunner:
                 demo_premium=demo_premium,
                 demo_contract=demo_contract,
                 open_submission=open_submission,
+                ambiguous_open_attempt=ambiguous_open_attempt,
                 statuses=tuple(final_statuses),
             )
         )
@@ -1501,6 +1575,7 @@ def _bundle_seed(
     demo_premium: DemoSymbolPremiumEvidence | None = None,
     demo_contract: DemoSymbolContractEvidence | None = None,
     open_submission: DemoOrderSubmissionEvidence | None = None,
+    ambiguous_open_attempt: AmbiguousOrderAttemptEvidence | None = None,
     observed_position: forward.DemoPositionEvidence | None = None,
     opening_order_attribution: CalibrationDisposition | None = None,
     observed_order: forward.DemoOrderHistoryEvidence | None = None,
@@ -1530,6 +1605,7 @@ def _bundle_seed(
         demo_premium=demo_premium,
         demo_contract=demo_contract,
         open_submission=open_submission,
+        ambiguous_open_attempt=ambiguous_open_attempt,
         observed_position=observed_position,
         opening_order_attribution=opening_order_attribution,
         observed_order=observed_order,
@@ -1667,6 +1743,9 @@ def _parse_bundle(raw: object) -> DemoCalibrationBundle:
             demo_premium=_optional_mapping(item["demo_premium"], _premium_from_json),
             demo_contract=_optional_mapping(item["demo_contract"], _contract_from_json),
             open_submission=_optional_mapping(item["open_submission"], _submission_from_json),
+            ambiguous_open_attempt=_optional_mapping(
+                item.get("ambiguous_open_attempt"), _ambiguous_attempt_from_json
+            ),
             observed_position=_optional_mapping(
                 item["observed_position"], forward._position_from_json
             ),
@@ -1734,6 +1813,27 @@ def _submission_from_json(value: Mapping[str, object]) -> DemoOrderSubmissionEvi
         error_message=_strict_text_or_empty(value["error_message"], "error message"),
         submitted_at=_parse_utc(value["submitted_at"], "submitted_at"),
         response_sha256=_strict_text(value["response_sha256"], "response SHA-256"),
+    )
+
+
+def _ambiguous_attempt_from_json(
+    value: Mapping[str, object],
+) -> AmbiguousOrderAttemptEvidence:
+    return AmbiguousOrderAttemptEvidence(
+        method=_strict_text(value["method"], "ambiguous attempt method"),
+        endpoint=_strict_text(value["endpoint"], "ambiguous attempt endpoint"),
+        phase=CalibrationOrderPhase(_strict_text(value["phase"], "ambiguous attempt phase")),
+        client_order_id=_strict_text(value["client_order_id"], "ambiguous attempt client ID"),
+        request_body_sha256=_strict_text(
+            value["request_body_sha256"], "ambiguous request body SHA-256"
+        ),
+        response_available=_strict_bool(
+            value["response_available"], "ambiguous response availability"
+        ),
+        venue_receipt=VenueKnowledgeState(_strict_text(value["venue_receipt"], "venue receipt")),
+        venue_acceptance=VenueKnowledgeState(
+            _strict_text(value["venue_acceptance"], "venue acceptance")
+        ),
     )
 
 
@@ -2012,12 +2112,18 @@ def _canonical_json(value: object) -> str:
 
 
 def _bundle_identity_sha(bundle: DemoCalibrationBundle) -> str:
-    value = _canonical_value(bundle, excluded=frozenset({"bundle_version", "integrity_seal"}))
+    excluded = {"bundle_version", "integrity_seal"}
+    if bundle.schema_version in LEGACY_CALIBRATION_SCHEMA_VERSIONS:
+        excluded.add("ambiguous_open_attempt")
+    value = _canonical_value(bundle, excluded=frozenset(excluded))
     return sha256(_canonical_json(value).encode()).hexdigest()
 
 
 def _integrity_sha(bundle: DemoCalibrationBundle) -> str:
-    value = _canonical_value(bundle, excluded=frozenset({"integrity_seal"}))
+    excluded = {"integrity_seal"}
+    if bundle.schema_version in LEGACY_CALIBRATION_SCHEMA_VERSIONS:
+        excluded.add("ambiguous_open_attempt")
+    value = _canonical_value(bundle, excluded=frozenset(excluded))
     return sha256(_canonical_json(value).encode()).hexdigest()
 
 
