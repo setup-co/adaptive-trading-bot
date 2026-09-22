@@ -31,10 +31,14 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#144 — implement the unleveraged, pre-funding signal-edge economic screen
-on sealed paired-research reports.** This implementation phase must not run the
-real A/B/C study. Architect review freezes the implementation SHA before a
-separate one-time study activation.
+**#144 — review the one-time unleveraged, pre-funding signal-edge study
+evidence.** The implementation was merged and frozen at
+`b07e9eac7f373c4bc1b79a286714df00ae817ec2`; the architect then activated
+exactly one A/B/C execution. All three runs completed from the locked LAST
+corpus. The frozen screen result is `SIGNAL_EDGE_SCREEN_NEGATIVE` (three
+evaluable NEGATIVE units). See
+`docs/research/trend_pullback_signal_edge_study_2026_09_23.md` and the
+immutable study manifest. Do not tune or rerun these units under #144.
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
@@ -219,8 +223,9 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review and merge #144's research-only economic projection before any real
-   locked-corpus A/B/C execution; freeze the resulting code SHA first.
+1. Review #144's immutable one-time A/B/C result and evidence PR. The frozen
+   screen is NEGATIVE; do not tune Trend Pullback V1 on the same windows or
+   rerun the units.
 2. Keep the WEEX historical leveraged-mechanics pursuit closed. Contract,
    margin, MMR and liquidation mechanics remain unresolved; #144 must not
    convert this screen into a leveraged or Live claim.
