@@ -8,14 +8,15 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #136 / PR #137 merged:
+Current verified `main` after Issue #138 / PR #139 merged:
 
-`30ed22fd36f7b389c05bf34e70678504328efd28`
+`47521f11069da75dfc9787732efb3c5bc90e5b4a`
 
-This commit is the squash merge of PR #137 / Issue #136. It includes the
+This commit is the squash merge of PR #139 / Issue #138. It includes the
 fail-closed WEEX V3 forward evidence collector, bounded Demo calibration
 harness, immutable pre-POST blocked #134 execution result, and the exact
-current-only `BTCSUSDT -> BTCUSDT` feed mapping authority.
+current-only `BTCSUSDT -> BTCUSDT` feed mapping authority wired explicitly into
+the normal calibration CLI.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -23,7 +24,7 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134 and #136 are closed and Master Plan v1.3 is merged.
+Issues #123, #124, #128, #130, #132, #134, #136 and #138 are closed and Master Plan v1.3 is merged.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
@@ -31,15 +32,16 @@ Issue #130 locked current public evidence while truthfully retaining
 `FORWARD_CALIBRATION_BLOCKED`. Issue #136 then qualified only the exact current
 feed mapping. The active critical path is:
 
-**#138 — wire the locked #136 mapping into the normal Demo calibration CLI.**
+**#140 — preserve and review the one mapped Demo calibration outcome.**
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
 qualify contract value, quantity, precision, fees, leverage, margin, MMR,
 liquidation, fills, historical policy, or general Demo/production equivalence.
-Issue #134 remains immutable and was not rerun. The calibration runner supports
-the mapping, and #138 makes the CLI require an explicitly named locked mapping
-version; no new Demo order has been sent.
+Issue #134 remains immutable and was not rerun. Issue #140 made exactly one
+opening request under the frozen protocol. Its response was unavailable, no
+position was observed in the bounded checks, the opening was not retried, and
+no cleanup request was eligible. No mechanics comparison was possible.
 
 Merged #120 result:
 
@@ -142,6 +144,17 @@ scope = MARK/index/funding/timing/feed timestamps only
 historical/mechanics/production equivalence = not qualified
 ```
 
+Issue #140 locked the one mapped-feed calibration result:
+
+```text
+calibration bundle = weex-demo-calibration-31f710cf17bb784da2f3ecad
+manifest_sha256 = 2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815
+statuses = DEMO_CONTRACT_FACTS_UNAVAILABLE, DEMO_MARK_QUALIFIED,
+           DEMO_OPEN_RESPONSE_UNAVAILABLE, DEMO_OPEN_NOT_OBSERVED,
+           DEMO_LONG_CALIBRATION_BLOCKED
+position/comparisons/cleanup = unavailable / none / not applicable
+```
+
 ---
 
 ## 5. Current project discipline
@@ -182,11 +195,11 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review of Issue #138's explicit locked-mapping CLI
-   integration.
-2. Only after #138 review/merge may a separate architect issue authorize one
-   bounded credential-present Demo LONG calibration using that exact mapping.
-   Contract and execution mechanics remain unresolved.
+1. Complete architect review of Issue #140's immutable ambiguous-opening
+   evidence.
+2. Do not repeat the opening or send a cleanup request: no position was
+   observed, and the single frozen attempt is complete. Contract and execution
+   mechanics remain unresolved.
 3. Do not implement representative leveraged-perpetual mechanics until the
    evidence gates required by the architect are satisfied.
 4. Only after those mechanics are implemented and validated may the architect

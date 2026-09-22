@@ -646,3 +646,50 @@ def test_committed_no_mark_calibration_bundle_is_locked_and_readable() -> None:
     assert bundle.demo_only is True
     assert bundle.production_equivalence_claimed is False
     assert bundle.historical_authority_claimed is False
+
+
+def test_committed_mapped_ambiguous_open_calibration_bundle_is_locked_and_readable() -> None:
+    version = "weex-demo-calibration-31f710cf17bb784da2f3ecad"
+    root = Path("data/research_calibration") / version
+    bundle = LockedWeexDemoCalibrationBundle(root, bundle_version=version).read()
+
+    assert bundle.source_code_commit == "47521f11069da75dfc9787732efb3c5bc90e5b4a"
+    assert bundle.statuses == (
+        DemoCalibrationStatus.DEMO_CONTRACT_FACTS_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_MARK_QUALIFIED,
+        DemoCalibrationStatus.DEMO_OPEN_RESPONSE_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_OPEN_NOT_OBSERVED,
+        DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED,
+    )
+    assert bundle.baseline_balance_count == 1
+    assert bundle.baseline_position_count == 0
+    assert bundle.baseline_order_history_count == 0
+    assert bundle.demo_mark is not None
+    assert bundle.demo_mark.symbol == "BTCSUSDT"
+    assert bundle.demo_mark.actual_source_symbol == "BTCUSDT"
+    assert (
+        bundle.demo_mark.mapping_evidence_version
+        == "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    )
+    assert bundle.demo_premium is not None
+    assert bundle.demo_premium.actual_source_symbol == "BTCUSDT"
+    assert bundle.demo_contract is None
+    assert bundle.open_submission is None
+    assert bundle.observed_position is None
+    assert bundle.opening_order_attribution is None
+    assert bundle.observed_order is None
+    assert bundle.comparisons == ()
+    assert bundle.liquidation_price is None
+    assert bundle.cleanup_order is None
+    assert bundle.cleanup_submission is None
+    assert bundle.cleanup_confirmed is None
+    assert (
+        sum(
+            observation.endpoint == forward.DEMO_POSITIONS_PATH
+            for observation in bundle.source_observations
+        )
+        == 4
+    )
+    assert bundle.demo_only is True
+    assert bundle.production_equivalence_claimed is False
+    assert bundle.historical_authority_claimed is False

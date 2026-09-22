@@ -60,6 +60,9 @@ LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxy
         "weex-demo-calibration-d7eb4338f33b986cc54b1cb6": (
             "6119d7a1b7fca8624dfdb6c74b643fc46521e1e6badbd9f4b1e2d82ec8fd20f2"
         ),
+        "weex-demo-calibration-31f710cf17bb784da2f3ecad": (
+            "2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815"
+        ),
     }
 )
 
