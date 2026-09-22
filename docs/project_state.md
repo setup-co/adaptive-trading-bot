@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-09-22
+**Snapshot date:** 2026-09-23
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,15 +8,12 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #140 / PR #141 merged:
+Current verified `main` after Issue #142 / PR #143 merged:
 
-`8fc066ab2b5873dae01f460213f6fee2b999052e`
+`cb0e0f88c93d4e65ce64ae81491bf5d122cd2a61`
 
-This commit is the squash merge of PR #141 / Issue #140. It includes the
-fail-closed WEEX V3 forward evidence collector, bounded Demo calibration
-harness, immutable pre-POST blocked #134 execution result, the exact
-current-only `BTCSUSDT -> BTCUSDT` feed mapping, and the final sealed #140
-ambiguous-opening evidence.
+This commit is the squash merge of PR #143 / Issue #142. It preserves the
+locked LAST, MARK, funding, forward, calibration and reconciliation evidence.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -24,15 +21,20 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138 and #140 are closed and Master Plan v1.3 is merged.
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140 and #142 are closed,
+and Master Plan v1.3 is merged.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
 `DEMO_CREDENTIALS_UNAVAILABLE`, `DEMO_SYMBOL_MAPPING_UNRESOLVED`, and
 `FORWARD_CALIBRATION_BLOCKED`. Issue #136 then qualified only the exact current
-feed mapping. The active critical path is:
+feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
+closed. The active critical path is:
 
-**#142 — review the final read-only reconciliation of the ambiguous Demo opening.**
+**#144 — implement the unleveraged, pre-funding signal-edge economic screen
+on sealed paired-research reports.** This implementation phase must not run the
+real A/B/C study. Architect review freezes the implementation SHA before a
+separate one-time study activation.
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
@@ -67,11 +69,11 @@ Status for scientific purposes: **STOPPED / BLOCKED**.
 
 Run A stopped once with exit code `1` before a valid JSON report existed. Runs B and C were not executed. The run must not be resumed after code changes.
 
-The #120 correction and #123/#124 architecture decisions are merged, but a
-fresh study must still wait for #128 architect review, any subsequently approved
-representative leveraged-perpetual mechanics, and an explicit architect
-predeclaration from the resulting locked code SHA. The old #118 run remains
-historical blocker evidence only.
+The #120 correction and #123/#124 architecture decisions are merged. Issue
+#144 is a separately predeclared, explicitly unleveraged/pre-funding signal-edge
+screen, not a continuation of #118 and not a claim of representative leveraged
+perpetual performance or Live readiness. The old #118 run remains historical
+blocker evidence only.
 
 ---
 
@@ -217,14 +219,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review of Issue #142's immutable read-only
-   reconciliation evidence.
-2. Do not repeat the opening or send a cleanup request: no position was
-   observed, and the single frozen attempt is complete. Contract and execution
-   mechanics remain unresolved.
-3. Do not implement representative leveraged-perpetual mechanics until the
-   evidence gates required by the architect are satisfied.
-4. Only after those mechanics are implemented and validated may the architect
-   predeclare the next primary study from the then-current exact `main` SHA.
-5. Keep Issue #118 stopped permanently; never resume its failed Run A or run
+1. Review and merge #144's research-only economic projection before any real
+   locked-corpus A/B/C execution; freeze the resulting code SHA first.
+2. Keep the WEEX historical leveraged-mechanics pursuit closed. Contract,
+   margin, MMR and liquidation mechanics remain unresolved; #144 must not
+   convert this screen into a leveraged or Live claim.
+3. Keep Issue #118 stopped permanently; never resume its failed Run A or run
    its B/C commands retroactively.

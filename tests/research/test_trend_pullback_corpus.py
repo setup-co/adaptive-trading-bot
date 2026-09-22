@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_DOWN, Context, Decimal, getcontext, setcontext
+from decimal import ROUND_DOWN, Context, Decimal, getcontext, localcontext, setcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -39,6 +39,13 @@ from adaptive_trading_bot.research import (
     TrendPullbackHistoricalResearchCorpus,
     TrendPullbackResearchCorpusError,
 )
+from adaptive_trading_bot.research.trend_pullback_signal_edge import (
+    FROZEN_RUNS,
+    SignalEdgeProjectionError,
+    project_frozen_run,
+    project_run,
+)
+from adaptive_trading_bot.research.weex_historical_corpus import LockedWeexResearchCorpusStore
 from adaptive_trading_bot.risk import (
     ExchangeApiHealthState,
     RiskManagerConfiguration,
@@ -657,6 +664,26 @@ def test_exit_robustness_replays_exact_admissible_population_with_full_horizon(
     assert boundary_report.deltas.mean_net_pnl_delta == (
         late.paired_result.realized_net_pnl_delta_candidate_minus_baseline
     )
+    economic = project_run(boundary_report)
+    assert economic.population.economic_outcome_denominator == 1
+    assert economic.outcomes[0].identity == late.identity
+    assert late.paired_result.ema50_candidate is not None
+    assert late.paired_result.ema50_candidate.realized_net_pnl is not None
+    with localcontext(Context(prec=34)):
+        expected_net_r = (
+            late.paired_result.ema50_candidate.realized_net_pnl
+            / late.paired_result.entry_intent.approved_risk_quote
+        )
+    assert economic.outcomes[0].net_r == expected_net_r
+    assert economic.paired_candidate_minus_baseline_deltas == boundary_report.deltas
+    assert not economic.economically_evaluable
+    with pytest.raises(SignalEdgeProjectionError, match="locked WEEX corpus store"):
+        project_frozen_run(
+            cast(LockedWeexResearchCorpusStore, boundary_store),
+            boundary_corpus,
+            boundary_report,
+            FROZEN_RUNS[0],
+        )
     excluded = {item.identity for item in corpus.decisions if not item.is_research_admissible_entry}
     assert excluded.isdisjoint(item.identity for item in report.observations)
     assert any(read.end == corpus.configuration.end + timedelta(hours=4) for read in store.reads)
@@ -699,6 +726,14 @@ def test_exit_robustness_preserves_unresolved_and_zero_comparable_strata(
 ) -> None:
     _, report = robustness_report
 
+    economic = project_run(report)
+    assert economic.to_json() == project_run(deepcopy(report)).to_json()
+    assert economic.population.paired_population == report.population
+    assert economic.population.economic_outcome_denominator == 0
+    assert economic.outcomes == ()
+    assert economic.candidate_economics.mean_net_r is None
+    assert economic.paired_candidate_minus_baseline_deltas == report.deltas
+
     assert report.population.candidate_count == len(report.observations)
     assert report.population.entry_filled_count == len(report.observations)
     assert report.population.entry_fill_invalidated_count == 0
@@ -739,6 +774,17 @@ def test_exit_robustness_preserves_unresolved_and_zero_comparable_strata(
     assert '"decimal"' in artifact
 
 
+def test_signal_edge_projection_rejects_mutated_sealed_report(
+    robustness_report: tuple[MemoryHistoricalStore, TrendPullbackExitRobustnessReport],
+) -> None:
+    _, report = robustness_report
+    forged = deepcopy(report)
+    object.__setattr__(forged, "report_digest", "0" * 64)
+
+    with pytest.raises(TrendPullbackExitRobustnessError, match="integrity"):
+        project_run(forged)
+
+
 def test_entry_unfilled_and_future_after_fixed_end_are_preserved(
     generated: tuple[MemoryHistoricalStore, TrendPullbackHistoricalResearchCorpus],
 ) -> None:
@@ -753,6 +799,11 @@ def test_entry_unfilled_and_future_after_fixed_end_are_preserved(
     first = TrendPullbackExitRobustnessRunner(store).run(corpus, configuration)
 
     assert first.population.entry_unfilled_count == len(first.observations)
+    economic = project_run(first)
+    assert economic.population.paired_population.entry_unfilled_count == len(first.observations)
+    assert economic.population.entry_unfilled_rate.value == Decimal(1)
+    assert economic.population.economic_outcome_denominator == 0
+    assert economic.outcomes == ()
     assert all(
         item.paired_result.comparison_state.value == "ENTRY_UNFILLED" for item in first.observations
     )
