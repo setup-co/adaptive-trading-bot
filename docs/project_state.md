@@ -8,15 +8,15 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #138 / PR #139 merged:
+Current verified `main` after Issue #140 / PR #141 merged:
 
-`47521f11069da75dfc9787732efb3c5bc90e5b4a`
+`8fc066ab2b5873dae01f460213f6fee2b999052e`
 
-This commit is the squash merge of PR #139 / Issue #138. It includes the
+This commit is the squash merge of PR #141 / Issue #140. It includes the
 fail-closed WEEX V3 forward evidence collector, bounded Demo calibration
-harness, immutable pre-POST blocked #134 execution result, and the exact
-current-only `BTCSUSDT -> BTCUSDT` feed mapping authority wired explicitly into
-the normal calibration CLI.
+harness, immutable pre-POST blocked #134 execution result, the exact
+current-only `BTCSUSDT -> BTCUSDT` feed mapping, and the final sealed #140
+ambiguous-opening evidence.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -24,7 +24,7 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136 and #138 are closed and Master Plan v1.3 is merged.
+Issues #123, #124, #128, #130, #132, #134, #136, #138 and #140 are closed and Master Plan v1.3 is merged.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
@@ -32,7 +32,7 @@ Issue #130 locked current public evidence while truthfully retaining
 `FORWARD_CALIBRATION_BLOCKED`. Issue #136 then qualified only the exact current
 feed mapping. The active critical path is:
 
-**#140 — preserve and review the one mapped Demo calibration outcome.**
+**#142 — review the final read-only reconciliation of the ambiguous Demo opening.**
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
@@ -42,7 +42,11 @@ Issue #134 remains immutable and was not rerun. Issue #140's local runner
 attempted exactly one opening through the reviewed POST path under the frozen
 protocol; WEEX receipt and acceptance remain `UNKNOWN`. No position was
 observed in the bounded checks, the opening was not retried, and no cleanup
-request was eligible. No mechanics comparison was possible.
+request was eligible. No mechanics comparison was possible. Issue #142 later
+found zero current positions and zero exact client-ID matches in one bounded
+Demo order-history page for the reviewed window. This is
+`DEMO_AMBIGUOUS_ORDER_NOT_FOUND`, not proof the earlier request never reached
+WEEX.
 
 Merged #120 result:
 
@@ -162,6 +166,17 @@ venue receipt / acceptance = UNKNOWN / UNKNOWN
 position/comparisons/cleanup = unavailable / none / not applicable
 ```
 
+Issue #142 locked a separate read-only reconciliation result:
+
+```text
+reconciliation bundle = weex-demo-reconciliation-4a17f9406b037ce84d6ce288
+artifact_sha256 = d23b1e3f9d2e825822ec7b2d5c4ad2afad75d6ca33b1f2640af456a2e79823fb
+manifest_sha256 = 28f2c963fa8624c73b9e00a0f7697f3c703f158495fe06ea7ba98b7707702c61
+position GETs / history pages / rows / exact matches = 1 / 1 / 0 / 0
+terminal classification = DEMO_AMBIGUOUS_ORDER_NOT_FOUND
+state-changing requests = 0
+```
+
 ---
 
 ## 5. Current project discipline
@@ -202,8 +217,8 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review of Issue #140's immutable ambiguous-opening
-   evidence.
+1. Complete architect review of Issue #142's immutable read-only
+   reconciliation evidence.
 2. Do not repeat the opening or send a cleanup request: no position was
    observed, and the single frozen attempt is complete. Contract and execution
    mechanics remain unresolved.
