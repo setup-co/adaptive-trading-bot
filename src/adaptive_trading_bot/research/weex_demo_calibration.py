@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import IO, Final, Protocol, cast
 
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.research import weex_demo_feed_mapping as feed_mapping
 from adaptive_trading_bot.research import weex_forward_evidence as forward
 from adaptive_trading_bot.research.weex_historical_corpus import (
     CorpusHashMismatchError,
@@ -39,7 +40,8 @@ DEMO_SYMBOL: Final = "BTCSUSDT"
 OPEN_QUANTITY: Final = Decimal("0.01")
 OPEN_CLIENT_ORDER_ID: Final = "atb-132-btcsusdt-long-open-v1"
 CLEANUP_CLIENT_ORDER_ID: Final = "atb-132-btcsusdt-long-clean-v1"
-CALIBRATION_SCHEMA_VERSION: Final = "weex-demo-long-calibration-v1"
+LEGACY_CALIBRATION_SCHEMA_VERSION: Final = "weex-demo-long-calibration-v1"
+CALIBRATION_SCHEMA_VERSION: Final = "weex-demo-long-calibration-v2"
 CALIBRATION_MANIFEST_SCHEMA_VERSION: Final = "weex-demo-calibration-manifest-v1"
 CALIBRATION_PROTOCOL_VERSION: Final = "issue-132-long-v1"
 MINIMUM_CLEANUP_DELAY_SECONDS: Final = 65
@@ -436,10 +438,15 @@ class DemoSymbolMarkEvidence:
     price: Decimal
     venue_time_ms: int
     venue_time: datetime
+    actual_source_symbol: str = DEMO_SYMBOL
+    mapping_evidence_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.symbol != DEMO_SYMBOL:
             raise DemoCalibrationIntegrityError("MARK evidence is not for BTCSUSDT")
+        _validate_feed_provenance(
+            self.actual_source_symbol, self.mapping_evidence_version, field="MARK"
+        )
         _require_positive_decimal(self.price, "Demo MARK")
         _require_timestamp_pair(self.venue_time_ms, self.venue_time, "Demo MARK time")
 
@@ -455,10 +462,16 @@ class DemoSymbolPremiumEvidence:
     next_funding_time: datetime
     venue_time_ms: int
     venue_time: datetime
+    collect_cycle_minutes: int | None = None
+    actual_source_symbol: str = DEMO_SYMBOL
+    mapping_evidence_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.symbol != DEMO_SYMBOL:
             raise DemoCalibrationIntegrityError("premium evidence is not for BTCSUSDT")
+        _validate_feed_provenance(
+            self.actual_source_symbol, self.mapping_evidence_version, field="premium"
+        )
         _require_positive_decimal(self.mark_price, "premium MARK")
         _require_positive_decimal(self.index_price, "premium index")
         _require_finite_decimal(self.last_funding_rate, "last funding rate")
@@ -467,6 +480,10 @@ class DemoSymbolPremiumEvidence:
             self.next_funding_time_ms, self.next_funding_time, "next funding time"
         )
         _require_timestamp_pair(self.venue_time_ms, self.venue_time, "premium venue time")
+        if self.collect_cycle_minutes is not None and (
+            type(self.collect_cycle_minutes) is not int or self.collect_cycle_minutes <= 0
+        ):
+            raise DemoCalibrationIntegrityError("funding collect cycle is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,7 +601,10 @@ class DemoCalibrationBundle:
     integrity_seal: str
 
     def validate(self) -> None:
-        if self.schema_version != CALIBRATION_SCHEMA_VERSION:
+        if self.schema_version not in {
+            LEGACY_CALIBRATION_SCHEMA_VERSION,
+            CALIBRATION_SCHEMA_VERSION,
+        }:
             raise DemoCalibrationIntegrityError("unknown calibration schema")
         if self.protocol_version != CALIBRATION_PROTOCOL_VERSION:
             raise DemoCalibrationIntegrityError("unknown calibration protocol")
@@ -747,6 +767,7 @@ class WeexDemoLongCalibrationRunner:
         public_client: forward.WeexPublicCurrentClient,
         demo_reader: forward.WeexDemoReadOnlyClient | None,
         demo_writer: WeexDemoCalibrationWriter | None,
+        feed_mapping_bundle: feed_mapping.LockedWeexDemoFeedMappingBundle | None = None,
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
@@ -755,6 +776,11 @@ class WeexDemoLongCalibrationRunner:
         self._public = public_client
         self._reader = demo_reader
         self._writer = demo_writer
+        self._feed_resolver = (
+            None
+            if feed_mapping_bundle is None
+            else feed_mapping.DemoFeedMappingResolver(feed_mapping_bundle)
+        )
         self._now = now or (lambda: datetime.now(tz=UTC))
         self._sleep = sleep or time.sleep
 
@@ -1117,6 +1143,21 @@ class WeexDemoLongCalibrationRunner:
     def _probe_mark(
         self,
     ) -> tuple[DemoSymbolMarkEvidence | None, CalibrationSourceObservation | None]:
+        if self._feed_resolver is not None:
+            resolved = self._feed_resolver.resolve_mark(self._public)
+            if resolved is None:
+                return None, None
+            return (
+                DemoSymbolMarkEvidence(
+                    symbol=resolved.requested_demo_symbol,
+                    price=resolved.price,
+                    venue_time_ms=resolved.venue_time_ms,
+                    venue_time=resolved.venue_time,
+                    actual_source_symbol=resolved.actual_source_symbol,
+                    mapping_evidence_version=resolved.mapping_evidence_version,
+                ),
+                _from_get_observation(resolved.source_observation),
+            )
         try:
             raw, source = self._public.request(
                 "GET",
@@ -1130,6 +1171,27 @@ class WeexDemoLongCalibrationRunner:
     def _probe_premium(
         self,
     ) -> tuple[DemoSymbolPremiumEvidence | None, CalibrationSourceObservation | None]:
+        if self._feed_resolver is not None:
+            resolved = self._feed_resolver.resolve_funding(self._public)
+            if resolved is None:
+                return None, None
+            return (
+                DemoSymbolPremiumEvidence(
+                    symbol=resolved.requested_demo_symbol,
+                    mark_price=resolved.mark_price,
+                    index_price=resolved.index_price,
+                    last_funding_rate=resolved.last_funding_rate,
+                    forecast_funding_rate=resolved.forecast_funding_rate,
+                    next_funding_time_ms=resolved.next_funding_time_ms,
+                    next_funding_time=resolved.next_funding_time,
+                    venue_time_ms=resolved.venue_time_ms,
+                    venue_time=resolved.venue_time,
+                    collect_cycle_minutes=resolved.collect_cycle_minutes,
+                    actual_source_symbol=resolved.actual_source_symbol,
+                    mapping_evidence_version=resolved.mapping_evidence_version,
+                ),
+                _from_get_observation(resolved.source_observation),
+            )
         try:
             raw, source = self._public.request(
                 "GET", forward.PREMIUM_INDEX_PATH, {"symbol": DEMO_SYMBOL}
@@ -1384,6 +1446,7 @@ def _parse_demo_premium(payload: object) -> DemoSymbolPremiumEvidence:
         next_funding_time=_from_milliseconds(next_ms),
         venue_time_ms=venue_ms,
         venue_time=_from_milliseconds(venue_ms),
+        collect_cycle_minutes=_optional_integer(item.get("collectCycle"), "collect cycle"),
     )
 
 
@@ -1674,6 +1737,10 @@ def _mark_from_json(value: Mapping[str, object]) -> DemoSymbolMarkEvidence:
         price=_strict_decimal(value["price"], "MARK price"),
         venue_time_ms=_strict_integer(value["venue_time_ms"], "MARK time"),
         venue_time=_parse_utc(value["venue_time"], "MARK venue time"),
+        actual_source_symbol=_strict_text(
+            value.get("actual_source_symbol", DEMO_SYMBOL), "MARK source symbol"
+        ),
+        mapping_evidence_version=_optional_text(value.get("mapping_evidence_version")),
     )
 
 
@@ -1690,6 +1757,13 @@ def _premium_from_json(value: Mapping[str, object]) -> DemoSymbolPremiumEvidence
         next_funding_time=_parse_utc(value["next_funding_time"], "next funding time"),
         venue_time_ms=_strict_integer(value["venue_time_ms"], "premium venue time"),
         venue_time=_parse_utc(value["venue_time"], "premium venue time"),
+        collect_cycle_minutes=_optional_integer(
+            value.get("collect_cycle_minutes"), "collect cycle"
+        ),
+        actual_source_symbol=_strict_text(
+            value.get("actual_source_symbol", DEMO_SYMBOL), "premium source symbol"
+        ),
+        mapping_evidence_version=_optional_text(value.get("mapping_evidence_version")),
     )
 
 
@@ -1768,6 +1842,24 @@ def _strict_text_or_empty(value: object, field: str) -> str:
     if value == "":
         return ""
     return _strict_text(value, field)
+
+
+def _optional_integer(value: object, field: str) -> int | None:
+    return None if value is None else _strict_integer(value, field)
+
+
+def _validate_feed_provenance(
+    actual_source_symbol: str, mapping_evidence_version: str | None, *, field: str
+) -> None:
+    if actual_source_symbol == DEMO_SYMBOL:
+        if mapping_evidence_version is not None:
+            raise DemoCalibrationIntegrityError(f"direct {field} cannot claim mapped evidence")
+        return
+    if actual_source_symbol != feed_mapping.REFERENCE_SYMBOL or (
+        mapping_evidence_version is None
+        or mapping_evidence_version not in feed_mapping.LOCKED_DEMO_FEED_MAPPING_MANIFEST_SHA256
+    ):
+        raise DemoCalibrationIntegrityError(f"mapped {field} provenance is invalid")
 
 
 def _sanitized_venue_error_code(value: object, *, accepted: bool) -> str:

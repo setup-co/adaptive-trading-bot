@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-09-21
+**Snapshot date:** 2026-09-22
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,12 +8,13 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Execution baseline verified for Issue #134:
+Current verified `main` at the Issue #136 branch point:
 
-`3840ecfbd0a99da2d58462d3135f389201ee7c07`
+`10d2b7c72b3e23e198fc746da2cecd287892eddf`
 
-This commit includes the merged Issue #130 fail-closed WEEX V3 forward
-mechanics evidence collector and Issue #132 bounded Demo calibration harness.
+This commit is the squash merge of PR #135 / Issue #134. It includes the
+fail-closed WEEX V3 forward evidence collector, bounded Demo calibration
+harness, and immutable pre-POST blocked #134 execution result.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -21,21 +22,20 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130 and #132 are closed and Master Plan v1.3 is merged.
+Issues #123, #124, #128, #130, #132 and #134 are closed and Master Plan v1.3 is merged.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
 `DEMO_CREDENTIALS_UNAVAILABLE`, `DEMO_SYMBOL_MAPPING_UNRESOLVED`, and
 `FORWARD_CALIBRATION_BLOCKED`. The active critical path is:
 
-**#134 — execute the frozen bounded WEEX Demo LONG calibration once.**
+**#136 — qualify the exact `BTCSUSDT -> BTCUSDT` current feed mapping.**
 
-The dedicated credential presence gate passed. The one authorized execution
-completed its signed read-only Demo baseline but could not qualify a direct
-current `BTCSUSDT` MARK through the reviewed public boundary. It stopped with
-`DEMO_CALIBRATION_BLOCKED_NO_MARK` before transmitting any state-changing
-request. No opening, position observation, comparison, cleanup, retry, or rerun
-occurred.
+The official documentation and small public-only V3 capture qualify a narrow
+current feed reference for MARK/index/funding facts and timestamps. They do not
+qualify contract value, quantity, precision, fees, leverage, margin, MMR,
+liquidation, fills, historical policy, or general Demo/production equivalence.
+Issue #134 remains immutable and was not rerun.
 
 Merged #120 result:
 
@@ -128,6 +128,16 @@ statuses = DEMO_CONTRACT_FACTS_UNAVAILABLE, DEMO_MARK_UNAVAILABLE,
 state-changing requests transmitted = 0
 ```
 
+Issue #136 adds a separate current-only feed-mapping evidence bundle:
+
+```text
+mapping = BTCSUSDT requested Demo instrument -> BTCUSDT actual public reference
+mapping bundle = weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9
+manifest_sha256 = 46a48e421d81c05d6ed59c106651bfa5fc8bb30b548d804a8a80ea2fb9c273c0
+scope = MARK/index/funding/timing/feed timestamps only
+historical/mechanics/production equivalence = not qualified
+```
+
 ---
 
 ## 5. Current project discipline
@@ -168,10 +178,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review of Issue #134's immutable, credential-present but
-   pre-POST blocked evidence.
-2. Do not repeat or vary the Demo experiment. Direct `BTCSUSDT` MARK authority
-   and Demo/production symbol semantics remain unresolved.
+1. Complete architect review of Issue #136's current-only feed mapping and
+   immutable evidence.
+2. Do not repeat #134 or place another Demo order without a separate explicit
+   architect issue. Contract and execution mechanics remain unresolved.
 3. Do not implement representative leveraged-perpetual mechanics until the
    evidence gates required by the architect are satisfied.
 4. Only after those mechanics are implemented and validated may the architect
