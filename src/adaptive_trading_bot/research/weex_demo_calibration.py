@@ -47,6 +47,9 @@ CALIBRATION_PROTOCOL_VERSION: Final = "issue-132-long-v1"
 MINIMUM_CLEANUP_DELAY_SECONDS: Final = 65
 MAX_POSITION_OBSERVATIONS: Final = 3
 POSITION_OBSERVATION_INTERVAL_SECONDS: Final = 2
+DEMO_FEED_MAPPING_EVIDENCE_ROOT: Final = (
+    Path(__file__).resolve().parents[3] / "data" / "research_evidence"
+)
 
 # Review-owned registry. A new accepted bundle requires an evidence PR.
 LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType(
@@ -2044,12 +2047,56 @@ def _load_json_file(path: Path) -> object:
         raise CorpusManifestError("Demo calibration JSON cannot be decoded") from error
 
 
+def _open_locked_feed_mapping(
+    bundle_version: str,
+) -> feed_mapping.LockedWeexDemoFeedMappingBundle:
+    """Open one explicitly selected, reviewed feed mapping without network fallback."""
+
+    if bundle_version not in feed_mapping.LOCKED_DEMO_FEED_MAPPING_MANIFEST_SHA256:
+        raise CorpusManifestError("requested Demo feed mapping version is unknown")
+    root = DEMO_FEED_MAPPING_EVIDENCE_ROOT / bundle_version
+    locked = feed_mapping.LockedWeexDemoFeedMappingBundle(
+        root,
+        bundle_version=bundle_version,
+    )
+    bundle = locked.read()
+    mapping = bundle.mapping
+    required_authority = (
+        feed_mapping.DemoFeedFact.MARK_PRICE,
+        feed_mapping.DemoFeedFact.FEED_TIMESTAMP,
+    )
+    if (
+        mapping.demo_symbol != DEMO_SYMBOL
+        or mapping.reference_symbol != feed_mapping.REFERENCE_SYMBOL
+    ):
+        raise DemoCalibrationIntegrityError("Demo feed mapping symbols are not reviewed")
+    if not all(mapping.authorizes(fact) for fact in required_authority) or (
+        feed_mapping.DemoFeedMappingStatus.DEMO_MARK_FEED_MAPPING_QUALIFIED not in bundle.statuses
+    ):
+        raise DemoCalibrationIntegrityError("Demo feed mapping lacks MARK authority")
+    if any(
+        (
+            mapping.contract_mechanics_qualified,
+            mapping.production_equivalence_claimed,
+            mapping.historical_authority_claimed,
+        )
+    ):
+        raise DemoCalibrationIntegrityError("Demo feed mapping claims forbidden authority")
+    return locked
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = ArgumentParser(description="Run the one bounded WEEX Demo LONG calibration")
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-code-commit", required=True)
     parser.add_argument("--captured-at", required=True)
+    parser.add_argument(
+        "--feed-mapping-version",
+        required=True,
+        help="exact project-qualified Demo feed-mapping bundle version",
+    )
     arguments = parser.parse_args(argv)
+    feed_mapping_bundle = _open_locked_feed_mapping(arguments.feed_mapping_version)
     credentials = forward.WeexDemoCredentials.from_environment()
     reader = None if credentials is None else forward.WeexDemoReadOnlyClient(credentials)
     writer = (
@@ -2061,6 +2108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         public_client=forward.WeexPublicCurrentClient(),
         demo_reader=reader,
         demo_writer=writer,
+        feed_mapping_bundle=feed_mapping_bundle,
     )
     bundle = runner.run(
         captured_at=_parse_utc(arguments.captured_at, "captured_at"),

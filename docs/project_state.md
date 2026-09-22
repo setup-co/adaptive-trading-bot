@@ -8,13 +8,14 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` at the Issue #136 branch point:
+Current verified `main` after Issue #136 / PR #137 merged:
 
-`10d2b7c72b3e23e198fc746da2cecd287892eddf`
+`30ed22fd36f7b389c05bf34e70678504328efd28`
 
-This commit is the squash merge of PR #135 / Issue #134. It includes the
+This commit is the squash merge of PR #137 / Issue #136. It includes the
 fail-closed WEEX V3 forward evidence collector, bounded Demo calibration
-harness, and immutable pre-POST blocked #134 execution result.
+harness, immutable pre-POST blocked #134 execution result, and the exact
+current-only `BTCSUSDT -> BTCUSDT` feed mapping authority.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -22,20 +23,23 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132 and #134 are closed and Master Plan v1.3 is merged.
+Issues #123, #124, #128, #130, #132, #134 and #136 are closed and Master Plan v1.3 is merged.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
 `DEMO_CREDENTIALS_UNAVAILABLE`, `DEMO_SYMBOL_MAPPING_UNRESOLVED`, and
-`FORWARD_CALIBRATION_BLOCKED`. The active critical path is:
+`FORWARD_CALIBRATION_BLOCKED`. Issue #136 then qualified only the exact current
+feed mapping. The active critical path is:
 
-**#136 — qualify the exact `BTCSUSDT -> BTCUSDT` current feed mapping.**
+**#138 — wire the locked #136 mapping into the normal Demo calibration CLI.**
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
 qualify contract value, quantity, precision, fees, leverage, margin, MMR,
 liquidation, fills, historical policy, or general Demo/production equivalence.
-Issue #134 remains immutable and was not rerun.
+Issue #134 remains immutable and was not rerun. The calibration runner supports
+the mapping, and #138 makes the CLI require an explicitly named locked mapping
+version; no new Demo order has been sent.
 
 Merged #120 result:
 
@@ -178,10 +182,11 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review of Issue #136's current-only feed mapping and
-   immutable evidence.
-2. Do not repeat #134 or place another Demo order without a separate explicit
-   architect issue. Contract and execution mechanics remain unresolved.
+1. Complete architect review of Issue #138's explicit locked-mapping CLI
+   integration.
+2. Only after #138 review/merge may a separate architect issue authorize one
+   bounded credential-present Demo LONG calibration using that exact mapping.
+   Contract and execution mechanics remain unresolved.
 3. Do not implement representative leveraged-perpetual mechanics until the
    evidence gates required by the architect are satisfied.
 4. Only after those mechanics are implemented and validated may the architect

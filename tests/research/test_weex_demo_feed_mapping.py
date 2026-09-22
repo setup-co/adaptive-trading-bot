@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -11,6 +12,7 @@ from urllib.parse import parse_qs
 
 import pytest
 
+import adaptive_trading_bot.research.weex_demo_calibration as calibration_module
 import adaptive_trading_bot.research.weex_demo_feed_mapping as mapping_module
 from adaptive_trading_bot.research import weex_forward_evidence as forward
 from adaptive_trading_bot.research.weex_demo_calibration import (
@@ -312,6 +314,190 @@ def test_calibration_precondition_uses_mapped_mark_with_explicit_provenance(
     assert premium.collect_cycle_minutes == 60
 
 
+def test_calibration_cli_explicitly_injects_exact_locked_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    captured: dict[str, object] = {}
+
+    class RunnerReached(RuntimeError):
+        pass
+
+    class _NoExecutionRunner:
+        def __init__(self, **dependencies: object) -> None:
+            captured.update(dependencies)
+            raise RunnerReached
+
+    for name in (
+        "ATB_WEEX_DEMO_API_KEY",
+        "ATB_WEEX_DEMO_SECRET_KEY",
+        "ATB_WEEX_DEMO_PASSPHRASE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(calibration_module, "WeexDemoLongCalibrationRunner", _NoExecutionRunner)
+
+    with pytest.raises(RunnerReached):
+        calibration_module.main(
+            [
+                "--output-root",
+                str(tmp_path / "unused"),
+                "--source-code-commit",
+                CODE_SHA,
+                "--captured-at",
+                CAPTURED_AT.isoformat(),
+                "--feed-mapping-version",
+                version,
+            ]
+        )
+
+    locked = captured["feed_mapping_bundle"]
+    assert isinstance(locked, LockedWeexDemoFeedMappingBundle)
+    assert locked.read().bundle_version == version
+    assert captured["demo_reader"] is None
+    assert captured["demo_writer"] is None
+
+
+def test_calibration_cli_rejects_unknown_mapping_before_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner_constructed = False
+
+    class _ForbiddenRunner:
+        def __init__(self, **_dependencies: object) -> None:
+            nonlocal runner_constructed
+            runner_constructed = True
+
+    monkeypatch.setattr(calibration_module, "WeexDemoLongCalibrationRunner", _ForbiddenRunner)
+
+    with pytest.raises(CorpusManifestError, match="version is unknown"):
+        calibration_module.main(
+            [
+                "--output-root",
+                str(tmp_path / "unused"),
+                "--source-code-commit",
+                CODE_SHA,
+                "--captured-at",
+                CAPTURED_AT.isoformat(),
+                "--feed-mapping-version",
+                "weex-demo-feed-mapping-unknown",
+            ]
+        )
+
+    assert runner_constructed is False
+
+
+def _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe: DemoFeedMappingBundle,
+    message: str,
+) -> None:
+    version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+
+    class _UnsafeLockedBundle:
+        def __init__(self, _root: Path, *, bundle_version: str) -> None:
+            assert bundle_version == version
+
+        def read(self) -> DemoFeedMappingBundle:
+            return unsafe
+
+    monkeypatch.setattr(
+        mapping_module,
+        "LockedWeexDemoFeedMappingBundle",
+        _UnsafeLockedBundle,
+    )
+
+    with pytest.raises(DemoCalibrationIntegrityError, match=message):
+        calibration_module._open_locked_feed_mapping(version)
+
+
+def _accepted_mapping_bundle() -> DemoFeedMappingBundle:
+    version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    return LockedWeexDemoFeedMappingBundle(
+        Path("data/research_evidence") / version,
+        bundle_version=version,
+    ).read()
+
+
+def test_calibration_cli_rejects_wrong_demo_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(accepted.mapping, demo_symbol="ETHSUSDT"),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "symbols are not reviewed"
+    )
+
+
+def test_calibration_cli_rejects_wrong_reference_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(accepted.mapping, reference_symbol="ETHUSDT"),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "symbols are not reviewed"
+    )
+
+
+def test_calibration_cli_rejects_mapping_without_mark_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(
+            accepted.mapping,
+            authorized_facts=(DemoFeedFact.FEED_TIMESTAMP,),
+        ),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "lacks MARK authority"
+    )
+
+
+def test_calibration_cli_rejects_mapping_with_contract_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = _accepted_mapping_bundle()
+    unsafe = replace(
+        accepted,
+        mapping=replace(accepted.mapping, contract_mechanics_qualified=True),
+    )
+    _assert_calibration_cli_rejects_semantically_unsafe_mapping(
+        monkeypatch, unsafe, "claims forbidden authority"
+    )
+
+
+def test_mapping_does_not_substitute_reference_contract_facts() -> None:
+    version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    locked = LockedWeexDemoFeedMappingBundle(
+        Path("data/research_evidence") / version,
+        bundle_version=version,
+    )
+    transport = _PublicTransport()
+    runner = WeexDemoLongCalibrationRunner(
+        public_client=forward.WeexPublicCurrentClient(transport),
+        demo_reader=None,
+        demo_writer=None,
+        feed_mapping_bundle=locked,
+    )
+
+    contract, observation = runner._probe_contract()
+
+    assert contract is None
+    assert observation is None
+    exchange_info_calls = [
+        call for call in transport.calls if call[1] == forward.EXCHANGE_INFO_PATH
+    ]
+    assert len(exchange_info_calls) == 1
+    assert parse_qs(exchange_info_calls[0][2])["symbol"] == ["BTCSUSDT"]
+
+
 def test_forged_mapped_calibration_provenance_is_rejected() -> None:
     with pytest.raises(DemoCalibrationIntegrityError, match="mapped MARK provenance"):
         from adaptive_trading_bot.research.weex_demo_calibration import DemoSymbolMarkEvidence
@@ -364,6 +550,9 @@ def test_existing_locked_evidence_manifest_hashes_are_unchanged() -> None:
         Path(
             "data/research_calibration/weex-demo-calibration-d7eb4338f33b986cc54b1cb6/manifest.json"
         ): "6119d7a1b7fca8624dfdb6c74b643fc46521e1e6badbd9f4b1e2d82ec8fd20f2",
+        Path(
+            "data/research_evidence/weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9/manifest.json"
+        ): "46a48e421d81c05d6ed59c106651bfa5fc8bb30b548d804a8a80ea2fb9c273c0",
     }
     for path, digest in expected.items():
         assert mapping_module._file_sha256(path) == digest
