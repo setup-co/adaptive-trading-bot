@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 from collections.abc import Mapping
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -440,6 +441,45 @@ def test_opening_is_never_retried_and_observation_is_bounded_to_five_seconds() -
     assert len(position_gets) == 4  # one baseline plus three post-open observations
 
 
+def test_ambiguous_opening_preserves_request_provenance_without_response_facts() -> None:
+    class AmbiguousOpeningTransport(_ProtocolTransport):
+        def post(
+            self,
+            *,
+            base_url: str,
+            path: str,
+            body: bytes,
+            headers: Mapping[str, str],
+        ) -> object:
+            del base_url
+            self.post_calls.append((path, body, dict(headers)))
+            raise DemoCalibrationRequestError("sanitized ambiguous response")
+
+    transport = AmbiguousOpeningTransport()
+    bundle = _runner(transport, _Clock()).run(captured_at=CAPTURED_AT, source_code_commit=CODE_SHA)
+
+    assert len(transport.post_calls) == 1
+    assert DemoCalibrationStatus.DEMO_OPEN_RESPONSE_UNAVAILABLE in bundle.statuses
+    attempt = bundle.ambiguous_open_attempt
+    assert attempt is not None
+    assert attempt.method == "POST"
+    assert attempt.endpoint == DEMO_ORDER_PATH
+    assert attempt.phase is CalibrationOrderPhase.OPEN
+    assert attempt.client_order_id == OPEN_CLIENT_ORDER_ID
+    assert (
+        attempt.request_body_sha256
+        == "ce0019db0d6af534b52849f0ee11b4ba489879b0fc124ef2375f2f1d04d4f178"
+    )
+    assert attempt.response_available is False
+    assert attempt.venue_receipt.value == "UNKNOWN"
+    assert attempt.venue_acceptance.value == "UNKNOWN"
+    assert all(observation.method == "GET" for observation in bundle.source_observations)
+
+    object.__setattr__(attempt, "request_body_sha256", "0" * 64)
+    with pytest.raises(DemoCalibrationIntegrityError, match="request body changed"):
+        bundle.validate()
+
+
 def test_rejected_opening_is_not_retried_or_adapted() -> None:
     class RejectedOrderTransport(_ProtocolTransport):
         def post(
@@ -646,3 +686,139 @@ def test_committed_no_mark_calibration_bundle_is_locked_and_readable() -> None:
     assert bundle.demo_only is True
     assert bundle.production_equivalence_claimed is False
     assert bundle.historical_authority_claimed is False
+
+
+def test_committed_mapped_ambiguous_open_calibration_bundle_is_locked_and_readable() -> None:
+    version = "weex-demo-calibration-31f710cf17bb784da2f3ecad"
+    root = Path("data/research_calibration") / version
+    bundle = LockedWeexDemoCalibrationBundle(root, bundle_version=version).read()
+
+    assert bundle.source_code_commit == "47521f11069da75dfc9787732efb3c5bc90e5b4a"
+    assert bundle.statuses == (
+        DemoCalibrationStatus.DEMO_CONTRACT_FACTS_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_MARK_QUALIFIED,
+        DemoCalibrationStatus.DEMO_OPEN_RESPONSE_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_OPEN_NOT_OBSERVED,
+        DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED,
+    )
+    assert bundle.baseline_balance_count == 1
+    assert bundle.baseline_position_count == 0
+    assert bundle.baseline_order_history_count == 0
+    assert bundle.demo_mark is not None
+    assert bundle.demo_mark.symbol == "BTCSUSDT"
+    assert bundle.demo_mark.actual_source_symbol == "BTCUSDT"
+    assert (
+        bundle.demo_mark.mapping_evidence_version
+        == "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    )
+    assert bundle.demo_premium is not None
+    assert bundle.demo_premium.actual_source_symbol == "BTCUSDT"
+    assert bundle.demo_contract is None
+    assert bundle.open_submission is None
+    assert bundle.ambiguous_open_attempt is None
+    assert bundle.observed_position is None
+    assert bundle.opening_order_attribution is None
+    assert bundle.observed_order is None
+    assert bundle.comparisons == ()
+    assert bundle.liquidation_price is None
+    assert bundle.cleanup_order is None
+    assert bundle.cleanup_submission is None
+    assert bundle.cleanup_confirmed is None
+    assert (
+        sum(
+            observation.endpoint == forward.DEMO_POSITIONS_PATH
+            for observation in bundle.source_observations
+        )
+        == 4
+    )
+    assert bundle.demo_only is True
+    assert bundle.production_equivalence_claimed is False
+    assert bundle.historical_authority_claimed is False
+
+
+def test_corrected_mapped_ambiguous_bundle_preserves_request_provenance() -> None:
+    version = "weex-demo-calibration-08376b6b937422f89c4b4aab"
+    root = Path("data/research_calibration") / version
+    bundle = LockedWeexDemoCalibrationBundle(root, bundle_version=version).read()
+
+    assert bundle.source_code_commit == "47521f11069da75dfc9787732efb3c5bc90e5b4a"
+    assert bundle.captured_at == datetime(2026, 9, 22, 17, 15, 7, 602108, tzinfo=UTC)
+    assert bundle.completed_at == datetime(2026, 9, 22, 17, 15, 21, 881460, tzinfo=UTC)
+    attempt = bundle.ambiguous_open_attempt
+    assert attempt is not None
+    assert attempt.method == "POST"
+    assert attempt.endpoint == DEMO_ORDER_PATH
+    assert attempt.phase is CalibrationOrderPhase.OPEN
+    assert attempt.client_order_id == OPEN_CLIENT_ORDER_ID
+    assert (
+        attempt.request_body_sha256
+        == "ce0019db0d6af534b52849f0ee11b4ba489879b0fc124ef2375f2f1d04d4f178"
+    )
+    assert attempt.response_available is False
+    assert attempt.venue_receipt.value == "UNKNOWN"
+    assert attempt.venue_acceptance.value == "UNKNOWN"
+    derivation = bundle.derivation
+    assert derivation is not None
+    assert derivation.derived_from_bundle_version == (
+        "weex-demo-calibration-31f710cf17bb784da2f3ecad"
+    )
+    assert (
+        derivation.derived_from_manifest_sha256
+        == "2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815"
+    )
+    assert derivation.kind.value == "EVIDENCE_ONLY_CORRECTION"
+    assert bundle.statuses == (
+        DemoCalibrationStatus.DEMO_CONTRACT_FACTS_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_MARK_QUALIFIED,
+        DemoCalibrationStatus.DEMO_OPEN_RESPONSE_UNAVAILABLE,
+        DemoCalibrationStatus.DEMO_OPEN_NOT_OBSERVED,
+        DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED,
+    )
+    predecessor = _issue_140_execution_predecessor()
+    excluded = {
+        "schema_version",
+        "bundle_version",
+        "integrity_seal",
+        "ambiguous_open_attempt",
+        "derivation",
+    }
+    for field in fields(bundle):
+        if field.name not in excluded:
+            assert getattr(bundle, field.name) == getattr(predecessor, field.name)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "forged_value", "message"),
+    (
+        (
+            "derived_from_bundle_version",
+            "weex-demo-calibration-unknown",
+            "predecessor is not project-qualified",
+        ),
+        ("derived_from_manifest_sha256", "0" * 64, "manifest is not authoritative"),
+    ),
+)
+def test_corrected_bundle_rejects_tampered_predecessor_identity(
+    field_name: str,
+    forged_value: str,
+    message: str,
+) -> None:
+    version = "weex-demo-calibration-08376b6b937422f89c4b4aab"
+    bundle = LockedWeexDemoCalibrationBundle(
+        Path("data/research_calibration") / version,
+        bundle_version=version,
+    ).read()
+    derivation = bundle.derivation
+    assert derivation is not None
+    object.__setattr__(derivation, field_name, forged_value)
+
+    with pytest.raises(DemoCalibrationIntegrityError, match=message):
+        bundle.validate()
+
+
+def _issue_140_execution_predecessor() -> calibration_module.DemoCalibrationBundle:
+    predecessor = "weex-demo-calibration-31f710cf17bb784da2f3ecad"
+    return LockedWeexDemoCalibrationBundle(
+        Path("data/research_calibration") / predecessor,
+        bundle_version=predecessor,
+    ).read()
