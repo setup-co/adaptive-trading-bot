@@ -50,7 +50,13 @@ PREMIUM_INDEX_DOC_URL: Final = (
 )
 
 # Review-owned registry. A new locked mapping requires an evidence PR.
-LOCKED_DEMO_FEED_MAPPING_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType({})
+LOCKED_DEMO_FEED_MAPPING_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9": (
+            "46a48e421d81c05d6ed59c106651bfa5fc8bb30b548d804a8a80ea2fb9c273c0"
+        )
+    }
+)
 
 _CODE_SHA = re.compile(r"[0-9a-f]{40}")
 _HEX_SHA256 = re.compile(r"[0-9a-f]{64}")

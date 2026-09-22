@@ -388,3 +388,39 @@ def test_copy_of_locked_bundle_has_no_network_fallback(
         LockedWeexDemoFeedMappingBundle(target, bundle_version=bundle.bundle_version).read()
         == bundle
     )
+
+
+def test_created_bundle_raw_mutation_invalidates_integrity_seal() -> None:
+    bundle = _capture()
+    object.__setattr__(bundle, "exact_mark_delta", Decimal("0"))
+    with pytest.raises(DemoFeedMappingIntegrityError, match="MARK comparison"):
+        bundle.validate()
+
+
+def test_committed_issue_136_mapping_bundle_is_locked_and_readable() -> None:
+    version = "weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9"
+    root = Path("data/research_evidence") / version
+    bundle = LockedWeexDemoFeedMappingBundle(root, bundle_version=version).read()
+
+    assert bundle.source_code_commit == "8d6cfa63023b0b41354ed60ab2eda796e49b6a7f"
+    assert bundle.statuses == (
+        DemoFeedMappingStatus.DEMO_FEED_DOCS_QUALIFIED,
+        DemoFeedMappingStatus.BTCUSDT_MARK_REFERENCE_AVAILABLE,
+        DemoFeedMappingStatus.BTCUSDT_FUNDING_REFERENCE_AVAILABLE,
+        DemoFeedMappingStatus.DEMO_MARK_FEED_MAPPING_QUALIFIED,
+        DemoFeedMappingStatus.DEMO_FUNDING_FEED_MAPPING_QUALIFIED,
+    )
+    assert bundle.reference_mark is not None
+    assert bundle.reference_mark.price == Decimal("86403.5")
+    assert bundle.reference_mark.venue_time_ms == 1790036351959
+    assert bundle.reference_premium is not None
+    assert bundle.reference_premium.mark_price == Decimal("86363.9")
+    assert bundle.reference_premium.index_price == Decimal("86398.44125")
+    assert bundle.reference_premium.last_funding_rate == Decimal("0.00007603")
+    assert bundle.reference_premium.forecast_funding_rate == Decimal("0.00007898")
+    assert bundle.reference_premium.next_funding_time_ms == 1790064000000
+    assert bundle.reference_premium.collect_cycle_minutes == 480
+    assert bundle.exact_mark_delta == Decimal("39.6")
+    assert bundle.mark_observation_time_delta_ms == 286
+    assert bundle.mapping.authorized_facts == tuple(DemoFeedFact)
+    assert bundle.mapping.excluded_inferences == tuple(DemoFeedExcludedInference)

@@ -1857,7 +1857,7 @@ def _validate_feed_provenance(
         return
     if actual_source_symbol != feed_mapping.REFERENCE_SYMBOL or (
         mapping_evidence_version is None
-        or not mapping_evidence_version.startswith("weex-demo-feed-mapping-")
+        or mapping_evidence_version not in feed_mapping.LOCKED_DEMO_FEED_MAPPING_MANIFEST_SHA256
     ):
         raise DemoCalibrationIntegrityError(f"mapped {field} provenance is invalid")
 
