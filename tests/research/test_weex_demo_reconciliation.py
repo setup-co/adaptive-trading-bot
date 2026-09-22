@@ -142,7 +142,11 @@ def test_exact_fixed_query_and_recorded_match(tmp_path: Path) -> None:
 def test_locked_reconciliation_and_source_identities() -> None:
     root = Path(__file__).resolve().parents[2]
     version = "weex-demo-reconciliation-4a17f9406b037ce84d6ce288"
-    verify_bundle(root / "data" / "research_reconciliation" / version, bundle_version=version)
+    locked_root = root / "data" / "research_reconciliation" / version
+    verify_bundle(locked_root, bundle_version=version)
+    assert json.loads((locked_root / "bundle.json").read_text())["terminal_status"] == (
+        ReconciliationStatus.DEMO_AMBIGUOUS_ORDER_NOT_FOUND
+    )
     with pytest.raises(CorpusManifestError):
         verify_bundle(root / "data" / "research_reconciliation" / version, bundle_version="unknown")
     source = (
@@ -162,6 +166,8 @@ def test_exact_match_only_and_not_found() -> None:
     bundle, _ = _capture([[dict(_order(), clientOrderId=CLIENT_ORDER_ID + "-other")]])
     assert bundle.terminal_status == ReconciliationStatus.DEMO_AMBIGUOUS_ORDER_NOT_FOUND
     assert bundle.exact_match_count == 0
+    assert bundle.history_pages[-1].row_count < bundle.page_limit
+    assert not bundle.current_position_present
 
 
 def test_duplicate_and_conflict() -> None:
@@ -184,7 +190,7 @@ def test_pagination_stops_on_short_page_and_caps_at_five() -> None:
     assert capped.history_requests_attempted == 5
     assert capped.inspected_row_count == 500
     assert len(transport.calls) == 6
-    assert capped.terminal_status == ReconciliationStatus.DEMO_AMBIGUOUS_ORDER_NOT_FOUND
+    assert capped.terminal_status == ReconciliationStatus.DEMO_RECONCILIATION_UNAVAILABLE
 
 
 def test_current_position_is_preserved_without_cleanup() -> None:
@@ -193,7 +199,9 @@ def test_current_position_is_preserved_without_cleanup() -> None:
     bundle, transport = _capture([[]], positions=[_position()])
     assert bundle.current_position_present
     assert len(bundle.current_btcsusdt_positions) == 1
-    assert bundle.terminal_status == ReconciliationStatus.DEMO_RECONCILIATION_UNAVAILABLE
+    assert (
+        bundle.terminal_status == ReconciliationStatus.DEMO_RECONCILIATION_CURRENT_POSITION_PRESENT
+    )
     assert len(transport.calls) == 2
     assert all(path in forward.DEMO_GET_PATHS for path, _ in transport.calls)
     assert not bundle.state_changing_request_performed

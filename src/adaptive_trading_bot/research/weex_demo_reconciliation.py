@@ -54,6 +54,7 @@ class ReconciliationStatus(StrEnum):
     DEMO_AMBIGUOUS_ORDER_NOT_FOUND = "DEMO_AMBIGUOUS_ORDER_NOT_FOUND"
     DEMO_AMBIGUOUS_ORDER_DUPLICATE = "DEMO_AMBIGUOUS_ORDER_DUPLICATE"
     DEMO_AMBIGUOUS_ORDER_CONFLICT = "DEMO_AMBIGUOUS_ORDER_CONFLICT"
+    DEMO_RECONCILIATION_CURRENT_POSITION_PRESENT = "DEMO_RECONCILIATION_CURRENT_POSITION_PRESENT"
     DEMO_RECONCILIATION_UNAVAILABLE = "DEMO_RECONCILIATION_UNAVAILABLE"
 
 
@@ -495,8 +496,10 @@ def _classify(
     orders: tuple[MatchingOrder, ...],
     query_failure: bool,
 ) -> ReconciliationStatus:
-    if query_failure or not pages or (len(pages) < MAX_PAGES and pages[-1].row_count == PAGE_LIMIT):
+    if query_failure or not pages or pages[-1].row_count == PAGE_LIMIT:
         return ReconciliationStatus.DEMO_RECONCILIATION_UNAVAILABLE
+    if position_available and current_position_present:
+        return ReconciliationStatus.DEMO_RECONCILIATION_CURRENT_POSITION_PRESENT
     if len(orders) > 1:
         return ReconciliationStatus.DEMO_AMBIGUOUS_ORDER_DUPLICATE
     if len(orders) == 1:
@@ -505,7 +508,7 @@ def _classify(
             if orders[0].protocol_consistent
             else ReconciliationStatus.DEMO_AMBIGUOUS_ORDER_CONFLICT
         )
-    if not position_available or current_position_present:
+    if not position_available:
         return ReconciliationStatus.DEMO_RECONCILIATION_UNAVAILABLE
     return ReconciliationStatus.DEMO_AMBIGUOUS_ORDER_NOT_FOUND
 
