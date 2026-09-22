@@ -2,7 +2,7 @@
 
 **Execution date:** 2026-09-22
 
-**Baseline and producing code:** `47521f11069da75dfc9787732efb3c5bc90e5b4a`
+**Execution source code:** `47521f11069da75dfc9787732efb3c5bc90e5b4a`
 
 **Locked feed mapping:** `weex-demo-feed-mapping-5d3ade83b136ca6f04e301e9`
 
@@ -107,23 +107,29 @@ Demo/production equivalence.
 ```text
 schema = weex-demo-long-calibration-v3
 protocol = issue-132-long-v1
-bundle_version = weex-demo-calibration-6306fd2c4ef4968a7532a005
+bundle_version = weex-demo-calibration-08376b6b937422f89c4b4aab
 captured_at = 2026-09-22T17:15:07.602108Z
 completed_at = 2026-09-22T17:15:21.881460Z
-source_code_commit = 47521f11069da75dfc9787732efb3c5bc90e5b4a
-bundle.json bytes = 4116
-bundle.json SHA-256 = 12dd8e649ed30eff71149d054056a33319963d03de908b6fb4c67500a4c40ab8
-manifest.json SHA-256 = 46320e81425a461e20bd1b32096f8bae8bc9e75d7b590a0fd60b21940428c228
+source_code_commit (execution source) = 47521f11069da75dfc9787732efb3c5bc90e5b4a
+derivation kind = EVIDENCE_ONLY_CORRECTION
+derived from bundle = weex-demo-calibration-31f710cf17bb784da2f3ecad
+derived from manifest SHA-256 = 2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815
+bundle.json bytes = 4342
+bundle.json SHA-256 = 39211ed64a17bd53b0ee6d03a78825c98301ed3d94f64d2ae467c77a000e74c3
+manifest.json SHA-256 = 189f8a20747a04a022a96807d6d2d79a192f671a9068a72a34bdcc3a09270ecc
 ```
 
 The artifact stores no credential, signature, authentication timestamp, raw
 account identifier, or raw venue order identifier. It remains Demo-only and
 claims neither production equivalence nor historical authority.
 
-The original v2 bundle `weex-demo-calibration-31f710cf17bb784da2f3ecad`
-remains byte-identical and readable as the first evidence snapshot. It is
-superseded for #140 review by the v3 bundle above because it did not contain the
-deterministic ambiguous-attempt request digest.
+The v3 artifact was not produced by the original execution code. It is an
+explicit post-execution evidence-only derivation from exact locked v2 bundle
+`weex-demo-calibration-31f710cf17bb784da2f3ecad` and its registered manifest
+hash. That v2 predecessor remains byte-identical and readable. Every
+execution-time fact is identical between predecessor and derivation; only
+schema/bundle/seal identity, ambiguous-attempt evidence, and typed derivation
+metadata differ.
 
 ## Scientific disposition
 

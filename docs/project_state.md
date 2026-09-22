@@ -148,8 +148,12 @@ historical/mechanics/production equivalence = not qualified
 Issue #140 locked the one mapped-feed calibration result:
 
 ```text
-calibration bundle = weex-demo-calibration-6306fd2c4ef4968a7532a005
-manifest_sha256 = 46320e81425a461e20bd1b32096f8bae8bc9e75d7b590a0fd60b21940428c228
+calibration bundle = weex-demo-calibration-08376b6b937422f89c4b4aab
+manifest_sha256 = 189f8a20747a04a022a96807d6d2d79a192f671a9068a72a34bdcc3a09270ecc
+execution source SHA = 47521f11069da75dfc9787732efb3c5bc90e5b4a
+derivation = EVIDENCE_ONLY_CORRECTION from
+             weex-demo-calibration-31f710cf17bb784da2f3ecad
+predecessor manifest = 2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815
 statuses = DEMO_CONTRACT_FACTS_UNAVAILABLE, DEMO_MARK_QUALIFIED,
            DEMO_OPEN_RESPONSE_UNAVAILABLE, DEMO_OPEN_NOT_OBSERVED,
            DEMO_LONG_CALIBRATION_BLOCKED

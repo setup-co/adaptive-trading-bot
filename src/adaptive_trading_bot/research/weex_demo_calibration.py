@@ -65,8 +65,8 @@ LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256: Final[Mapping[str, str]] = MappingProxy
         "weex-demo-calibration-31f710cf17bb784da2f3ecad": (
             "2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815"
         ),
-        "weex-demo-calibration-6306fd2c4ef4968a7532a005": (
-            "46320e81425a461e20bd1b32096f8bae8bc9e75d7b590a0fd60b21940428c228"
+        "weex-demo-calibration-08376b6b937422f89c4b4aab": (
+            "189f8a20747a04a022a96807d6d2d79a192f671a9068a72a34bdcc3a09270ecc"
         ),
     }
 )
@@ -142,6 +142,10 @@ class CalibrationDisposition(StrEnum):
 
 class VenueKnowledgeState(StrEnum):
     UNKNOWN = "UNKNOWN"
+
+
+class EvidenceDerivationKind(StrEnum):
+    EVIDENCE_ONLY_CORRECTION = "EVIDENCE_ONLY_CORRECTION"
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +267,29 @@ class AmbiguousOrderAttemptEvidence:
             venue_receipt=VenueKnowledgeState.UNKNOWN,
             venue_acceptance=VenueKnowledgeState.UNKNOWN,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationEvidenceDerivation:
+    derived_from_bundle_version: str
+    derived_from_manifest_sha256: str
+    kind: EvidenceDerivationKind
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        accepted_manifest = LOCKED_DEMO_CALIBRATION_MANIFEST_SHA256.get(
+            self.derived_from_bundle_version
+        )
+        if accepted_manifest is None:
+            raise DemoCalibrationIntegrityError("evidence predecessor is not project-qualified")
+        if not hmac.compare_digest(accepted_manifest, self.derived_from_manifest_sha256):
+            raise DemoCalibrationIntegrityError(
+                "evidence predecessor manifest is not authoritative"
+            )
+        if self.kind is not EvidenceDerivationKind.EVIDENCE_ONLY_CORRECTION:
+            raise DemoCalibrationIntegrityError("evidence derivation kind is not authorized")
 
 
 class PostBytesTransport(Protocol):
@@ -645,6 +672,7 @@ class DemoCalibrationBundle:
     demo_contract: DemoSymbolContractEvidence | None
     open_submission: DemoOrderSubmissionEvidence | None
     ambiguous_open_attempt: AmbiguousOrderAttemptEvidence | None
+    derivation: CalibrationEvidenceDerivation | None
     observed_position: forward.DemoPositionEvidence | None
     opening_order_attribution: CalibrationDisposition | None
     observed_order: forward.DemoOrderHistoryEvidence | None
@@ -720,6 +748,7 @@ class DemoCalibrationBundle:
                         self.demo_contract,
                         self.open_submission,
                         self.ambiguous_open_attempt,
+                        self.derivation,
                         self.observed_position,
                         self.opening_order_attribution,
                         self.observed_order,
@@ -740,9 +769,9 @@ class DemoCalibrationBundle:
             and DemoCalibrationStatus.DEMO_OPEN_RESPONSE_UNAVAILABLE in self.statuses
         )
         if self.schema_version in LEGACY_CALIBRATION_SCHEMA_VERSIONS:
-            if self.ambiguous_open_attempt is not None:
+            if self.ambiguous_open_attempt is not None or self.derivation is not None:
                 raise DemoCalibrationIntegrityError(
-                    "legacy calibration contains new ambiguous-attempt evidence"
+                    "legacy calibration contains post-execution correction evidence"
                 )
         elif ambiguous_open:
             if self.ambiguous_open_attempt is None:
@@ -752,6 +781,8 @@ class DemoCalibrationBundle:
                 raise DemoCalibrationIntegrityError("ambiguous opening request body changed")
         elif self.ambiguous_open_attempt is not None:
             raise DemoCalibrationIntegrityError("unexpected ambiguous opening attempt evidence")
+        if self.derivation is not None:
+            self.derivation.validate()
         if (
             self.open_submission is None
             and not ambiguous_open
@@ -1576,6 +1607,7 @@ def _bundle_seed(
     demo_contract: DemoSymbolContractEvidence | None = None,
     open_submission: DemoOrderSubmissionEvidence | None = None,
     ambiguous_open_attempt: AmbiguousOrderAttemptEvidence | None = None,
+    derivation: CalibrationEvidenceDerivation | None = None,
     observed_position: forward.DemoPositionEvidence | None = None,
     opening_order_attribution: CalibrationDisposition | None = None,
     observed_order: forward.DemoOrderHistoryEvidence | None = None,
@@ -1606,6 +1638,7 @@ def _bundle_seed(
         demo_contract=demo_contract,
         open_submission=open_submission,
         ambiguous_open_attempt=ambiguous_open_attempt,
+        derivation=derivation,
         observed_position=observed_position,
         opening_order_attribution=opening_order_attribution,
         observed_order=observed_order,
@@ -1746,6 +1779,7 @@ def _parse_bundle(raw: object) -> DemoCalibrationBundle:
             ambiguous_open_attempt=_optional_mapping(
                 item.get("ambiguous_open_attempt"), _ambiguous_attempt_from_json
             ),
+            derivation=_optional_mapping(item.get("derivation"), _derivation_from_json),
             observed_position=_optional_mapping(
                 item["observed_position"], forward._position_from_json
             ),
@@ -1834,6 +1868,18 @@ def _ambiguous_attempt_from_json(
         venue_acceptance=VenueKnowledgeState(
             _strict_text(value["venue_acceptance"], "venue acceptance")
         ),
+    )
+
+
+def _derivation_from_json(value: Mapping[str, object]) -> CalibrationEvidenceDerivation:
+    return CalibrationEvidenceDerivation(
+        derived_from_bundle_version=_strict_text(
+            value["derived_from_bundle_version"], "derived bundle version"
+        ),
+        derived_from_manifest_sha256=_strict_text(
+            value["derived_from_manifest_sha256"], "derived manifest SHA-256"
+        ),
+        kind=EvidenceDerivationKind(_strict_text(value["kind"], "derivation kind")),
     )
 
 
@@ -2114,7 +2160,7 @@ def _canonical_json(value: object) -> str:
 def _bundle_identity_sha(bundle: DemoCalibrationBundle) -> str:
     excluded = {"bundle_version", "integrity_seal"}
     if bundle.schema_version in LEGACY_CALIBRATION_SCHEMA_VERSIONS:
-        excluded.add("ambiguous_open_attempt")
+        excluded.update({"ambiguous_open_attempt", "derivation"})
     value = _canonical_value(bundle, excluded=frozenset(excluded))
     return sha256(_canonical_json(value).encode()).hexdigest()
 
@@ -2122,7 +2168,7 @@ def _bundle_identity_sha(bundle: DemoCalibrationBundle) -> str:
 def _integrity_sha(bundle: DemoCalibrationBundle) -> str:
     excluded = {"integrity_seal"}
     if bundle.schema_version in LEGACY_CALIBRATION_SCHEMA_VERSIONS:
-        excluded.add("ambiguous_open_attempt")
+        excluded.update({"ambiguous_open_attempt", "derivation"})
     value = _canonical_value(bundle, excluded=frozenset(excluded))
     return sha256(_canonical_json(value).encode()).hexdigest()
 

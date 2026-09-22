@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 from collections.abc import Mapping
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -736,7 +737,7 @@ def test_committed_mapped_ambiguous_open_calibration_bundle_is_locked_and_readab
 
 
 def test_corrected_mapped_ambiguous_bundle_preserves_request_provenance() -> None:
-    version = "weex-demo-calibration-6306fd2c4ef4968a7532a005"
+    version = "weex-demo-calibration-08376b6b937422f89c4b4aab"
     root = Path("data/research_calibration") / version
     bundle = LockedWeexDemoCalibrationBundle(root, bundle_version=version).read()
 
@@ -756,6 +757,16 @@ def test_corrected_mapped_ambiguous_bundle_preserves_request_provenance() -> Non
     assert attempt.response_available is False
     assert attempt.venue_receipt.value == "UNKNOWN"
     assert attempt.venue_acceptance.value == "UNKNOWN"
+    derivation = bundle.derivation
+    assert derivation is not None
+    assert derivation.derived_from_bundle_version == (
+        "weex-demo-calibration-31f710cf17bb784da2f3ecad"
+    )
+    assert (
+        derivation.derived_from_manifest_sha256
+        == "2045f1bcf95dfcfa37ad8eb1baa881f39b42d1965368d7d8be52608933fb2815"
+    )
+    assert derivation.kind.value == "EVIDENCE_ONLY_CORRECTION"
     assert bundle.statuses == (
         DemoCalibrationStatus.DEMO_CONTRACT_FACTS_UNAVAILABLE,
         DemoCalibrationStatus.DEMO_MARK_QUALIFIED,
@@ -763,18 +774,51 @@ def test_corrected_mapped_ambiguous_bundle_preserves_request_provenance() -> Non
         DemoCalibrationStatus.DEMO_OPEN_NOT_OBSERVED,
         DemoCalibrationStatus.DEMO_LONG_CALIBRATION_BLOCKED,
     )
-    assert bundle.source_observations == _accepted_mapping_bundle_source_observations()
+    predecessor = _issue_140_execution_predecessor()
+    excluded = {
+        "schema_version",
+        "bundle_version",
+        "integrity_seal",
+        "ambiguous_open_attempt",
+        "derivation",
+    }
+    for field in fields(bundle):
+        if field.name not in excluded:
+            assert getattr(bundle, field.name) == getattr(predecessor, field.name)
 
 
-def _accepted_mapping_bundle_source_observations() -> tuple[
-    calibration_module.CalibrationSourceObservation, ...
-]:
+@pytest.mark.parametrize(
+    ("field_name", "forged_value", "message"),
+    (
+        (
+            "derived_from_bundle_version",
+            "weex-demo-calibration-unknown",
+            "predecessor is not project-qualified",
+        ),
+        ("derived_from_manifest_sha256", "0" * 64, "manifest is not authoritative"),
+    ),
+)
+def test_corrected_bundle_rejects_tampered_predecessor_identity(
+    field_name: str,
+    forged_value: str,
+    message: str,
+) -> None:
+    version = "weex-demo-calibration-08376b6b937422f89c4b4aab"
+    bundle = LockedWeexDemoCalibrationBundle(
+        Path("data/research_calibration") / version,
+        bundle_version=version,
+    ).read()
+    derivation = bundle.derivation
+    assert derivation is not None
+    object.__setattr__(derivation, field_name, forged_value)
+
+    with pytest.raises(DemoCalibrationIntegrityError, match=message):
+        bundle.validate()
+
+
+def _issue_140_execution_predecessor() -> calibration_module.DemoCalibrationBundle:
     predecessor = "weex-demo-calibration-31f710cf17bb784da2f3ecad"
-    return (
-        LockedWeexDemoCalibrationBundle(
-            Path("data/research_calibration") / predecessor,
-            bundle_version=predecessor,
-        )
-        .read()
-        .source_observations
-    )
+    return LockedWeexDemoCalibrationBundle(
+        Path("data/research_calibration") / predecessor,
+        bundle_version=predecessor,
+    ).read()
