@@ -32,18 +32,24 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#147 — implement/predeclare the Breakout + Retest V1 fixed-2R historical
-signal-edge screen, without running its real A/B/C units.** The Trend Pullback
-implementation was merged and frozen at
+**#149 — review the one-time Breakout + Retest V1 fixed-2R signal-edge
+evidence.** The #147 implementation was merged and frozen at
+`4ed85e639a84d282522fc73b969e622fb67cdbdd`; the architect then
+activated one A/B/C execution on the locked WEEX LAST corpus. All three runs
+completed once. The frozen screen result is
+`BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE` (three evaluable NEGATIVE
+units). See `docs/research/breakout_retest_signal_edge_study_2026_09_24.md`
+and its immutable study manifest. Do not tune or rerun these units under #149.
+
+The Trend Pullback implementation was merged and frozen at
 `b07e9eac7f373c4bc1b79a286714df00ae817ec2`; the architect then activated
 exactly one A/B/C execution. All three runs completed from the locked LAST
 corpus. The frozen screen result is `SIGNAL_EDGE_SCREEN_NEGATIVE` (three
 evaluable NEGATIVE units). See
 `docs/research/trend_pullback_signal_edge_study_2026_09_23.md` and the
 immutable study manifest. Do not tune or rerun these units under #144. The
-Breakout + Retest predeclared protocol is in
-`docs/research/breakout_retest_fixed_2r_screen.md`; no real result is authorized
-until separate architect activation from a reviewed merged SHA.
+Breakout + Retest predeclared protocol remains in
+`docs/research/breakout_retest_fixed_2r_screen.md`.
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
