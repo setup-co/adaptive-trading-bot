@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-09-23
+**Snapshot date:** 2026-09-24
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,12 +8,13 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #142 / PR #143 merged:
+Current verified `main` after Issue #144 / PR #146 merged:
 
-`cb0e0f88c93d4e65ce64ae81491bf5d122cd2a61`
+`6834825adaf4ed24ff10cae870b5ae7dd989e1e2`
 
-This commit is the squash merge of PR #143 / Issue #142. It preserves the
-locked LAST, MARK, funding, forward, calibration and reconciliation evidence.
+This commit is the squash merge of PR #146 / Issue #144. It preserves the
+locked LAST, MARK, funding, forward, calibration, reconciliation, and Trend
+Pullback signal-edge evidence.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -31,14 +32,18 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#144 — review the one-time unleveraged, pre-funding signal-edge study
-evidence.** The implementation was merged and frozen at
+**#147 — implement/predeclare the Breakout + Retest V1 fixed-2R historical
+signal-edge screen, without running its real A/B/C units.** The Trend Pullback
+implementation was merged and frozen at
 `b07e9eac7f373c4bc1b79a286714df00ae817ec2`; the architect then activated
 exactly one A/B/C execution. All three runs completed from the locked LAST
 corpus. The frozen screen result is `SIGNAL_EDGE_SCREEN_NEGATIVE` (three
 evaluable NEGATIVE units). See
 `docs/research/trend_pullback_signal_edge_study_2026_09_23.md` and the
-immutable study manifest. Do not tune or rerun these units under #144.
+immutable study manifest. Do not tune or rerun these units under #144. The
+Breakout + Retest predeclared protocol is in
+`docs/research/breakout_retest_fixed_2r_screen.md`; no real result is authorized
+until separate architect activation from a reviewed merged SHA.
 
 The official documentation and small public-only V3 capture qualify a narrow
 current feed reference for MARK/index/funding facts and timestamps. They do not
