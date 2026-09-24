@@ -50,6 +50,13 @@ from adaptive_trading_bot.research.range_mean_reversion_replay import (
     entry_geometry_reasons,
     midpoint_touches,
 )
+from adaptive_trading_bot.research.range_mean_reversion_scarcity import (
+    FROZEN_DIAGNOSTIC_RUNS,
+    RangeScarcityError,
+    TerminalStage,
+    project_corpus,
+    validate_frozen_unit,
+)
 from adaptive_trading_bot.research.range_mean_reversion_signal_edge import (
     COSTS,
     FOLLOW_UP,
@@ -370,6 +377,57 @@ def test_defaults_and_stateful_sealed_corpus() -> None:
     object.__setattr__(corpus.historical_contexts[0].context.candle_15m, "high", Decimal(999))
     with pytest.raises(ValueError, match="integrity"):
         corpus.validate()
+
+
+def test_scarcity_projector_consumes_only_sealed_stateful_corpus() -> None:
+    corpus, decision = _decision_prefix()
+    report = project_corpus(corpus, "A")
+    report.validate()
+    assert report.counts.total_observations == 16
+    assert report.counts.strategy_candidate_count == 1
+    assert report.counts.final_research_admissible == 1
+    assert report.observations[3].identity == decision.identity
+    assert report.observations[3].terminal is TerminalStage.RESEARCH_ADMISSIBLE
+    assert len(report.to_json()) > 0
+    assert RangeMeanReversionStrategy().strategy_version == "1.0.0"
+    assert RangeMeanReversionStrategy().configuration == RangeMeanReversionConfiguration()
+    assert ValidatedRangeConfiguration() == corpus.configuration.range_configuration
+    with pytest.raises(RangeScarcityError, match="sealed"):
+        project_corpus(cast(RangeMeanReversionHistoricalResearchCorpus, object()), "A")
+    object.__setattr__(corpus.decisions[3].decision.context.candle_15m, "high", Decimal(999))
+    with pytest.raises(ValueError, match="integrity"):
+        project_corpus(corpus, "A")
+
+
+def test_scarcity_warmup_and_frozen_unit_boundaries(tmp_path: Path) -> None:
+    corpus, decision = _decision_prefix()
+    config = replace(
+        corpus.configuration,
+        warmup_exclusions=((SYMBOL, CorpusInterval(START, START + timedelta(hours=1))),),
+    )
+    excluded = RangeMeanReversionHistoricalResearchCorpus(
+        config, corpus.decisions, corpus.historical_contexts
+    )
+    report = project_corpus(excluded, "A")
+    assert report.counts.candidates_inside_warmup == 1
+    assert report.counts.candidates_outside_warmup == 0
+    assert report.counts.otherwise_admissible_warmup_excluded == 1
+    assert report.counts.final_research_admissible == 0
+    assert report.observations[3].identity == decision.identity
+    assert report.observations[3].terminal is TerminalStage.CANDIDATE_WARMUP_EXCLUDED
+    assert tuple(run.run_id for run in FROZEN_DIAGNOSTIC_RUNS) == ("A", "B", "C")
+    assert FROZEN_DIAGNOSTIC_RUNS[1].end <= FROZEN_DIAGNOSTIC_RUNS[2].start
+    assert FROZEN_DIAGNOSTIC_RUNS[0].start == datetime(2024, 7, 1, tzinfo=UTC)
+    assert FROZEN_DIAGNOSTIC_RUNS[0].end == datetime(2026, 1, 1, tzinfo=UTC)
+    assert FROZEN_DIAGNOSTIC_RUNS[1].end == datetime(2024, 12, 25, tzinfo=UTC)
+    assert FROZEN_DIAGNOSTIC_RUNS[2].start == datetime(2025, 4, 2, tzinfo=UTC)
+    with pytest.raises(RangeScarcityError, match="locked WEEX"):
+        validate_frozen_unit(
+            cast(LockedWeexResearchCorpusStore, ParquetHistoricalCandleStore(tmp_path)),
+            excluded,
+            report,
+            FROZEN_DIAGNOSTIC_RUNS[0],
+        )
 
 
 def test_synthetic_replay_generation_is_complete_deterministic_and_isolated(
