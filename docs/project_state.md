@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #153 / PR #154 merged:
+Current verified `main` after Issue #155 / PR #156 merged:
 
-`336b376c3fd5c45981c579e0bd72a0a0eb36a217`
+`95b2ba209d121cd61a59c3730c36f197ec0690d7`
 
-This commit is the squash merge of PR #154 / Issue #153. It preserves the
+This commit is the squash merge of PR #156 / Issue #155. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
 Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
 screens are frozen NEGATIVE scientific results, not trading authority.
@@ -33,8 +33,16 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#155 — implement and predeclare a non-economic Range Mean Reversion V1
-candidate-scarcity diagnostic, without executing it on the locked corpus.**
+**#157 — the separately activated non-economic Range Mean Reversion V1
+candidate-scarcity diagnostic stopped after Run A.** The one ledger records
+`A=COMPLETED`, `B=NOT_STARTED`, `C=NOT_STARTED`. A full sealed A report was
+captured, but its evidence-orchestration record step raised `TypeError`; no
+cross-run projection exists. Do not retry A, run B/C under this interrupted
+protocol, or create a replacement ledger. See
+`docs/research/range_mean_reversion_scarcity_diagnostic_2026_09_25.md` and
+the immutable Issue #157 evidence. The next gate requires a separate
+architect decision.
+
 Issue #153's A/B/C evidence contains zero research-admissible entry candidates
 and each unit is `INSUFFICIENT`. The frozen final result is
 `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`. See
@@ -43,7 +51,7 @@ immutable evidence manifest. The committed A/B/C evidence is internally
 consistent, but a disclosed Codex UI interruption means the strict one-shot
 execution count is not independently established by a durable ledger. Do not
 rerun #153 or tune Range Mean Reversion V1 on those same windows. Issue #155
-adds that provenance ledger for a separately activated future diagnostic. The
+added the provenance ledger used by #157. The
 #149 Breakout + Retest implementation from Issue #147
 was merged and frozen at
 `4ed85e639a84d282522fc73b969e622fb67cdbdd`; the architect then
@@ -246,12 +254,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #155's implementation-only candidate-scarcity funnel and
-   interruption-proof ledger. Do not run the real locked-WEEX diagnostic until
-   a separate architect activation from a merged SHA. Issue #153 remains
-   frozen `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT` with zero
-   admitted candidates and no independently proven strict execution count.
-   Do not rerun or tune it on the same windows.
+1. Review Issue #157's stopped A-only candidate-scarcity evidence and exact
+   one-shot ledger. Do not retry A, run B/C under that protocol, or infer a
+   cross-run conclusion. Issue #153 remains frozen
+   `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT` with zero admitted
+   candidates and no independently proven strict execution count. Do not
+   rerun or tune it on the same windows. Await a separate architect decision.
 2. Keep Trend Pullback #144 frozen `SIGNAL_EDGE_SCREEN_NEGATIVE`, and keep the
    WEEX historical leveraged-mechanics pursuit closed. None of these screens is a
    leveraged, liquidation-complete, portfolio, or Live result.
