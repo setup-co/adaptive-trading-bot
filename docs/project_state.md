@@ -8,13 +8,14 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #144 / PR #146 merged:
+Current verified pre-PR-#150 `main` after Issue #147 / PR #148 merged:
 
-`6834825adaf4ed24ff10cae870b5ae7dd989e1e2`
+`4ed85e639a84d282522fc73b969e622fb67cdbdd`
 
-This commit is the squash merge of PR #146 / Issue #144. It preserves the
+This commit is the squash merge of PR #148 / Issue #147. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, and Trend
-Pullback signal-edge evidence.
+Pullback signal-edge evidence, while adding the Breakout + Retest research
+predeclaration without executing its real study.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -234,11 +235,13 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review #144's immutable one-time A/B/C result and evidence PR. The frozen
-   screen is NEGATIVE; do not tune Trend Pullback V1 on the same windows or
-   rerun the units.
-2. Keep the WEEX historical leveraged-mechanics pursuit closed. Contract,
-   margin, MMR and liquidation mechanics remain unresolved; #144 must not
-   convert this screen into a leveraged or Live claim.
-3. Keep Issue #118 stopped permanently; never resume its failed Run A or run
-   its B/C commands retroactively.
+1. Complete architect review and evidence lock for PR #150. Issue #149's
+   one-time A/B/C execution is complete; the frozen Breakout + Retest V1 result
+   is `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`. Do not rerun or tune
+   Breakout + Retest V1 on these same windows.
+2. Keep Trend Pullback #144 frozen `SIGNAL_EDGE_SCREEN_NEGATIVE`, and keep the
+   WEEX historical leveraged-mechanics pursuit closed. Neither screen is a
+   leveraged, liquidation-complete, portfolio, or Live result.
+3. After PR #150 locks the evidence, wait for the architect to select the next
+   strategy family or research gate separately. Keep Issue #118 permanently
+   stopped; do not resume its failed Run A or run its B/C commands retroactively.
