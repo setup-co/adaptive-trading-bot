@@ -8,14 +8,14 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified pre-PR-#150 `main` after Issue #147 / PR #148 merged:
+Current verified `main` after Issue #149 / PR #150 merged:
 
-`4ed85e639a84d282522fc73b969e622fb67cdbdd`
+`0911dde1253d014097937937cf8c2af27a971ef8`
 
-This commit is the squash merge of PR #148 / Issue #147. It preserves the
-locked LAST, MARK, funding, forward, calibration, reconciliation, and Trend
-Pullback signal-edge evidence, while adding the Breakout + Retest research
-predeclaration without executing its real study.
+This commit is the squash merge of PR #150 / Issue #149. It preserves the
+locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
+Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
+screens are frozen NEGATIVE scientific results, not trading authority.
 
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study stopped correctly under fail-closed rules. PR #125 fixed the demonstrated paired-research tooling blocker with explicit `ENTRY_FILL_INVALIDATED` accounting. PR #126 then made leverage a bounded, versioned, predeclared Risk-owned V1 parameter and required representative perpetual mechanics before Live readiness. None is evidence for or against EMA50 performance.
 
@@ -33,8 +33,9 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#149 — review the one-time Breakout + Retest V1 fixed-2R signal-edge
-evidence.** The #147 implementation was merged and frozen at
+**#151 — implement and predeclare the Range Mean Reversion V1 entry-midpoint
+signal-edge screen, without running the real study.** The #149 Breakout +
+Retest implementation from Issue #147 was merged and frozen at
 `4ed85e639a84d282522fc73b969e622fb67cdbdd`; the architect then
 activated one A/B/C execution on the locked WEEX LAST corpus. All three runs
 completed once. The frozen screen result is
@@ -235,13 +236,15 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete architect review and evidence lock for PR #150. Issue #149's
-   one-time A/B/C execution is complete; the frozen Breakout + Retest V1 result
-   is `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`. Do not rerun or tune
-   Breakout + Retest V1 on these same windows.
+1. Review Issue #151's implementation-only Range Mean Reversion V1 midpoint
+   corpus/replay/economic screen and its frozen protocol. Do not execute the
+   real A/B/C units until a separate architect activation from a merged SHA.
+   Issue #149's Breakout + Retest A/B/C execution is complete; the frozen
+   result is `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`. Do not rerun or tune
+   Breakout + Retest V1 on those same windows.
 2. Keep Trend Pullback #144 frozen `SIGNAL_EDGE_SCREEN_NEGATIVE`, and keep the
    WEEX historical leveraged-mechanics pursuit closed. Neither screen is a
    leveraged, liquidation-complete, portfolio, or Live result.
-3. After PR #150 locks the evidence, wait for the architect to select the next
-   strategy family or research gate separately. Keep Issue #118 permanently
-   stopped; do not resume its failed Run A or run its B/C commands retroactively.
+3. Range Mean Reversion economics remain unknown until a separately authorized
+   one-time study. Keep Issue #118 permanently stopped; do not resume its
+   failed Run A or run its B/C commands retroactively.
