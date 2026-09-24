@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #149 / PR #150 merged:
+Current verified `main` after Issue #151 / PR #152 merged:
 
-`0911dde1253d014097937937cf8c2af27a971ef8`
+`cd1f0858a3c6b4bc90c188b20e0c4d9f8db172c7`
 
-This commit is the squash merge of PR #150 / Issue #149. It preserves the
+This commit is the squash merge of PR #152 / Issue #151. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
 Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
 screens are frozen NEGATIVE scientific results, not trading authority.
@@ -33,9 +33,15 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#151 — implement and predeclare the Range Mean Reversion V1 entry-midpoint
-signal-edge screen, without running the real study.** The #149 Breakout +
-Retest implementation from Issue #147 was merged and frozen at
+**#153 — evidence-lock the one-time Range Mean Reversion V1 entry-midpoint
+signal-edge screen.** All A/B/C units completed once from the frozen #151
+implementation SHA; each had zero research-admissible entry candidates and
+was `INSUFFICIENT`. The frozen final result is
+`RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`. See
+`docs/research/range_mean_reversion_signal_edge_study_2026_09_25.md` and its
+immutable evidence manifest. Do not rerun or tune Range Mean Reversion V1 on
+these same windows. The #149 Breakout + Retest implementation from Issue #147
+was merged and frozen at
 `4ed85e639a84d282522fc73b969e622fb67cdbdd`; the architect then
 activated one A/B/C execution on the locked WEEX LAST corpus. All three runs
 completed once. The frozen screen result is
@@ -236,15 +242,14 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #151's implementation-only Range Mean Reversion V1 midpoint
-   corpus/replay/economic screen and its frozen protocol. Do not execute the
-   real A/B/C units until a separate architect activation from a merged SHA.
-   Issue #149's Breakout + Retest A/B/C execution is complete; the frozen
-   result is `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`. Do not rerun or tune
-   Breakout + Retest V1 on those same windows.
+1. Review and lock Issue #153's one-time Range Mean Reversion A/B/C evidence.
+   The frozen result is `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`:
+   zero research-admissible candidates in all three units. Do not rerun or
+   tune Range Mean Reversion V1 on these same windows. Issue #149's Breakout +
+   Retest result remains `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`.
 2. Keep Trend Pullback #144 frozen `SIGNAL_EDGE_SCREEN_NEGATIVE`, and keep the
-   WEEX historical leveraged-mechanics pursuit closed. Neither screen is a
+   WEEX historical leveraged-mechanics pursuit closed. None of these screens is a
    leveraged, liquidation-complete, portfolio, or Live result.
-3. Range Mean Reversion economics remain unknown until a separately authorized
-   one-time study. Keep Issue #118 permanently stopped; do not resume its
+3. The next research gate requires a separate architect decision after #153
+   evidence review. Keep Issue #118 permanently stopped; do not resume its
    failed Run A or run its B/C commands retroactively.
