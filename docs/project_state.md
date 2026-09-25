@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #155 / PR #156 merged:
+Current verified `main` after Issue #157 / PR #158 merged:
 
-`95b2ba209d121cd61a59c3730c36f197ec0690d7`
+`93d516b54527488b01aed9fa2eb5b3512ab06004`
 
-This commit is the squash merge of PR #156 / Issue #155. It preserves the
+This commit is the squash merge of PR #158 / Issue #157. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
 Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
 screens are frozen NEGATIVE scientific results, not trading authority.
@@ -33,15 +33,18 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#157 — the separately activated non-economic Range Mean Reversion V1
-candidate-scarcity diagnostic stopped after Run A.** The one ledger records
+**#159 — implementation/predeclaration of a separate ETH-only scarcity
+continuation.** No real B/C unit is authorized under #159. Issue #157 is
+closed and permanently stopped after Run A. Its ledger records
 `A=COMPLETED`, `B=NOT_STARTED`, `C=NOT_STARTED`. A full sealed A report was
 captured, but its evidence-orchestration record step raised `TypeError`; no
 cross-run projection exists. Do not retry A, run B/C under this interrupted
-protocol, or create a replacement ledger. See
+protocol, or create a replacement #157 ledger. The new continuation has a
+different protocol and future B/C-only ledger; BTC A is only an immutable
+anchor. See
 `docs/research/range_mean_reversion_scarcity_diagnostic_2026_09_25.md` and
-the immutable Issue #157 evidence. The next gate requires a separate
-architect decision.
+the immutable Issue #157 evidence. Future ETH B/C diagnostic execution
+requires a separate architect activation of the merged #159 SHA.
 
 Issue #153's A/B/C evidence contains zero research-admissible entry candidates
 and each unit is `INSUFFICIENT`. The frozen final result is
@@ -254,12 +257,13 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #157's stopped A-only candidate-scarcity evidence and exact
-   one-shot ledger. Do not retry A, run B/C under that protocol, or infer a
-   cross-run conclusion. Issue #153 remains frozen
+1. Complete architect review of Issue #159's ETH-only continuation
+   implementation. Do not execute B/C before a separate activation. Do not
+   retry A or resume #157; its ledger and evidence remain immutable. Issue
+   #153 remains frozen
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT` with zero admitted
    candidates and no independently proven strict execution count. Do not
-   rerun or tune it on the same windows. Await a separate architect decision.
+   rerun or tune it on the same windows.
 2. Keep Trend Pullback #144 frozen `SIGNAL_EDGE_SCREEN_NEGATIVE`, and keep the
    WEEX historical leveraged-mechanics pursuit closed. None of these screens is a
    leveraged, liquidation-complete, portfolio, or Live result.
