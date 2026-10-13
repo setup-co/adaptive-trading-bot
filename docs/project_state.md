@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-09-25
+**Snapshot date:** 2026-10-13
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,11 +8,12 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current verified `main` after Issue #159 / PR #160 merged:
+Verified Issue #163 audit base: `main` after Issue #161 / PR #162 merged:
 
-`9fa49537f64f5c1713e4f1d49eb244d14cd50495`
+`a9b6a9e4828887af53823580a4391c0a61a56d63`
 
-This commit is the squash merge of PR #160 / Issue #159. It preserves the
+This is the squash merge of PR #162 / Issue #161 and the base for the
+Issue #163 audit, **not** a prediction of any future merge SHA. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
 Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
 screens are frozen NEGATIVE scientific results, not trading authority.
@@ -33,8 +34,10 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#161 — one-time non-economic ETH-only scarcity continuation completed under
-the frozen #159 code SHA.** A fresh B/C-only ledger recorded B=`COMPLETED`
+**#163 — bounded decision/execution semantics audit is active.** No new
+historical economic or scarcity execution is authorized. The prior #161
+one-time non-economic ETH-only scarcity continuation completed under
+the frozen #159 code SHA. A fresh B/C-only ledger recorded B=`COMPLETED`
 and C=`COMPLETED`, each exactly once. The anchored A+B+C descriptive
 projection is `ZERO_STRATEGY_CANDIDATES`: BTC A, ETH B and ETH C all had zero
 strategy candidates and zero research-admissible candidates. See
@@ -260,14 +263,15 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review and lock the one-time Issue #161 ETH B/C continuation evidence.
-   Do not rerun B/C, retry A or resume #157. Issue #153 remains frozen
-   `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT` with zero admitted
-   candidates and no independently proven strict execution count. Do not
-   rerun or tune it on the same windows.
-2. Keep Trend Pullback #144 frozen `SIGNAL_EDGE_SCREEN_NEGATIVE`, and keep the
-   WEEX historical leveraged-mechanics pursuit closed. None of these screens is a
-   leveraged, liquidation-complete, portfolio, or Live result.
-3. The next research gate requires a separate architect decision after #153
-   evidence review. Keep Issue #118 permanently stopped; do not resume its
-   failed Run A or run its B/C commands retroactively.
+1. Complete Issue #163's synthetic, read-only decision/execution semantics
+   audit and obtain architect review of its exact findings. The next correction
+   or research gate requires a separate decision; this audit does not authorize
+   a strategy change or another real study.
+2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
+   `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
+   `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
+   `ZERO_STRATEGY_CANDIDATES` frozen. Do not rerun or tune them on those windows;
+   do not resume #157 or the permanently stopped #118.
+3. The historical WEEX leveraged-mechanics pursuit remains closed. None of
+   these screens establishes leveraged, liquidation-complete, portfolio, or
+   Live readiness.

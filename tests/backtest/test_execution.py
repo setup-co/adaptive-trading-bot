@@ -175,6 +175,43 @@ def test_first_open_at_or_after_eligibility_is_selected(
     assert result.fills[0].reference_open_price == candle(expected_index).open
 
 
+@pytest.mark.parametrize("side", [OrderSide.BUY, OrderSide.SELL])
+@pytest.mark.parametrize(
+    ("latency", "direct_index", "bounded_index"),
+    [(timedelta(), 1, 2), (timedelta(seconds=1), 2, 2)],
+)
+def test_source_lower_bound_and_latency_are_separate_entry_constraints(
+    tmp_path: Path, side: OrderSide, latency: timedelta, direct_index: int, bounded_index: int
+) -> None:
+    # Synthetic expectation: at the 12:15 decision boundary, the simulator can use
+    # the 12:15 open at zero latency; a source beginning one microsecond later cannot.
+    candles = (candle(0), candle(1), candle(2))
+    decision_at = candles[1].open_time
+    costs = ExecutionCostConfiguration(latency=latency)
+    series = ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15)
+    store = ParquetHistoricalCandleStore(tmp_path)
+    store.merge(SOURCE, candles)
+    request = order(created_at=decision_at, side=side)
+    simulator = BacktestExecutionSimulator(HistoricalExecutionSource(store))
+    direct = simulator.run(
+        series, costs, (request,), start=decision_at, end=candles[-1].close_time
+    ).fills[0]
+    bounded = simulator.run(
+        series,
+        costs,
+        (request,),
+        start=decision_at + timedelta(microseconds=1),
+        end=candles[-1].close_time,
+    ).fills[0]
+
+    assert direct.created_at == bounded.created_at == decision_at
+    assert direct.eligible_at == bounded.eligible_at == decision_at + latency
+    assert direct.fill_at == candles[direct_index].open_time
+    assert bounded.fill_at == candles[bounded_index].open_time
+    assert direct.reference_open_price == candles[direct_index].open
+    assert bounded.reference_open_price == candles[bounded_index].open
+
+
 def test_order_created_at_close_uses_next_open_not_closed_candle_ohlc(tmp_path: Path) -> None:
     first = candle(0, high=Decimal(140), low=Decimal(70), close=Decimal(130))
     next_candle = candle(1, open_price=Decimal(111))
