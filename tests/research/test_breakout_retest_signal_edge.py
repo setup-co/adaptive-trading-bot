@@ -37,6 +37,7 @@ from adaptive_trading_bot.research.breakout_retest_signal_edge import (
     _unit_status,
     classify_screen,
     run_predeclared_unit,
+    validate_frozen_run,
 )
 from adaptive_trading_bot.research.paired_exit_replay import HistoricalStrategyContextObservation
 from adaptive_trading_bot.research.trend_pullback_signal_edge import (
@@ -184,12 +185,45 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
         spread_bps=Decimal("2"), slippage_bps=Decimal("2"), fee_bps=Decimal("10")
     )
 
+    boundary = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
+        decision, (), series, costs, end=original[801].close_time
+    )
+    assert boundary.entry_fill is not None
+    assert boundary.entry_fill.fill_at == decision.identity.observed_at == original[801].open_time
+    assert boundary.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    delayed = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
+        decision,
+        (),
+        series,
+        replace(costs, latency=timedelta(seconds=1)),
+        end=original[801].close_time,
+    )
+    assert delayed.status is BreakoutRetestReplayStatus.ENTRY_UNFILLED
+    later = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
+        decision,
+        (),
+        series,
+        replace(costs, latency=timedelta(seconds=1)),
+        end=original[802].close_time,
+    )
+    assert later.entry_fill is not None
+    assert later.entry_fill.fill_at == original[802].open_time
+
     def scenario(kind: str) -> BreakoutRetestReplayResult:
         changed: dict[datetime, Candle] = {}
         for index, candle in enumerate(original):
-            if index == 802 and kind == "entry-invalid":
+            if index == 801 and kind == "entry-invalid":
                 changed[candle.close_time] = replace(
                     candle, open=Decimal(900), high=Decimal(904), low=Decimal(899)
+                )
+            elif index == 801:
+                # The newly opening boundary bar now supplies entry liquidity.
+                changed[candle.close_time] = replace(
+                    candle,
+                    open=Decimal(902),
+                    high=Decimal(903),
+                    low=Decimal(902),
+                    close=Decimal(902),
                 )
             elif index == 802 and kind == "gap-stop":
                 changed[candle.close_time] = replace(candle, low=Decimal(900))
@@ -198,16 +232,18 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
             elif index >= 802 and kind in {"none", "unfilled"}:
                 changed[candle.close_time] = replace(
                     candle,
-                    open=Decimal(904),
-                    high=Decimal(905),
+                    open=Decimal(903),
+                    high=Decimal(904),
                     low=Decimal(902),
-                    close=Decimal(904),
+                    close=Decimal(903),
                 )
             elif index == 802 and kind in {"stop", "target", "both", "unfilled"}:
                 changed[candle.close_time] = replace(
                     candle,
-                    high=Decimal(909) if kind in {"target", "both"} else candle.high,
-                    low=Decimal(900) if kind in {"stop", "both"} else candle.low,
+                    open=Decimal(902),
+                    high=Decimal(909) if kind in {"target", "both", "unfilled"} else Decimal(903),
+                    low=Decimal(900) if kind in {"stop", "both"} else Decimal(902),
+                    close=Decimal(902),
                 )
         if kind == "unfilled":
             first = original[802]
@@ -301,6 +337,10 @@ def test_sealed_report_population_and_locked_run_gate(tmp_path: Path) -> None:
     assert report.economics.outcome_denominator == len(report.outcomes)
     assert report.overlap_audit.replayed_count == report.population.replayed_count
     assert report.to_json() == report.to_json()
+    with pytest.raises(BreakoutRetestScreenError, match="new chronology"):
+        validate_frozen_run(
+            cast(LockedWeexResearchCorpusStore, store), corpus, report, FROZEN_RUNS[0]
+        )
     object.__setattr__(report, "unit_status", BreakoutRetestUnitStatus.POSITIVE)
     with pytest.raises(BreakoutRetestScreenError, match="integrity"):
         report.validate()

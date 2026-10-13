@@ -72,6 +72,7 @@ from adaptive_trading_bot.research.range_mean_reversion_signal_edge import (
     _unit_status,
     classify_screen,
     run_predeclared_unit,
+    validate_frozen_run,
 )
 from adaptive_trading_bot.research.trend_pullback_corpus import (
     ResearchSafetyAssumptionProfile,
@@ -299,7 +300,12 @@ class _SyntheticSource:
 
 
 def _replay(
-    side: str, entry_open: Decimal, trigger: str = "none", *, end_after_bars: int = 5
+    side: str,
+    entry_open: Decimal,
+    trigger: str = "none",
+    *,
+    end_after_bars: int = 5,
+    latency: timedelta = timedelta(),
 ) -> tuple[RangeMeanReversionReplayResult, DecisionJournalEntry[object, object]]:
     corpus, decision = _decision_prefix(side)
     del corpus
@@ -307,7 +313,7 @@ def _replay(
     candles: list[Candle] = []
     for index in range(5, 5 + end_after_bars):
         observed = START + index * Timeframe.MINUTES_15.duration
-        opening = entry_open if index == 6 else (Decimal(90) if side == "LONG" else Decimal(110))
+        opening = entry_open if index == 5 else (Decimal(90) if side == "LONG" else Decimal(110))
         high = opening + Decimal(1)
         low = opening - Decimal(1)
         if index == 7 and trigger in {"stop", "both"}:
@@ -335,7 +341,7 @@ def _replay(
         decision,
         tuple(contexts),
         ExecutionSeries(SOURCE, SYMBOL, Timeframe.MINUTES_15),
-        ExecutionCostConfiguration(Decimal("0"), Decimal("0"), Decimal("0")),
+        ExecutionCostConfiguration(Decimal("0"), Decimal("0"), Decimal("0"), latency),
         end=START + (5 + end_after_bars) * Timeframe.MINUTES_15.duration,
     )
     return result, decision
@@ -615,7 +621,7 @@ def test_midpoint_and_stop_triggers_and_causal_execution() -> None:
 
 
 def test_unfilled_and_unresolved_do_not_create_pnl() -> None:
-    entry_unfilled, _ = _replay("LONG", Decimal(85), end_after_bars=1)
+    entry_unfilled, _ = _replay("LONG", Decimal(85), end_after_bars=0)
     assert entry_unfilled.status is RangeMeanReversionReplayStatus.ENTRY_UNFILLED
     assert entry_unfilled.entry_fill is None
     assert entry_unfilled.final_position is None
@@ -626,6 +632,28 @@ def test_unfilled_and_unresolved_do_not_create_pnl() -> None:
     unfilled, _ = _replay("LONG", Decimal(85), "target", end_after_bars=3)
     assert unfilled.exit_unfilled is not None
     assert not unfilled.position_closed and unfilled.realized_net_pnl is None
+
+
+@pytest.mark.parametrize("side", ("LONG", "SHORT"))
+def test_boundary_entry_and_positive_latency_select_distinct_opens(side: str) -> None:
+    immediate, decision = _replay(side, Decimal(85 if side == "LONG" else 110), end_after_bars=1)
+    assert immediate.entry_fill is not None
+    assert immediate.entry_fill.fill_at == decision.identity.observed_at
+    assert immediate.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    delayed, _ = _replay(
+        side,
+        Decimal(85 if side == "LONG" else 110),
+        latency=timedelta(seconds=1),
+    )
+    assert delayed.entry_fill is not None
+    assert delayed.entry_fill.fill_at == decision.identity.observed_at + timedelta(minutes=15)
+    exhausted, _ = _replay(
+        side,
+        Decimal(85 if side == "LONG" else 110),
+        end_after_bars=1,
+        latency=timedelta(seconds=1),
+    )
+    assert exhausted.status is RangeMeanReversionReplayStatus.ENTRY_UNFILLED
 
 
 def test_economic_helpers_and_frozen_screen() -> None:
@@ -697,10 +725,16 @@ def test_report_population_geometry_and_locked_gate(tmp_path: Path) -> None:
     assert report.geometry.target_distances_quote == (Decimal(15),)
     assert report.overlap_audit.replayed_count == 1
     assert report.to_json() == report.to_json()
+    with pytest.raises(RangeMeanReversionScreenError, match="new chronology"):
+        validate_frozen_run(
+            cast(LockedWeexResearchCorpusStore, store := ParquetHistoricalCandleStore(tmp_path)),
+            corpus,
+            report,
+            FROZEN_RUNS[0],
+        )
     object.__setattr__(report, "unit_status", RangeMeanReversionUnitStatus.POSITIVE)
     with pytest.raises(RangeMeanReversionScreenError, match="integrity"):
         report.validate()
-    store = ParquetHistoricalCandleStore(tmp_path)
     with pytest.raises(RangeMeanReversionScreenError, match="locked WEEX"):
         run_predeclared_unit(cast(LockedWeexResearchCorpusStore, store), FROZEN_RUNS[0])
     with pytest.raises(ValueError, match="locked store"):
@@ -728,7 +762,7 @@ def test_report_population_geometry_and_locked_gate(tmp_path: Path) -> None:
 
 def test_population_counts_invalidations_without_outcomes() -> None:
     invalid, decision = _replay("LONG", Decimal(100))
-    unfilled, _ = _replay("LONG", Decimal(85), end_after_bars=1)
+    unfilled, _ = _replay("LONG", Decimal(85), end_after_bars=0)
     closed, _ = _replay("LONG", Decimal(85), "target")
     authority = RangeMeanReversionDecisionObservation(decision)
     # The pure population projector is tested independently of a report's

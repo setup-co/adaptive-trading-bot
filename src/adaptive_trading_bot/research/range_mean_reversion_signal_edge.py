@@ -17,6 +17,7 @@ from adaptive_trading_bot.backtest import (
     HistoricalExecutionSource,
 )
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
+from adaptive_trading_bot.domain.entry_chronology import CAUSAL_ENTRY_CHRONOLOGY_V2
 from adaptive_trading_bot.historical_sources import is_locked_weex_source
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders import (
@@ -62,7 +63,8 @@ from adaptive_trading_bot.research.weex_historical_corpus import (
 )
 from adaptive_trading_bot.storage import HistoricalCandleStore, SourceId
 
-_SCHEMA = "range-mean-reversion-signal-edge-v1"
+_SCHEMA = "range-mean-reversion-signal-edge-v2"
+_FROZEN_SCHEMA = "range-mean-reversion-signal-edge-v1"
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 SOURCE_ID = SourceId("weex-v3-last-e5b0c4035a19d5a80ca7")
 DATASET_VERSION = "weex-v1-5m-last-a629a29b580b2e103adba918"
@@ -241,6 +243,7 @@ class RangeMeanReversionSignalEdgeReport:
     economically_evaluable: bool = field(init=False)
     unit_status: RangeMeanReversionUnitStatus = field(init=False)
     report_digest: str = field(init=False)
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     schema_version: str = field(init=False, default=_SCHEMA)
     is_trading_authority: bool = field(init=False, default=False)
     is_portfolio_performance: bool = field(init=False, default=False)
@@ -297,6 +300,7 @@ class RangeMeanReversionSignalEdgeReport:
         self.execution_costs.validate()
         if (
             self.schema_version != _SCHEMA
+            or self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
             or self.is_trading_authority
             or self.is_portfolio_performance
             or self.dependence_warnings != DEPENDENCE_WARNINGS
@@ -314,6 +318,8 @@ class RangeMeanReversionSignalEdgeReport:
             if (
                 item.replay_end - item.identity.observed_at != self.follow_up_duration
                 or item.result.execution_costs != self.execution_costs
+                or item.result.entry_chronology_policy_version
+                != self.entry_chronology_policy_version
             ):
                 raise RangeMeanReversionScreenError("observation does not match report protocol")
         outcomes = _outcomes(self.observations)
@@ -604,6 +610,8 @@ def validate_frozen_run(
     report: RangeMeanReversionSignalEdgeReport,
     definition: RangeMeanReversionRunDefinition,
 ) -> None:
+    if report.schema_version != _FROZEN_SCHEMA:
+        raise RangeMeanReversionScreenError("new chronology report is not frozen V1 evidence")
     _check_frozen_store(store, definition)
     corpus.validate()
     report.validate()
@@ -632,6 +640,8 @@ def run_predeclared_unit(
 ) -> tuple[RangeMeanReversionHistoricalResearchCorpus, RangeMeanReversionSignalEdgeReport]:
     """Future-only entry point; this issue never invokes it on the real corpus."""
     _check_frozen_store(store, definition)
+    if _SCHEMA != _FROZEN_SCHEMA:
+        raise RangeMeanReversionScreenError("frozen V1 run cannot execute under new chronology")
     config = RangeMeanReversionResearchConfiguration(
         (SOURCE_ID,),
         (definition.symbol,),
@@ -654,7 +664,7 @@ class RangeMeanReversionScreenProjection:
         RangeMeanReversionUnitStatus, RangeMeanReversionUnitStatus, RangeMeanReversionUnitStatus
     ]
     status: RangeMeanReversionScreenStatus
-    schema_version: str = field(init=False, default=_SCHEMA)
+    schema_version: str = field(init=False, default=_FROZEN_SCHEMA)
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -668,7 +678,7 @@ class RangeMeanReversionScreenProjection:
 
     def validate(self) -> None:
         if (
-            self.schema_version != _SCHEMA
+            self.schema_version != _FROZEN_SCHEMA
             or self.run_ids != ("A", "B", "C")
             or self.status != classify_screen(self.unit_statuses)
             or not compare_digest(

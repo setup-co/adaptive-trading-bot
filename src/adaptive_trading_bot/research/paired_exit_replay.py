@@ -34,6 +34,11 @@ from adaptive_trading_bot.backtest import (
 )
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.domain.entry_chronology import (
+    CAUSAL_ENTRY_CHRONOLOGY_V2,
+    entry_source_start,
+    validate_entry_fill_chronology,
+)
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import (
     EntryOrderIntent,
@@ -65,13 +70,12 @@ from adaptive_trading_bot.strategies import (
     TrendPullbackStrategy,
 )
 
-_REPLAY_SCHEMA_VERSION = "2.0.0"
+_REPLAY_SCHEMA_VERSION = "3.0.0"
 _HISTORICAL_CONTEXT_OBSERVATION_SCHEMA_VERSION = "1.0.0"
 _HISTORICAL_CONTEXT_INTEGRITY_SEAL_VERSION = "1.0.0"
-_ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION = "1.0.0"
+_ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION = "2.0.0"
 _ENTRY_INTENT_PROVENANCE_SEAL_VERSION = "1.0.0"
 _RESEARCH_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-_AFTER_DECISION = timedelta(microseconds=1)
 
 
 class PairedExitReplayError(ValueError):
@@ -172,6 +176,7 @@ class EntryIntentProvenance:
     reference_price: Decimal
     quote_currency: str
     authorized_for_execution: bool
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     provenance_schema_version: str = field(
         init=False, default=_ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION
     )
@@ -215,6 +220,8 @@ class EntryIntentProvenance:
     def validate(self) -> None:
         if self.provenance_schema_version != _ENTRY_INTENT_PROVENANCE_SCHEMA_VERSION:
             raise PairedExitReplayError("entry intent provenance schema mismatch")
+        if self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2:
+            raise PairedExitReplayError("entry intent chronology policy mismatch")
         if not isinstance(self.provenance_integrity_seal, str) or not compare_digest(
             self.provenance_integrity_seal, _entry_intent_integrity_seal(self)
         ):
@@ -340,11 +347,14 @@ class HistoricalExitBranchResult:
     unresolved_open_quantity: Decimal
     unresolved_average_entry_price: Decimal | None
     is_trading_authority: bool = field(init=False, default=False)
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     replay_schema_version: str = field(init=False, default=_REPLAY_SCHEMA_VERSION)
 
     def __post_init__(self) -> None:
         if self.replay_schema_version != _REPLAY_SCHEMA_VERSION:
             raise PairedExitReplayError("branch replay schema version mismatch")
+        if self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2:
+            raise PairedExitReplayError("branch entry chronology policy mismatch")
         if self.is_trading_authority:
             raise PairedExitReplayError("research branch cannot claim trading authority")
         if self.evaluated_exit_context_count != len(self.exit_evaluations):
@@ -445,6 +455,7 @@ class PairedTrendPullbackExitReplayResult:
     identical_execution_cost_configuration: bool
     is_trading_authority: bool = field(init=False, default=False)
     is_portfolio_performance: bool = field(init=False, default=False)
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     replay_schema_version: str = field(init=False, default=_REPLAY_SCHEMA_VERSION)
 
     def __post_init__(self) -> None:
@@ -454,6 +465,8 @@ class PairedTrendPullbackExitReplayResult:
             raise PairedExitReplayError("paired replay range must be non-empty")
         if self.replay_schema_version != _REPLAY_SCHEMA_VERSION:
             raise PairedExitReplayError("paired replay schema version mismatch")
+        if self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2:
+            raise PairedExitReplayError("paired replay entry chronology policy mismatch")
         if self.is_trading_authority or self.is_portfolio_performance:
             raise PairedExitReplayError(
                 "paired research cannot claim runtime or portfolio authority"
@@ -471,6 +484,8 @@ class PairedTrendPullbackExitReplayResult:
                 self.entry_fill is not None
                 or self.entry_unfilled is None
                 or self.entry_unfilled.order != self.entry_order
+                or self.entry_unfilled.eligible_at
+                != self.entry_order.created_at + self.execution_costs.latency
                 or self.entry_fill_invalidation is not None
                 or self.baseline is not None
                 or self.ema50_candidate is not None
@@ -605,12 +620,12 @@ class PairedTrendPullbackExitReplayRunner:
             raise PairedExitReplayError("entry decision lies outside the bounded replay range")
         series = deepcopy(execution_series)
         entry_order = _entry_order(intent)
-        # The shared exit-context contract requires the accounting entry fill to be strictly
-        # later than its originating decision.  Excluding the equal timestamp also prevents a
-        # just-closed execution candle from being reused as post-decision entry liquidity.
-        entry_execution_start = max(start, intent.observed_at + _AFTER_DECISION)
-        if entry_execution_start >= end:
-            raise PairedExitReplayError("bounded replay has no post-decision execution interval")
+        entry_execution_start = entry_source_start(
+            decision_at=intent.observed_at,
+            authorized_at=intent.authorized_at,
+            requested_start=start,
+            end=end,
+        )
         try:
             historical_candles = self._source.load(
                 series,
@@ -983,6 +998,8 @@ def _entry_order_from_provenance(intent: EntryIntentProvenance) -> MarketOrderRe
 def _validate_entry_intent_provenance_facts(intent: EntryIntentProvenance) -> None:
     require_utc(intent.observed_at, field="entry intent observed_at")
     require_utc(intent.authorized_at, field="entry intent authorized_at")
+    if intent.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2:
+        raise PairedExitReplayError("entry intent chronology policy mismatch")
     if (
         not isinstance(intent.identity, EntryOrderIntentIdentity)
         or not isinstance(intent.decision_identity, DecisionIdentity)
@@ -992,6 +1009,7 @@ def _validate_entry_intent_provenance_facts(intent: EntryIntentProvenance) -> No
         or intent.observed_at != intent.decision_identity.observed_at
         or intent.strategy_id != intent.decision_identity.strategy_id
         or intent.strategy_version != intent.decision_identity.strategy_version
+        or intent.authorized_at < intent.observed_at
     ):
         raise PairedExitReplayError("entry intent identity provenance is inconsistent")
     if not isinstance(intent.side, EntrySide):
@@ -1065,6 +1083,13 @@ def _validate_entry_authority(
         raise PairedExitReplayError("paired entry intent provenance is inconsistent")
     if fill is None:
         return
+    validate_entry_fill_chronology(
+        decision_at=identity.observed_at,
+        authorized_at=order.created_at,
+        latency=costs.latency,
+        eligible_at=fill.eligible_at,
+        fill_at=fill.fill_at,
+    )
     if (
         fill.order_id != order.order_id
         or fill.symbol != order.symbol
@@ -1076,6 +1101,7 @@ def _validate_entry_authority(
         or fill.spread_bps != costs.spread_bps
         or fill.slippage_bps != costs.slippage_bps
         or fill.fee_bps != costs.fee_bps
+        or fill.fill_at != fill.execution_candle_open_time
     ):
         raise PairedExitReplayError("paired entry fill provenance is inconsistent")
 
@@ -1243,6 +1269,7 @@ def _entry_intent_integrity_seal(intent: EntryIntentProvenance) -> str:
                     intent.reference_price,
                     intent.quote_currency,
                     intent.authorized_for_execution,
+                    intent.entry_chronology_policy_version,
                 )
             ),
         ),

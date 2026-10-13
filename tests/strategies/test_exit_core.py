@@ -118,15 +118,22 @@ def test_originating_identity_strategy_source_and_symbol_must_match_exactly() ->
 
 def test_exit_context_enforces_strict_utc_and_entry_chronology() -> None:
     valid = _exit_context()
+    equal_entry = replace(
+        valid, entry_fill_at=valid.position_identity.originating_decision_identity.observed_at
+    )
+    equal_entry.validate()
     with pytest.raises(ValueError, match="UTC"):
         replace(valid, observed_at=NOW.replace(tzinfo=None))
     with pytest.raises(PositionExitValidationError, match="chronology"):
         replace(
             valid,
-            entry_fill_at=valid.position_identity.originating_decision_identity.observed_at,
+            entry_fill_at=valid.position_identity.originating_decision_identity.observed_at
+            - timedelta(microseconds=1),
         )
     with pytest.raises(PositionExitValidationError, match="chronology"):
         replace(valid, entry_fill_at=NOW + timedelta(microseconds=1))
+    with pytest.raises(PositionExitValidationError, match="chronology"):
+        replace(valid, entry_fill_at=NOW)
 
 
 def test_mutated_current_strategy_context_fails_closed() -> None:

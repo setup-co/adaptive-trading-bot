@@ -2,11 +2,20 @@
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
+from adaptive_trading_bot.backtest import ExecutionCostConfiguration
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.journal import DecisionIdentity
+from adaptive_trading_bot.research.trend_pullback_corpus import (
+    TrendPullbackHistoricalResearchCorpus,
+)
+from adaptive_trading_bot.research.trend_pullback_exit_robustness import (
+    TrendPullbackExitRobustnessConfiguration,
+    TrendPullbackExitRobustnessReport,
+)
 from adaptive_trading_bot.research.trend_pullback_signal_edge import (
     FROZEN_DATASET_VERSION,
     FROZEN_EXECUTION_COSTS,
@@ -17,6 +26,7 @@ from adaptive_trading_bot.research.trend_pullback_signal_edge import (
     CandidateEconomicOutcome,
     EconomicStratificationDimension,
     ProfitFactorState,
+    SignalEdgeProjectionError,
     SignalEdgeScreenStatus,
     SignalEdgeUnitStatus,
     _economics,
@@ -25,7 +35,9 @@ from adaptive_trading_bot.research.trend_pullback_signal_edge import (
     _screen_status,
     _strata,
     _unit_status,
+    project_frozen_run,
 )
+from adaptive_trading_bot.research.weex_historical_corpus import LockedWeexResearchCorpusStore
 from adaptive_trading_bot.storage import SourceId
 
 
@@ -59,6 +71,27 @@ def test_frozen_protocol_has_only_three_predeclared_units() -> None:
         FROZEN_EXECUTION_COSTS.slippage_bps,
         FROZEN_EXECUTION_COSTS.fee_bps,
     ) == (Decimal(2), Decimal(2), Decimal(10))
+
+
+def test_frozen_trend_protocol_rejects_new_chronology_report_before_store_access() -> None:
+    configuration = TrendPullbackExitRobustnessConfiguration(
+        "synthetic-corpus", "synthetic-digest", ExecutionCostConfiguration(), timedelta(hours=4)
+    )
+    report = TrendPullbackExitRobustnessReport(
+        configuration, "synthetic-corpus", "synthetic-digest", ()
+    )
+    report.validate()
+    assert report.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    with pytest.raises(SignalEdgeProjectionError, match="new chronology"):
+        project_frozen_run(
+            cast(LockedWeexResearchCorpusStore, object()),
+            cast(TrendPullbackHistoricalResearchCorpus, object()),
+            report,
+            FROZEN_RUNS[0],
+        )
+    object.__setattr__(report, "entry_chronology_policy_version", "LEGACY")
+    with pytest.raises(ValueError, match="integrity"):
+        report.validate()
 
 
 def _outcome(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from hmac import compare_digest
@@ -25,6 +25,11 @@ from adaptive_trading_bot.backtest import (
 )
 from adaptive_trading_bot.domain import Candle, Timeframe
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.domain.entry_chronology import (
+    CAUSAL_ENTRY_CHRONOLOGY_V2,
+    entry_source_start,
+    validate_entry_fill_chronology,
+)
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import (
     EntryOrderIntentAuthorizer,
@@ -43,7 +48,7 @@ from adaptive_trading_bot.research.trend_pullback_corpus import _integrity_seal
 from adaptive_trading_bot.strategies import BreakoutRetestStrategy
 
 POLICY_VERSION = "BREAKOUT_RETEST_FIXED_2R_V1"
-_SCHEMA = "breakout-retest-fixed-2r-replay-v1"
+_SCHEMA = "breakout-retest-fixed-2r-replay-v2"
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 
 
@@ -131,6 +136,7 @@ class BreakoutRetestReplayResult:
     unresolved_quantity: Decimal | None = None
     unresolved_average_entry_price: Decimal | None = None
     policy_version: str = field(init=False, default=POLICY_VERSION)
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     schema_version: str = field(init=False, default=_SCHEMA)
     integrity_seal: str = field(init=False, repr=False)
 
@@ -165,6 +171,7 @@ class BreakoutRetestReplayResult:
         if (
             self.schema_version != _SCHEMA
             or self.policy_version != POLICY_VERSION
+            or self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
             or self.decision_identity != self.entry_intent.decision_identity
             or self.execution_series.source_id != self.entry_intent.source_id
             or self.execution_series.symbol != self.entry_intent.symbol
@@ -185,10 +192,22 @@ class BreakoutRetestReplayResult:
             or self.entry_fill.execution_timeframe is not Timeframe.MINUTES_15
         ):
             raise BreakoutRetestReplayError("entry fill differs from request")
+        if self.entry_fill is not None:
+            validate_entry_fill_chronology(
+                decision_at=self.decision_identity.observed_at,
+                authorized_at=self.entry_request.created_at,
+                latency=self.execution_costs.latency,
+                eligible_at=self.entry_fill.eligible_at,
+                fill_at=self.entry_fill.fill_at,
+            )
+            if self.entry_fill.fill_at != self.entry_fill.execution_candle_open_time:
+                raise BreakoutRetestReplayError("entry fill is not at its execution open")
         if self.status is BreakoutRetestReplayStatus.ENTRY_UNFILLED:
             if (
                 self.entry_unfilled is None
                 or self.entry_unfilled.order != self.entry_request
+                or self.entry_unfilled.eligible_at
+                != self.entry_request.created_at + self.execution_costs.latency
                 or self.entry_fill is not None
                 or self.final_position is not None
                 or self.exit_request is not None
@@ -321,9 +340,12 @@ class BreakoutRetestFixed2RReplayRunner:
             raise BreakoutRetestReplayError("execution series differs from entry authority")
         end = require_utc(end, field="replay end")
         costs.validate()
-        start = intent.observed_at + timedelta(microseconds=1)
-        if start >= end:
-            raise BreakoutRetestReplayError("no causal entry interval")
+        start = entry_source_start(
+            decision_at=intent.observed_at,
+            authorized_at=intent.authorized_at,
+            requested_start=intent.observed_at,
+            end=end,
+        )
         candles = self._source.load(series, start=start, end=end)
         bound = _BoundExecutionCandleSource(series, start, end, candles)
         simulator = BacktestExecutionSimulator(bound)

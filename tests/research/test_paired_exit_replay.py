@@ -221,7 +221,9 @@ def test_authoritative_long_entry_uses_one_shared_fill_for_both_branches() -> No
     assert result.entry_order.side is OrderSide.BUY
     assert result.entry_order.quantity == _decision().risk_decision.approved_quantity
     assert result.entry_fill is not None
-    assert result.entry_fill.fill_price == Decimal("110.275")
+    assert result.entry_fill.fill_price == Decimal("100.2500")
+    assert result.entry_fill.fill_at == NOW
+    assert source.loads[0][1] == NOW
     assert result.baseline.accounting_events[0].fill_price == result.entry_fill.fill_price
     assert len(source.loads) == 1
 
@@ -232,12 +234,69 @@ def test_authoritative_short_entry_and_exit_use_opposite_shared_sides() -> None:
 
     assert result.entry_order.side is OrderSide.SELL
     assert result.entry_fill is not None
-    assert result.entry_fill.fill_price == Decimal("109.725")
+    assert result.entry_fill.fill_price == Decimal("99.7500")
     assert result.ema50_candidate is not None
     assert result.ema50_candidate.exit_request is not None
     assert result.ema50_candidate.exit_request.side is OrderSide.BUY
     assert result.ema50_candidate.exit_fill is not None
     assert result.ema50_candidate.exit_fill.fill_price == Decimal("120.300")
+
+
+@pytest.mark.parametrize("side", (CandidateAction.LONG_CANDIDATE, CandidateAction.SHORT_CANDIDATE))
+def test_boundary_entry_latency_and_short_bounded_range(side: CandidateAction) -> None:
+    decision = _decision(side=side)
+    immediate, source = _run((), decision=decision, end=NOW + timedelta(minutes=15))
+    assert immediate.entry_fill is not None
+    assert immediate.entry_fill.fill_at == NOW
+    assert source.loads[0][1] == NOW
+    assert immediate.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    delayed, _ = _run(
+        (),
+        decision=decision,
+        costs=ExecutionCostConfiguration(latency=timedelta(seconds=1)),
+    )
+    assert delayed.entry_fill is not None
+    assert delayed.entry_fill.fill_at == NOW + timedelta(minutes=15)
+    exhausted, _ = _run(
+        (),
+        decision=decision,
+        end=NOW + timedelta(minutes=15),
+        costs=ExecutionCostConfiguration(latency=timedelta(seconds=1)),
+    )
+    assert exhausted.status is PairedExitReplayStatus.ENTRY_UNFILLED
+    assert exhausted.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+
+
+def test_authorized_boundary_entry_does_not_use_later_candle_extremes() -> None:
+    original, _ = _run((), candles=_execution_path(100, 110, 120, 130))
+    changed_first = replace(
+        _execution_candle(0, Decimal(100)),
+        high=Decimal(200),
+        low=Decimal(1),
+        close=Decimal(150),
+    )
+    changed_later = replace(
+        _execution_candle(1, Decimal(110)),
+        high=Decimal(300),
+        low=Decimal(1),
+        close=Decimal(200),
+    )
+    changed, _ = _run(
+        (), candles=(changed_first, changed_later, *_execution_path(100, 110, 120, 130)[2:])
+    )
+    assert original.entry_fill == changed.entry_fill
+    assert original.entry_fill is not None
+    assert original.entry_fill.reference_open_price == Decimal(100)
+
+
+def test_entry_chronology_policy_tamper_fails_for_unfilled_and_invalidated() -> None:
+    unfilled, _ = _run((), candles=())
+    invalid, _ = _run((), candles=_execution_path(70, 100))
+    for result in (unfilled, invalid):
+        result.validate()
+        object.__setattr__(result, "entry_chronology_policy_version", "LEGACY")
+        with pytest.raises(PairedExitReplayError, match="chronology policy"):
+            result.validate()
 
 
 @pytest.mark.parametrize("outcome", ("no_action", "risk_blocked", "safe_mode"))
@@ -284,7 +343,7 @@ def test_entry_fill_beyond_sealed_stop_is_explicitly_invalidated(
     expected_fill: Decimal,
 ) -> None:
     decision = _decision(side=side)
-    result, _ = _run((), decision=decision, candles=_execution_path(100, int(execution_open)))
+    result, _ = _run((), decision=decision, candles=_execution_path(int(execution_open), 100))
 
     assert result.status is PairedExitReplayStatus.ENTRY_FILL_INVALIDATED
     assert result.comparison_state is PairedExitComparisonState.ENTRY_FILL_INVALIDATED
@@ -333,7 +392,7 @@ def test_entry_fill_equal_to_sealed_stop_is_invalidated(
     result, _ = _run(
         (),
         decision=_decision(side=side),
-        candles=_execution_path(100, int(stop)),
+        candles=_execution_path(int(stop), 100),
         costs=ExecutionCostConfiguration(),
     )
 
@@ -369,7 +428,7 @@ def test_invalidated_and_replayed_representations_reject_forged_geometry() -> No
             identical_execution_cost_configuration=False,
         )
 
-    invalid, _ = _run((), candles=_execution_path(100, 70))
+    invalid, _ = _run((), candles=_execution_path(70, 100))
     assert invalid.entry_fill is not None
     assert valid.baseline is not None and valid.ema50_candidate is not None
     with pytest.raises(PairedExitReplayError, match="invalid stop geometry"):
@@ -395,14 +454,14 @@ def test_entry_fill_invalidation_is_decimal_context_invariant_and_schema_version
     original = getcontext().copy()
     try:
         setcontext(Context(prec=6, rounding=ROUND_DOWN))
-        first, _ = _run((), candles=_execution_path(100, 70))
+        first, _ = _run((), candles=_execution_path(70, 100))
         setcontext(Context(prec=50, rounding=ROUND_HALF_EVEN))
-        second, _ = _run((), candles=_execution_path(100, 70))
+        second, _ = _run((), candles=_execution_path(70, 100))
     finally:
         setcontext(original)
 
     assert first == second
-    assert first.replay_schema_version == "2.0.0"
+    assert first.replay_schema_version == "3.0.0"
     assert first.entry_intent.stop_basis == _decision().risk_decision.approved_risk_stop_basis
     copied = deepcopy(first)
     copied.validate()
@@ -411,20 +470,20 @@ def test_entry_fill_invalidation_is_decimal_context_invariant_and_schema_version
         copied.validate()
 
 
-def test_closed_context_at_entry_fill_is_not_reused_as_exit_evidence() -> None:
+def test_first_candle_opening_at_entry_is_evaluated_only_at_its_close() -> None:
     result, _ = _run(
         (
-            _current_context(15, close=Decimal(99)),
+            _current_context(15, close=Decimal(101)),
             _current_context(30, close=Decimal(101)),
         )
     )
 
     assert result.entry_fill is not None
-    assert result.entry_fill.fill_at == NOW + timedelta(minutes=15)
+    assert result.entry_fill.fill_at == NOW
     assert result.baseline is not None
     assert result.ema50_candidate is not None
-    assert result.baseline.evaluated_exit_context_count == 1
-    assert result.ema50_candidate.evaluated_exit_context_count == 1
+    assert result.baseline.evaluated_exit_context_count == 2
+    assert result.ema50_candidate.evaluated_exit_context_count == 2
     assert result.ema50_candidate.position_closed is False
     assert result.comparison_state is PairedExitComparisonState.BOTH_OPEN
 

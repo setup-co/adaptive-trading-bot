@@ -13,6 +13,7 @@ from json import dumps
 from adaptive_trading_bot.backtest import ExecutionCostConfiguration
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.domain.entry_chronology import CAUSAL_ENTRY_CHRONOLOGY_V2
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.research.paired_exit_replay import PairedExitReplayStatus
 from adaptive_trading_bot.research.trend_pullback_corpus import (
@@ -34,7 +35,9 @@ from adaptive_trading_bot.research.weex_historical_corpus import (
 from adaptive_trading_bot.storage import SourceId
 
 _CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-PROJECTION_SCHEMA_VERSION = "trend-pullback-signal-edge-v1"
+PROJECTION_SCHEMA_VERSION = "trend-pullback-signal-edge-v2"
+FROZEN_PROJECTION_SCHEMA_VERSION = "trend-pullback-signal-edge-v1"
+FROZEN_REPORT_SCHEMA_VERSION = "2.0.0"
 FROZEN_SOURCE_ID = SourceId("weex-v3-last-e5b0c4035a19d5a80ca7")
 FROZEN_DATASET_VERSION = "weex-v1-5m-last-a629a29b580b2e103adba918"
 FROZEN_MANIFEST_SHA256 = "98705bd49ec05f912ef6c0257ea9a9886b706f3c80ca84c82faace4e20415e95"
@@ -210,6 +213,7 @@ class SignalEdgeRunProjection:
     overlap_audit: OverlapAudit
     economically_evaluable: bool
     unit_status: SignalEdgeUnitStatus
+    entry_chronology_policy_version: str = CAUSAL_ENTRY_CHRONOLOGY_V2
     run_definition: SignalEdgeRunDefinition | None = None
     dataset_version: str | None = None
     manifest_sha256: str | None = None
@@ -227,7 +231,7 @@ class SignalEdgeRunProjection:
 class SignalEdgeScreenProjection:
     runs: tuple[SignalEdgeRunProjection, SignalEdgeRunProjection, SignalEdgeRunProjection]
     status: SignalEdgeScreenStatus
-    schema_version: str = PROJECTION_SCHEMA_VERSION
+    schema_version: str = FROZEN_PROJECTION_SCHEMA_VERSION
     authority_exclusions: tuple[str, ...] = AUTHORITY_EXCLUSIONS
 
     def to_json(self) -> str:
@@ -285,6 +289,7 @@ def project_run(report: TrendPullbackExitRobustnessReport) -> SignalEdgeRunProje
         overlap_audit=deepcopy(report.overlap_audit),
         economically_evaluable=evaluable,
         unit_status=unit,
+        entry_chronology_policy_version=report.entry_chronology_policy_version,
     )
 
 
@@ -295,6 +300,9 @@ def project_frozen_run(
     definition: SignalEdgeRunDefinition,
 ) -> SignalEdgeRunProjection:
     """Enforce the frozen A/B/C protocol before projecting a future study run."""
+
+    if report.report_schema_version != FROZEN_REPORT_SCHEMA_VERSION:
+        raise SignalEdgeProjectionError("new chronology report is not frozen V1 evidence")
 
     if not isinstance(store, LockedWeexResearchCorpusStore):
         raise SignalEdgeProjectionError("frozen run requires the locked WEEX corpus store")

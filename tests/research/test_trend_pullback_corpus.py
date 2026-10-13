@@ -677,7 +677,7 @@ def test_exit_robustness_replays_exact_admissible_population_with_full_horizon(
     assert economic.outcomes[0].net_r == expected_net_r
     assert economic.paired_candidate_minus_baseline_deltas == boundary_report.deltas
     assert not economic.economically_evaluable
-    with pytest.raises(SignalEdgeProjectionError, match="locked WEEX corpus store"):
+    with pytest.raises(SignalEdgeProjectionError, match="new chronology"):
         project_frozen_run(
             cast(LockedWeexResearchCorpusStore, boundary_store),
             boundary_corpus,
@@ -763,12 +763,13 @@ def test_exit_robustness_preserves_unresolved_and_zero_comparable_strata(
     assert report.overlap_audit.raw_candidate_count_is_independent_sample_size is False
     assert report.overlap_audit.sensitivity_is_independence_proof is False
     artifact = report.to_json()
-    assert report.configuration.configuration_schema_version == "2.0.0"
-    assert report.configuration.report_schema_version == "2.0.0"
+    assert report.configuration.configuration_schema_version == "3.0.0"
+    assert report.configuration.report_schema_version == "3.0.0"
     assert report.configuration.stratification_policy_version == "2.0.0"
-    assert report.report_schema_version == "2.0.0"
-    assert all(item.observation_schema_version == "2.0.0" for item in report.observations)
-    assert '"artifact_schema_version":"2.0.0"' in artifact
+    assert report.report_schema_version == "3.0.0"
+    assert report.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    assert all(item.observation_schema_version == "3.0.0" for item in report.observations)
+    assert '"artifact_schema_version":"3.0.0"' in artifact
     assert '"artifact_kind":"trend_pullback_exit_robustness_report"' in artifact
     assert '"is_portfolio_performance":false' in artifact
     assert '"decimal"' in artifact

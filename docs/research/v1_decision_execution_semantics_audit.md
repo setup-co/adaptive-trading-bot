@@ -1,5 +1,10 @@
 # V1 decision and execution semantics audit
 
+**Follow-up:** [Issue #165](https://github.com/setup-co/adaptive-trading-bot/issues/165)
+approves `CAUSAL_ENTRY_CHRONOLOGY_V2` prospectively. This report remains a
+characterization of the named pre-#165 audit baseline and frozen evidence; its
+synthetic old-convention findings are not rewritten as new-policy outcomes.
+
 **Audit baseline:** `a9b6a9e4828887af53823580a4391c0a61a56d63` (squash merge of #162, not an execution SHA). **Scope:** source, specifications, existing locked evidence, and fixed synthetic tests only. Application source was unchanged; synthetic tests invoked existing application functions, but no historical study or standalone trading runtime was launched, and no exchange/account was accessed. File/line references below are to this baseline. Characterization assertions describe current behavior, not approval of it.
 
 ## What the accepted screens actually evaluate
