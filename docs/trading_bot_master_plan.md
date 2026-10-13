@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.3
+**Document version:** 1.4
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -779,6 +779,32 @@ Must model relevant real-world effects:
 - stop execution assumptions;
 - execution latency assumptions where meaningful;
 - partial fills if/when strategy requires them.
+
+## V1 causal entry chronology (`CAUSAL_ENTRY_CHRONOLOGY_V2`)
+
+For an authorized entry, let `d` be the sealed decision time, `a` the
+authoritative order-authorization/request time and `e = a + configured_latency`.
+Require `d <= a <= e <= fill_at`. Historical bar execution selects the first
+qualified candle **open** at or after `e` within the caller's explicit source
+range. An order authorized when a 15m candle closes may, at zero configured
+latency, use the newly opening candle's open at that same timestamp; the
+just-closed candle's OHLC is never an execution fill reference. Closed-candle
+facts already observed may still inform the decision. This equal-time fill is
+an idealized bar-model event ordering, not proof of instant venue execution.
+Positive latency and off-boundary requests select the next eligible open
+without rounding backward or extending the requested source range. Missing
+required history fails integrity checks; valid range exhaustion remains
+explicitly unfilled. No hidden epsilon or extra source-filter bar is allowed.
+
+Candle-based exit contexts require `decision_at <= entry_fill_at <
+exit_observed_at`: the decision candle is not post-entry evidence, while the
+candle that opens at an entry fill may first be evaluated after its close.
+Historical stop/target triggers remain completed-candle observations that
+create later market-exit requests; trigger prices are not guaranteed fills.
+Equivalent supplied Paper entry observations may establish entry parity, but
+neither missing Paper observations nor real-exchange execution are inferred.
+Versioned replay/context/report provenance distinguishes this policy from
+frozen earlier studies; their artifacts and execution SHAs remain unchanged.
 
 Representative leveraged results must include fees, spread, slippage, funding, latency, stop behavior, margin usage and liquidation/account-survival effects. An unleveraged artifact remains useful research evidence but is not sufficient proof of leveraged Live readiness. Signal quality must be reported separately from leverage/margin effects, and leverage must not be tuned together with strategy thresholds after observing results.
 
@@ -1583,16 +1609,30 @@ Approved:
 - Target Version: V1 / Master Plan v1.3
 - Approved: Subject to architect review of Issue #124; runtime integration requires separately approved scoped issues.
 
+### 2026-10-14 — Causal entry and exit-context chronology
+
+- Date: 2026-10-14
+- Change ID: Issue #165 / `CAUSAL_ENTRY_CHRONOLOGY_V2` / Master Plan v1.4
+- Old Decision: Three research entry wrappers filtered historical sources from decision time plus one microsecond; the candle-based exit context required entry strictly later than decision. Together these could delay an otherwise eligible zero-latency boundary entry by one full 15m bar.
+- New Decision: Preserve sealed decision/authorization times; require `decision_at <= authorization_at <= eligibility_at <= fill_at`, select the first qualified execution open at or after eligibility within explicit bounds, and require `decision_at <= entry_fill_at < exit_observed_at` for candle-based exit contexts. Permit equal decision/entry timestamps at zero latency under logical post-authorization event ordering, with no just-closed-candle execution price or hidden epsilon.
+- Reason: Align research entry source selection with the existing simulator's first-eligible-open rule and supported Paper observations, without changing actual configured latency or weakening causal exit evidence.
+- Expected Benefit: Explicit, testable chronology and versioned provenance across research entry paths and equivalent offline Paper entry observations.
+- Risk: The idealized zero-latency boundary fill is not proof of real venue execution. This semantic change may alter future synthetic/research outcomes, so frozen reports cannot be silently reinterpreted or rerun under old protocols.
+- Affected Modules: Exit-context validation, paired Trend/Breakout/Range research replays, direct aggregate report consumers, synthetic Backtest/Paper entry parity, Master Plan and project-state documentation. Strategy, Risk, Safety, shared execution pricing/accounting, qualified datasets and locked evidence are unchanged.
+- Target Version: V1 / Master Plan v1.4
+- Approved: Architect implementation instruction in Issue #165. No historical study, Paper/Shadow/Live activation or representative leveraged readiness is authorized by this decision.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. Complete architect review and merge of Master Plan v1.3 / Issue #124.
-2. After #124, the architect must define the minimum representative leveraged-perpetual mechanics required before any new primary trading study. At minimum, this must cover leverage/notional authority, margin, funding, mark-price/liquidation semantics, protective-stop/liquidation safety, and account-survival correctness without unnecessary overengineering.
+1. #124 and the bounded #163 decision/execution audit are complete. Implement and review the versioned causal-entry chronology in Issue #165 without rerunning frozen studies.
+2. Separately define protective/account translation for actual filled-but-invalid research entries and the Range partial-history retention policy; neither is decided by #165.
+3. Separately authorized, limited unleveraged/pre-funding signal research is distinguishable from **representative leveraged-perpetual validation**. Missing historical liquidation mechanics do not automatically forbid the former, but the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account-survival behavior. This paragraph authorizes no study.
 
-Issue #118 is permanently stopped and must never be resumed. No new full EMA50 or other primary study may begin until the architect explicitly predeclares it from the then-current locked code SHA and confirms that the required representative leveraged-perpetual mechanics are in place.
+Issue #118 is permanently stopped and must never be resumed. The frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under the new timing policy. Any future study requires its own architect-approved, predeclared scope and locked code SHA. None of this relaxes the V1 BTC/ETH boundary; a target of at least ten assets remains a separate pending architecture decision.
 
 ---
 

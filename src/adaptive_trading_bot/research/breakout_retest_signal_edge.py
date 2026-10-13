@@ -16,6 +16,7 @@ from adaptive_trading_bot.backtest import (
     HistoricalExecutionSource,
 )
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
+from adaptive_trading_bot.domain.entry_chronology import CAUSAL_ENTRY_CHRONOLOGY_V2
 from adaptive_trading_bot.historical_sources import is_locked_weex_source
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders import (
@@ -59,7 +60,8 @@ from adaptive_trading_bot.research.weex_historical_corpus import (
 )
 from adaptive_trading_bot.storage import HistoricalCandleStore, SourceId
 
-_SCHEMA = "breakout-retest-signal-edge-v1"
+_SCHEMA = "breakout-retest-signal-edge-v2"
+_FROZEN_SCHEMA = "breakout-retest-signal-edge-v1"
 SOURCE_ID = SourceId("weex-v3-last-e5b0c4035a19d5a80ca7")
 DATASET_VERSION = "weex-v1-5m-last-a629a29b580b2e103adba918"
 MANIFEST_SHA256 = "98705bd49ec05f912ef6c0257ea9a9886b706f3c80ca84c82faace4e20415e95"
@@ -221,6 +223,7 @@ class BreakoutRetestSignalEdgeReport:
     economically_evaluable: bool = field(init=False)
     unit_status: BreakoutRetestUnitStatus = field(init=False)
     report_digest: str = field(init=False)
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     schema_version: str = field(init=False, default=_SCHEMA)
     is_trading_authority: bool = field(init=False, default=False)
     is_portfolio_performance: bool = field(init=False, default=False)
@@ -280,6 +283,7 @@ class BreakoutRetestSignalEdgeReport:
         self.execution_costs.validate()
         if (
             self.schema_version != _SCHEMA
+            or self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
             or self.is_trading_authority
             or self.is_portfolio_performance
             or self.dependence_warnings != DEPENDENCE_WARNINGS
@@ -297,6 +301,8 @@ class BreakoutRetestSignalEdgeReport:
             if (
                 item.replay_end - item.identity.observed_at != self.follow_up_duration
                 or item.result.execution_costs != self.execution_costs
+                or item.result.entry_chronology_policy_version
+                != self.entry_chronology_policy_version
             ):
                 raise BreakoutRetestScreenError("observation does not match report protocol")
         outcomes = _outcomes(self.observations)
@@ -518,6 +524,8 @@ def validate_frozen_run(
     definition: BreakoutRetestRunDefinition,
 ) -> None:
     """Gate future execution to exact reviewed store, identity, window, and costs."""
+    if report.schema_version != _FROZEN_SCHEMA:
+        raise BreakoutRetestScreenError("new chronology report is not frozen V1 evidence")
     if not isinstance(store, LockedWeexResearchCorpusStore):
         raise BreakoutRetestScreenError("only locked WEEX corpus store is authorized")
     if (
@@ -558,6 +566,8 @@ def run_predeclared_unit(
         or QUALIFIED_DATASET_MANIFEST_SHA256.get(DATASET_VERSION) != MANIFEST_SHA256
     ):
         raise BreakoutRetestScreenError("predeclared run identity is not qualified")
+    if _SCHEMA != _FROZEN_SCHEMA:
+        raise BreakoutRetestScreenError("frozen V1 run cannot execute under new chronology")
     configuration = BreakoutRetestResearchConfiguration(
         (SOURCE_ID,), (definition.symbol,), definition.start, definition.end, RESEARCH_EQUITY
     )
@@ -577,7 +587,7 @@ class BreakoutRetestScreenProjection:
         BreakoutRetestUnitStatus, BreakoutRetestUnitStatus, BreakoutRetestUnitStatus
     ]
     status: BreakoutRetestScreenStatus
-    schema_version: str = field(init=False, default=_SCHEMA)
+    schema_version: str = field(init=False, default=_FROZEN_SCHEMA)
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -593,7 +603,7 @@ class BreakoutRetestScreenProjection:
 
     def validate(self) -> None:
         if (
-            self.schema_version != _SCHEMA
+            self.schema_version != _FROZEN_SCHEMA
             or self.run_ids != ("A", "B", "C")
             or self.status != classify_screen(self.unit_statuses)
             or not compare_digest(

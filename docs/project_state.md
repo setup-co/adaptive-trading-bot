@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-10-13
+**Snapshot date:** 2026-10-14
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,12 +8,13 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified Issue #163 audit base: `main` after Issue #161 / PR #162 merged:
+Verified `main` after the accepted Issue #163 audit / PR #164 squash merge:
 
-`a9b6a9e4828887af53823580a4391c0a61a56d63`
+`1156ba7de7a077011d57529eb4fb547a53661825`
 
-This is the squash merge of PR #162 / Issue #161 and the base for the
-Issue #163 audit, **not** a prediction of any future merge SHA. It preserves the
+This is the exact base for Issue #165's chronology implementation, **not** a
+prediction of its future merge SHA. PR #164 records the old-baseline audit in
+`docs/research/v1_decision_execution_semantics_audit.md`. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
 Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
 screens are frozen NEGATIVE scientific results, not trading authority.
@@ -34,7 +35,10 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#163 — bounded decision/execution semantics audit is active.** No new
+**#165 — versioned causal-entry chronology implementation is active.** The
+accepted #163 audit is complete; #165 implements `CAUSAL_ENTRY_CHRONOLOGY_V2`
+with synthetic cross-path and Paper-entry parity tests only. Architect review
+of its new HEAD and CI is the next gate. No new
 historical economic or scarcity execution is authorized. The prior #161
 one-time non-economic ETH-only scarcity continuation completed under
 the frozen #159 code SHA. A fresh B/C-only ledger recorded B=`COMPLETED`
@@ -263,10 +267,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete Issue #163's synthetic, read-only decision/execution semantics
-   audit and obtain architect review of its exact findings. The next correction
-   or research gate requires a separate decision; this audit does not authorize
-   a strategy change or another real study.
+1. Implement and review Issue #165's explicit entry/exit-context chronology
+   against synthetic Backtest/research/Paper observations. Do not reinterpret
+   prior reports under this new version. Protective/account translation and
+   Range partial-history retention require separate architect decisions.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161

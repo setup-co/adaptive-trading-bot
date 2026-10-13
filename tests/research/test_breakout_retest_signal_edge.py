@@ -12,9 +12,14 @@ from adaptive_trading_bot.backtest import (
     ExecutionCostConfiguration,
     ExecutionSeries,
     HistoricalExecutionSource,
+    OrderSide,
 )
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
-from adaptive_trading_bot.orders import EntrySide
+from adaptive_trading_bot.orders import (
+    EntryOrderIntentAuthorizer,
+    EntrySide,
+    OrderIntentAuthorizationStatus,
+)
 from adaptive_trading_bot.research.breakout_retest_corpus import (
     BreakoutRetestHistoricalCorpusGenerator,
     BreakoutRetestResearchConfiguration,
@@ -37,6 +42,7 @@ from adaptive_trading_bot.research.breakout_retest_signal_edge import (
     _unit_status,
     classify_screen,
     run_predeclared_unit,
+    validate_frozen_run,
 )
 from adaptive_trading_bot.research.paired_exit_replay import HistoricalStrategyContextObservation
 from adaptive_trading_bot.research.trend_pullback_signal_edge import (
@@ -49,7 +55,7 @@ from adaptive_trading_bot.research.trend_pullback_signal_edge import (
 )
 from adaptive_trading_bot.research.weex_historical_corpus import LockedWeexResearchCorpusStore
 from adaptive_trading_bot.storage import ParquetHistoricalCandleStore, SourceId
-from adaptive_trading_bot.strategies import BreakoutRetestConfiguration
+from adaptive_trading_bot.strategies import BreakoutRetestConfiguration, CandidateAction
 
 START = datetime(2026, 9, 1, tzinfo=UTC)
 SYMBOL = TradingSymbol("BTC", "USDT")
@@ -95,6 +101,50 @@ def _store(tmp_path: Path, *, continuation: int = 0) -> ParquetHistoricalCandleS
                 (Timeframe.MINUTES_15, 816 + continuation),
                 (Timeframe.HOUR_1, 204 + continuation // 4),
                 (Timeframe.HOURS_4, 51 + continuation // 16),
+            )
+            for i in range(count)
+        ),
+    )
+    return store
+
+
+def _short_store(tmp_path: Path) -> ParquetHistoricalCandleStore:
+    def mirrored(index: int, timeframe: Timeframe) -> Candle:
+        candle = _candle(index, timeframe)
+        result = replace(
+            candle,
+            open=Decimal(2000) - candle.open,
+            high=Decimal(2000) - candle.low,
+            low=Decimal(2000) - candle.high,
+            close=Decimal(2000) - candle.close,
+        )
+        if timeframe is Timeframe.MINUTES_15 and index == 801:
+            result = replace(
+                result,
+                open=Decimal(1099),
+                high=Decimal(1099),
+                low=Decimal(1097),
+                close=Decimal(1098),
+                volume=Decimal(25),
+            )
+        # Earlier HTF variation keeps a continuously falling synthetic series
+        # from becoming its own all-time volatility maximum at the decision.
+        if (timeframe is Timeframe.HOUR_1 and index in {120, 130, 140, 150, 160}) or (
+            timeframe is Timeframe.HOURS_4 and index in {25, 30, 35, 40}
+        ):
+            close = result.close + Decimal(50)
+            result = replace(result, high=max(result.high, close + 1), close=close)
+        return result
+
+    store = ParquetHistoricalCandleStore(tmp_path)
+    store.merge(
+        SOURCE,
+        tuple(
+            mirrored(i, timeframe)
+            for timeframe, count in (
+                (Timeframe.MINUTES_15, 816),
+                (Timeframe.HOUR_1, 204),
+                (Timeframe.HOURS_4, 51),
             )
             for i in range(count)
         ),
@@ -184,12 +234,45 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
         spread_bps=Decimal("2"), slippage_bps=Decimal("2"), fee_bps=Decimal("10")
     )
 
+    boundary = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
+        decision, (), series, costs, end=original[801].close_time
+    )
+    assert boundary.entry_fill is not None
+    assert boundary.entry_fill.fill_at == decision.identity.observed_at == original[801].open_time
+    assert boundary.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    delayed = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
+        decision,
+        (),
+        series,
+        replace(costs, latency=timedelta(seconds=1)),
+        end=original[801].close_time,
+    )
+    assert delayed.status is BreakoutRetestReplayStatus.ENTRY_UNFILLED
+    later = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
+        decision,
+        (),
+        series,
+        replace(costs, latency=timedelta(seconds=1)),
+        end=original[802].close_time,
+    )
+    assert later.entry_fill is not None
+    assert later.entry_fill.fill_at == original[802].open_time
+
     def scenario(kind: str) -> BreakoutRetestReplayResult:
         changed: dict[datetime, Candle] = {}
         for index, candle in enumerate(original):
-            if index == 802 and kind == "entry-invalid":
+            if index == 801 and kind == "entry-invalid":
                 changed[candle.close_time] = replace(
                     candle, open=Decimal(900), high=Decimal(904), low=Decimal(899)
+                )
+            elif index == 801:
+                # The newly opening boundary bar now supplies entry liquidity.
+                changed[candle.close_time] = replace(
+                    candle,
+                    open=Decimal(902),
+                    high=Decimal(903),
+                    low=Decimal(902),
+                    close=Decimal(902),
                 )
             elif index == 802 and kind == "gap-stop":
                 changed[candle.close_time] = replace(candle, low=Decimal(900))
@@ -198,16 +281,18 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
             elif index >= 802 and kind in {"none", "unfilled"}:
                 changed[candle.close_time] = replace(
                     candle,
-                    open=Decimal(904),
-                    high=Decimal(905),
+                    open=Decimal(903),
+                    high=Decimal(904),
                     low=Decimal(902),
-                    close=Decimal(904),
+                    close=Decimal(903),
                 )
             elif index == 802 and kind in {"stop", "target", "both", "unfilled"}:
                 changed[candle.close_time] = replace(
                     candle,
-                    high=Decimal(909) if kind in {"target", "both"} else candle.high,
-                    low=Decimal(900) if kind in {"stop", "both"} else candle.low,
+                    open=Decimal(902),
+                    high=Decimal(909) if kind in {"target", "both", "unfilled"} else Decimal(903),
+                    low=Decimal(900) if kind in {"stop", "both"} else Decimal(902),
+                    close=Decimal(902),
                 )
         if kind == "unfilled":
             first = original[802]
@@ -277,6 +362,88 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
         )
 
 
+def test_authorized_short_runner_entry_chronology_and_post_entry_stop(tmp_path: Path) -> None:
+    # Decision/authorization at the boundary: 0 latency uses that open; +1s uses
+    # the next open. The entry candle becomes exit evidence only at its close.
+    store = _short_store(tmp_path)
+    end = START + timedelta(hours=204)
+    corpus = BreakoutRetestHistoricalCorpusGenerator(store).generate(
+        BreakoutRetestResearchConfiguration((SOURCE,), (SYMBOL,), START, end, Decimal(10000))
+    )
+    short_decisions = tuple(
+        item.decision
+        for item in corpus.decisions
+        if item.is_research_admissible_entry
+        and item.decision.strategy_evaluation.action is CandidateAction.SHORT_CANDIDATE
+    )
+    assert short_decisions
+    decision = short_decisions[0]
+    decision.validate()
+    authorization = EntryOrderIntentAuthorizer().authorize(decision)
+    assert authorization.status is OrderIntentAuthorizationStatus.AUTHORIZED
+    assert authorization.intent is not None
+    intent = authorization.intent
+    assert intent.side is EntrySide.SELL
+    assert intent.quantity == decision.risk_decision.approved_quantity
+    candles = store.read(SOURCE, SYMBOL, Timeframe.MINUTES_15, start=START, end=end)
+    opening = next(
+        candle for candle in candles if candle.open_time == decision.identity.observed_at
+    )
+    subsequent = next(candle for candle in candles if candle.open_time == opening.close_time)
+    series = ExecutionSeries(SOURCE, SYMBOL, Timeframe.MINUTES_15)
+    costs = ExecutionCostConfiguration(
+        spread_bps=Decimal(2), slippage_bps=Decimal(2), fee_bps=Decimal(10)
+    )
+    runner = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(candles))
+
+    boundary = runner.run(decision, (), series, costs, end=opening.close_time)
+    boundary.validate()
+    assert boundary.status is BreakoutRetestReplayStatus.REPLAYED
+    assert boundary.entry_fill is not None
+    assert boundary.entry_request.side is OrderSide.SELL
+    assert boundary.entry_fill.fill_at == decision.identity.observed_at == opening.open_time
+    assert boundary.entry_fill.reference_open_price == opening.open
+    assert boundary.entry_fill.fill_price < intent.stop_basis
+    assert boundary.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+
+    delayed_costs = replace(costs, latency=timedelta(seconds=1))
+    exhausted = runner.run(decision, (), series, delayed_costs, end=opening.close_time)
+    assert exhausted.status is BreakoutRetestReplayStatus.ENTRY_UNFILLED
+    assert exhausted.entry_fill is None
+    assert exhausted.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    delayed = runner.run(decision, (), series, delayed_costs, end=subsequent.close_time)
+    assert delayed.entry_fill is not None
+    assert delayed.entry_fill.fill_at == subsequent.open_time
+    assert delayed.entry_fill.reference_open_price == subsequent.open
+
+    touched = replace(opening, high=max(opening.high, intent.stop_basis + Decimal(1)))
+    path = tuple(touched if candle.open_time == opening.open_time else candle for candle in candles)
+    context = next(
+        item.context
+        for item in corpus.historical_contexts
+        if item.context.observed_at == opening.close_time
+    )
+    sealed = HistoricalStrategyContextObservation(replace(context, candle_15m=touched))
+    closed = BreakoutRetestFixed2RReplayRunner(_SyntheticSource(path)).run(
+        decision, (sealed,), series, costs, end=subsequent.close_time
+    )
+    closed.validate()
+    assert closed.status is BreakoutRetestReplayStatus.REPLAYED
+    assert closed.entry_fill is not None
+    assert closed.entry_fill.fill_at == opening.open_time
+    assert closed.exit_cause is BreakoutRetestExitCause.PROTECTIVE_STOP
+    assert closed.trigger_candle_open_at == opening.open_time
+    assert closed.exit_trigger_at == opening.close_time
+    assert closed.exit_request is not None and closed.exit_request.side is OrderSide.BUY
+    assert closed.exit_request.created_at == opening.close_time
+    assert closed.exit_fill is not None and closed.exit_fill.fill_at == subsequent.open_time
+    assert len(closed.accounting_events) == 2
+    assert closed.position_closed and closed.final_position is not None
+    assert closed.final_position.quantity == 0
+    assert closed.realized_net_pnl == closed.final_position.cumulative_net_realized_pnl
+    assert closed.entry_chronology_policy_version == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+
+
 def test_sealed_report_population_and_locked_run_gate(tmp_path: Path) -> None:
     store = _store(tmp_path, continuation=16)
     end = START + timedelta(hours=204)
@@ -301,6 +468,10 @@ def test_sealed_report_population_and_locked_run_gate(tmp_path: Path) -> None:
     assert report.economics.outcome_denominator == len(report.outcomes)
     assert report.overlap_audit.replayed_count == report.population.replayed_count
     assert report.to_json() == report.to_json()
+    with pytest.raises(BreakoutRetestScreenError, match="new chronology"):
+        validate_frozen_run(
+            cast(LockedWeexResearchCorpusStore, store), corpus, report, FROZEN_RUNS[0]
+        )
     object.__setattr__(report, "unit_status", BreakoutRetestUnitStatus.POSITIVE)
     with pytest.raises(BreakoutRetestScreenError, match="integrity"):
         report.validate()

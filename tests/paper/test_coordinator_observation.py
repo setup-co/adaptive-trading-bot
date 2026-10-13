@@ -14,7 +14,13 @@ from adaptive_trading_bot.accounting import (
     PositionAccountingTransitionBatch,
 )
 from adaptive_trading_bot.admission import PortfolioAdmissionCandidate
-from adaptive_trading_bot.domain import TradingSymbol
+from adaptive_trading_bot.backtest import (
+    BacktestExecutionSimulator,
+    ExecutionSeries,
+    MarketOrderRequest,
+    OrderSide,
+)
+from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.execution import (
     SimulatedExecutionCostConfiguration,
     SimulatedExecutionSide,
@@ -156,6 +162,85 @@ def test_one_eligible_buy_converts_reservation_to_accounted_open_position() -> N
     assert result.active_pending_reservations.reservations == ()
     assert state.reservations == ()
     assert state.open_positions == result.open_positions == (opened,)
+
+
+@pytest.mark.parametrize(
+    "action", (CandidateAction.LONG_CANDIDATE, CandidateAction.SHORT_CANDIDATE)
+)
+def test_offline_backtest_paper_entry_parity_requires_supplied_boundary_observation(
+    action: CandidateAction,
+) -> None:
+    item = candidate(action=action)
+    costs = SimulatedExecutionCostConfiguration(
+        spread_bps=Decimal(2), slippage_bps=Decimal(3), fee_bps=Decimal(4)
+    )
+    opening = Candle(
+        BTC,
+        Timeframe.MINUTES_15,
+        NOW,
+        NOW + timedelta(minutes=15),
+        Decimal(101),
+        Decimal(102),
+        Decimal(100),
+        Decimal(101),
+        Decimal(10),
+    )
+
+    class OneCandleSource:
+        def load(
+            self, series: ExecutionSeries, *, start: datetime, end: datetime
+        ) -> tuple[Candle, ...]:
+            assert series == ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15)
+            return (opening,) if start <= opening.open_time < end else ()
+
+    historical = (
+        BacktestExecutionSimulator(OneCandleSource())
+        .run(
+            ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15),
+            costs,
+            (
+                MarketOrderRequest(
+                    "parity-entry",
+                    item.intent.authorized_at,
+                    BTC,
+                    OrderSide.BUY if item.intent.side is EntrySide.BUY else OrderSide.SELL,
+                    item.intent.quantity,
+                ),
+            ),
+            start=NOW,
+            end=opening.close_time,
+        )
+        .fills[0]
+    )
+    paper = coordinator()
+    paper.start_batch((item,))
+    supplied = observation(BTC, NOW, price=opening.open)
+    direct = PaperOrderSimulator().observe(
+        PaperOrderSimulator().start(item.journal_entry, item.intent, costs), supplied
+    )
+    accounted = paper.observe_batch((supplied,))
+    assert direct.fill is not None
+    assert len(accounted.newly_filled) == len(accounted.accounting_transitions) == 1
+    paper_fill = direct.fill
+    opened = accounted.newly_filled[0]
+    assert historical.fill_at == paper_fill.fill_at == opened.fill_at == NOW
+    assert historical.reference_open_price == paper_fill.reference_price == opening.open
+    assert historical.fill_price == paper_fill.fill_price == opened.fill_price
+    assert historical.fee_quote == paper_fill.fee_quote == opened.fee_quote
+    assert historical.quantity == paper_fill.quantity == opened.quantity
+    assert accounted.accounting_positions[0][1].average_entry_price == opened.fill_price
+    committed = paper.snapshot()
+    with pytest.raises(PaperPortfolioBatchError, match="strictly advance"):
+        paper.observe_batch((supplied,))
+    assert paper.snapshot() == committed
+
+    later = coordinator()
+    later.start_batch((item,))
+    later_result = later.observe_batch(
+        (observation(BTC, NOW + timedelta(minutes=15), price=Decimal(103)),)
+    )
+    assert later_result.newly_filled[0].fill_at == NOW + timedelta(minutes=15)
+    assert later_result.newly_filled[0].fill_price != historical.fill_price
 
 
 def test_sell_entry_creates_exact_short_from_shared_simulation() -> None:

@@ -19,6 +19,11 @@ from adaptive_trading_bot.backtest import (
     UnfilledReason,
 )
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
+from adaptive_trading_bot.domain.entry_chronology import (
+    CAUSAL_ENTRY_CHRONOLOGY_V2,
+    entry_source_start,
+    validate_entry_fill_chronology,
+)
 from adaptive_trading_bot.storage import ParquetHistoricalCandleStore, SourceId
 
 START = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
@@ -173,6 +178,74 @@ def test_first_open_at_or_after_eligibility_is_selected(
 
     assert result.fills[0].fill_at == candle(expected_index).open_time
     assert result.fills[0].reference_open_price == candle(expected_index).open
+
+
+def test_versioned_entry_chronology_preserves_bounds_and_actual_times(tmp_path: Path) -> None:
+    assert CAUSAL_ENTRY_CHRONOLOGY_V2 == "CAUSAL_ENTRY_CHRONOLOGY_V2"
+    series = ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15)
+    candles = (candle(0), candle(1), candle(2), candle(3), candle(4))
+    store = ParquetHistoricalCandleStore(tmp_path)
+    store.merge(SOURCE, candles)
+    simulator = BacktestExecutionSimulator(HistoricalExecutionSource(store))
+    for created_at, latency, expected_index in (
+        (START + timedelta(minutes=15), timedelta(), 1),
+        (START + timedelta(minutes=15), timedelta(seconds=1), 2),
+        (START + timedelta(minutes=15, seconds=1), timedelta(), 2),
+        (START + timedelta(minutes=15), timedelta(minutes=31), 4),
+    ):
+        start = entry_source_start(
+            decision_at=START + timedelta(minutes=15),
+            authorized_at=created_at,
+            requested_start=START + timedelta(minutes=15),
+            end=candles[-1].close_time,
+        )
+        result = simulator.run(
+            series,
+            ExecutionCostConfiguration(latency=latency),
+            (order(created_at=created_at),),
+            start=start,
+            end=candles[-1].close_time,
+        )
+        fill = result.fills[0]
+        assert fill.fill_at == candles[expected_index].open_time
+        validate_entry_fill_chronology(
+            decision_at=START + timedelta(minutes=15),
+            authorized_at=created_at,
+            latency=latency,
+            eligible_at=fill.eligible_at,
+            fill_at=fill.fill_at,
+        )
+    boundary_only = simulator.run(
+        series,
+        ExecutionCostConfiguration(),
+        (order(created_at=START + timedelta(minutes=15)),),
+        start=START + timedelta(minutes=15),
+        end=START + timedelta(minutes=30),
+    )
+    delayed_only = simulator.run(
+        series,
+        ExecutionCostConfiguration(latency=timedelta(seconds=1)),
+        (order(created_at=START + timedelta(minutes=15)),),
+        start=START + timedelta(minutes=15),
+        end=START + timedelta(minutes=30),
+    )
+    assert boundary_only.fills[0].fill_at == START + timedelta(minutes=15)
+    assert delayed_only.filled_count == 0 and delayed_only.unfilled_count == 1
+    with pytest.raises(ValueError, match="chronology"):
+        entry_source_start(
+            decision_at=START + timedelta(minutes=15),
+            authorized_at=START,
+            requested_start=START,
+            end=START + timedelta(minutes=15),
+        )
+    with pytest.raises(ValueError, match="chronology"):
+        validate_entry_fill_chronology(
+            decision_at=START,
+            authorized_at=START,
+            latency=timedelta(seconds=1),
+            eligible_at=START + timedelta(seconds=1),
+            fill_at=START,
+        )
 
 
 @pytest.mark.parametrize("side", [OrderSide.BUY, OrderSide.SELL])

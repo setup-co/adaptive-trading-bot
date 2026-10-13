@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.domain.entry_chronology import CAUSAL_ENTRY_CHRONOLOGY_V2
 from adaptive_trading_bot.journal.decision import DecisionIdentity
 from adaptive_trading_bot.strategies.core import (
     CandidateAction,
@@ -25,9 +26,9 @@ from adaptive_trading_bot.strategies.core import (
     StrategyEvaluationContext,
 )
 
-_EXIT_CONTEXT_SCHEMA_VERSION = "1.0.0"
-_EXIT_EVALUATION_SCHEMA_VERSION = "1.0.0"
-_EXIT_INTEGRITY_SEAL_VERSION = "1.0.0"
+_EXIT_CONTEXT_SCHEMA_VERSION = "2.0.0"
+_EXIT_EVALUATION_SCHEMA_VERSION = "2.0.0"
+_EXIT_INTEGRITY_SEAL_VERSION = "2.0.0"
 _HOLD_ONLY_EXIT_POLICY_VERSION = "hold-only-exit-v1"
 
 
@@ -119,6 +120,7 @@ class PositionExitEvaluationContext:
     lifecycle_status: PositionLifecycleStatus
     risk_policy_version: str
     safety_policy_version: str
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     context_schema_version: str = field(init=False, default=_EXIT_CONTEXT_SCHEMA_VERSION)
     context_integrity_seal: str = field(init=False, repr=False)
 
@@ -135,6 +137,8 @@ class PositionExitEvaluationContext:
     def _validate_fields(self) -> None:
         if self.context_schema_version != _EXIT_CONTEXT_SCHEMA_VERSION:
             raise PositionExitValidationError("exit context schema version mismatch")
+        if self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2:
+            raise PositionExitValidationError("exit context entry chronology policy mismatch")
         if not isinstance(self.position_identity, OpenPositionIdentity):
             raise TypeError("position_identity must be an OpenPositionIdentity")
         self.position_identity.validate()
@@ -172,7 +176,7 @@ class PositionExitEvaluationContext:
         decision_at = require_utc(identity.observed_at, field="originating decision observed_at")
         entry_fill_at = require_utc(self.entry_fill_at, field="position entry_fill_at")
         observed_at = require_utc(self.observed_at, field="exit evaluation observed_at")
-        if not decision_at < entry_fill_at <= observed_at:
+        if not decision_at <= entry_fill_at < observed_at:
             raise PositionExitValidationError("exit evaluation entry chronology is invalid")
         for name, value in (
             ("entry_fill_price", self.entry_fill_price),

@@ -23,6 +23,7 @@ from adaptive_trading_bot.backtest import (
 from adaptive_trading_bot.config import get_settings
 from adaptive_trading_bot.domain import Timeframe, TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.domain.entry_chronology import CAUSAL_ENTRY_CHRONOLOGY_V2
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders import (
     EntryOrderIntentAuthorizer,
@@ -49,10 +50,10 @@ from adaptive_trading_bot.storage import (
     SourceId,
 )
 
-_CONFIGURATION_SCHEMA_VERSION = "2.0.0"
-_OBSERVATION_SCHEMA_VERSION = "2.0.0"
-_REPORT_SCHEMA_VERSION = "2.0.0"
-_ARTIFACT_SCHEMA_VERSION = "2.0.0"
+_CONFIGURATION_SCHEMA_VERSION = "3.0.0"
+_OBSERVATION_SCHEMA_VERSION = "3.0.0"
+_REPORT_SCHEMA_VERSION = "3.0.0"
+_ARTIFACT_SCHEMA_VERSION = "3.0.0"
 _STRATIFICATION_POLICY_VERSION = "2.0.0"
 _OVERLAP_POLICY_VERSION = "1.0.0"
 _INTEGRITY_SEAL_VERSION = "1.0.0"
@@ -100,6 +101,7 @@ class TrendPullbackExitRobustnessConfiguration:
     source_corpus_digest: str
     execution_costs: ExecutionCostConfiguration
     follow_up_duration: timedelta
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     configuration_schema_version: str = field(init=False, default=_CONFIGURATION_SCHEMA_VERSION)
     report_schema_version: str = field(init=False, default=_REPORT_SCHEMA_VERSION)
     stratification_policy_version: str = field(init=False, default=_STRATIFICATION_POLICY_VERSION)
@@ -321,6 +323,7 @@ class TrendPullbackExitRobustnessReport:
     chronological_stability: ChronologicalStabilitySummary = field(init=False)
     overlap_audit: OverlapAudit = field(init=False)
     report_digest: str = field(init=False)
+    entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     report_schema_version: str = field(init=False, default=_REPORT_SCHEMA_VERSION)
     is_trading_authority: bool = field(init=False, default=False)
     is_portfolio_performance: bool = field(init=False, default=False)
@@ -481,6 +484,7 @@ def _validate_configuration(configuration: TrendPullbackExitRobustnessConfigurat
     if (
         configuration.configuration_schema_version != _CONFIGURATION_SCHEMA_VERSION
         or configuration.report_schema_version != _REPORT_SCHEMA_VERSION
+        or configuration.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
         or configuration.stratification_policy_version != _STRATIFICATION_POLICY_VERSION
         or configuration.overlap_clustering_policy_version != _OVERLAP_POLICY_VERSION
     ):
@@ -532,6 +536,7 @@ def _validate_observation(observation: PairedExitRobustnessObservation) -> None:
         or result.execution_series.timeframe is not Timeframe.MINUTES_15
         or not result.start <= observation.identity.observed_at < result.end
         or result.end != observation.replay_end
+        or result.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
         or observation.replay_end <= observation.identity.observed_at
     ):
         raise TrendPullbackExitRobustnessError("paired observation provenance is inconsistent")
@@ -551,6 +556,9 @@ def _validate_report(report: TrendPullbackExitRobustnessReport) -> None:
     report.configuration.validate()
     if (
         report.report_schema_version != _REPORT_SCHEMA_VERSION
+        or report.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
+        or report.configuration.entry_chronology_policy_version
+        != report.entry_chronology_policy_version
         or report.is_trading_authority
         or report.is_portfolio_performance
         or report.contains_independence_claim
@@ -566,6 +574,8 @@ def _validate_report(report: TrendPullbackExitRobustnessReport) -> None:
             observation.source_corpus_digest != report.source_corpus_digest
             or observation.configuration_digest != report.configuration.configuration_digest
             or observation.paired_result.execution_costs != report.configuration.execution_costs
+            or observation.paired_result.entry_chronology_policy_version
+            != report.entry_chronology_policy_version
             or observation.replay_end - observation.identity.observed_at
             != report.configuration.follow_up_duration
         ):
