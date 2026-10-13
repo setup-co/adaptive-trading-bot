@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from adaptive_trading_bot.backtest import (
     AccountingFillBatch,
     BacktestExecutionSimulator,
@@ -100,6 +102,70 @@ def test_parquet_execution_fills_feed_deterministic_accounting_and_causal_mark(
     assert performance.completed_trades[0].gross_realized_pnl == Decimal("19.450")
     assert performance.completed_trades[0].allocated_fees == Decimal("0.439900")
     assert performance.completed_trades[0].net_pnl == Decimal("19.010100")
+
+
+@pytest.mark.parametrize(
+    ("entry_side", "exit_side", "exit_open", "entry_fill", "exit_fill", "fees", "net"),
+    [
+        (
+            OrderSide.BUY,
+            OrderSide.SELL,
+            90,
+            Decimal("100.03"),
+            Decimal("89.973"),
+            Decimal("0.190003"),
+            Decimal("-10.247003"),
+        ),
+        (
+            OrderSide.SELL,
+            OrderSide.BUY,
+            110,
+            Decimal("99.97"),
+            Decimal("110.033"),
+            Decimal("0.210003"),
+            Decimal("-10.273003"),
+        ),
+    ],
+)
+def test_two_two_ten_bps_gap_exit_keeps_actual_fill_and_fee_arithmetic(
+    tmp_path: Path,
+    entry_side: OrderSide,
+    exit_side: OrderSide,
+    exit_open: int,
+    entry_fill: Decimal,
+    exit_fill: Decimal,
+    fees: Decimal,
+    net: Decimal,
+) -> None:
+    # Synthetic stop basis is 95 for LONG / 105 for SHORT: nominal stop
+    # distance is 5, but the gap-open market exit can realize a larger loss.
+    store = ParquetHistoricalCandleStore(tmp_path)
+    candles = (candle(0, 100, 100), candle(1, exit_open, exit_open))
+    store.merge(SOURCE, candles)
+    costs = ExecutionCostConfiguration(
+        spread_bps=Decimal(2), slippage_bps=Decimal(2), fee_bps=Decimal(10)
+    )
+    requests = (
+        MarketOrderRequest("entry", START, SYMBOL, entry_side, Decimal(1)),
+        MarketOrderRequest("exit", candles[1].open_time, SYMBOL, exit_side, Decimal(1)),
+    )
+    execution = BacktestExecutionSimulator(HistoricalExecutionSource(store)).run(
+        ExecutionSeries(SOURCE, SYMBOL, Timeframe.MINUTES_15),
+        costs,
+        requests,
+        start=START,
+        end=candles[-1].close_time,
+    )
+    accounting = PositionAccountingEngine()
+    for fill in execution.fills:
+        accounting.process(AccountingFillBatch(fill.fill_at, (fill,)))
+    final = accounting.snapshot(SYMBOL, candles[-1].close_time)
+
+    assert tuple(fill.fill_price for fill in execution.fills) == (entry_fill, exit_fill)
+    assert final.cumulative_gross_realized_pnl == net + fees
+    assert final.cumulative_fees == fees
+    assert final.cumulative_net_realized_pnl == net
+    assert net < Decimal(-5)
 
 
 def test_parquet_to_performance_handles_partial_crossing_wins_losses_and_fees(

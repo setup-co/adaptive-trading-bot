@@ -4,7 +4,10 @@ Safety-first, explainable, adaptive crypto trading research and execution platfo
 
 ## Current status
 
-**Version 1 development — Phase 1: Project Foundation**
+**Version 1 research and validation in progress.** The three V1 candidate families,
+deterministic Replay/Backtest, Risk/Safety, journal, Paper simulation, and read-only
+Dashboard boundaries exist, but the accepted signal-edge screens have not established
+a sustainable trading edge or representative leveraged-perpetual Live readiness.
 
 Real-money live trading is **disabled by design** during V1 development.
 
@@ -28,7 +31,9 @@ Before changing code, read:
 - Independent Risk Manager
 - Backtest / Replay / Paper / Shadow before controlled Live
 - Statistical/Bayesian Experience Engine before ML
-- Hybrid Fundamental Analysis
+- OpenAI-first, cost-aware Fundamental AI architecture (runtime activation deferred)
+- WEEX perpetual futures as the primary V1 target; leverage is bounded,
+  predeclared, and Risk-owned, not a strategy-selected parameter
 - `NO_TRADE` is a valid first-class decision
 
 ## Development workflow
@@ -252,7 +257,9 @@ mutation in place. The complete qualification report is under `docs/research/`.
 
 - No committed secrets.
 - No withdrawal permission required.
-- No leverage in V1.
+- No leverage in the current unleveraged historical signal-edge screens; the
+  Master Plan permits only bounded, versioned, Risk-owned leverage after
+  representative margin, funding, MARK/liquidation, and account-survival gates.
 - No self-modifying strategy code.
 - No LLM direct order execution.
 - No order may bypass Risk Manager.

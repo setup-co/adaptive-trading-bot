@@ -440,6 +440,41 @@ def test_incompatible_context_invalidates_and_clears_history(
     assert state is not None and state.active_range is None and state.pivot_history == ()
 
 
+def test_temporary_directional_context_clears_pivots_but_retains_seen_identities() -> None:
+    # Synthetic expectation: continuous LOW/HIGH/LOW/HIGH qualifies, while the
+    # identical fourth pivot on an incompatible bar is consumed but not retained.
+    sequence = (
+        (PivotKind.LOW, Decimal(20)),
+        (PivotKind.HIGH, Decimal(40)),
+        (PivotKind.LOW, Decimal(20)),
+        (PivotKind.HIGH, Decimal(40)),
+    )
+    continuous = ValidatedRangeDetector()
+    interrupted = ValidatedRangeDetector()
+    for index, (kind, price) in enumerate(sequence, start=1):
+        context = _context(index, ((kind, price, index),))
+        continuous_result = continuous.process(context)
+        if index == 4:
+            context = _context(index, ((kind, price, index),), bias=HigherTimeframeBias.UP)
+        interrupted_result = interrupted.process(context)
+
+    assert continuous_result.status is RangeStatus.VALID_RANGE
+    assert interrupted_result.status is RangeStatus.NOT_RANGE
+    assert interrupted_result.reasons == (RangeReasonCode.HTF_DIRECTIONAL,)
+    state = interrupted.state_for(SOURCE, BTC)
+    assert state is not None
+    assert state.pivot_history == () and state.active_range is None
+    assert len(state.seen_pivot_identities) == 4
+
+    returned = interrupted.process(_context(5))
+    assert returned.status is RangeStatus.INSUFFICIENT_DATA
+    assert returned.reasons == (RangeReasonCode.NEED_FOUR_CONFIRMED_PIVOTS,)
+    with pytest.raises(RangeStateError, match="duplicate"):
+        interrupted.process(_context(6, ((PivotKind.HIGH, Decimal(40), 4),)))
+    after = interrupted.state_for(SOURCE, BTC)
+    assert after is not None and after.last_observed_at == _context(5).observed_at
+
+
 @pytest.mark.parametrize(
     ("close", "reason"),
     [

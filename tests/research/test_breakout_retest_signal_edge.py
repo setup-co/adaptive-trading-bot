@@ -191,6 +191,10 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
                 changed[candle.close_time] = replace(
                     candle, open=Decimal(900), high=Decimal(904), low=Decimal(899)
                 )
+            elif index == 802 and kind == "gap-stop":
+                changed[candle.close_time] = replace(candle, low=Decimal(900))
+            elif index == 803 and kind == "gap-stop":
+                changed[candle.close_time] = replace(candle, open=Decimal(850), low=Decimal(840))
             elif index >= 802 and kind in {"none", "unfilled"}:
                 changed[candle.close_time] = replace(
                     candle,
@@ -259,6 +263,14 @@ def test_fixed_2r_trigger_and_entry_boundary_cases(tmp_path: Path) -> None:
     assert exit_unfilled.exit_cause is BreakoutRetestExitCause.FIXED_2R_TARGET
     assert exit_unfilled.exit_unfilled is not None
     assert not exit_unfilled.position_closed
+    gap_stop = scenario("gap-stop")
+    assert gap_stop.exit_cause is BreakoutRetestExitCause.PROTECTIVE_STOP
+    assert gap_stop.exit_trigger_at == original[802].close_time
+    assert gap_stop.exit_fill is not None
+    assert gap_stop.stop_basis is not None
+    assert gap_stop.exit_fill.reference_open_price == Decimal(850)
+    assert gap_stop.exit_fill.fill_price < gap_stop.stop_basis
+    assert gap_stop.realized_net_pnl is not None and gap_stop.realized_net_pnl < 0
     with pytest.raises(ValueError, match="omit"):
         BreakoutRetestFixed2RReplayRunner(_SyntheticSource(original)).run(
             decision, (), series, costs, end=end
