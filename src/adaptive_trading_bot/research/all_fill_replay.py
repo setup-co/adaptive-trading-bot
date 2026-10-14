@@ -30,7 +30,6 @@ from adaptive_trading_bot.backtest import (
 from adaptive_trading_bot.domain import Candle, Timeframe
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.domain.entry_chronology import entry_source_start
-from adaptive_trading_bot.execution import price_simulated_market_fill
 from adaptive_trading_bot.journal import DecisionIdentity, DecisionJournalEntry
 from adaptive_trading_bot.orders import EntryOrderIntentAuthorizer, OrderIntentAuthorizationStatus
 from adaptive_trading_bot.research.breakout_retest_replay import (
@@ -102,6 +101,12 @@ def _scenario(costs: ExecutionCostConfiguration) -> AllFillScenario:
     if facts == (Decimal(4), Decimal(4), Decimal(20), timedelta(seconds=1)):
         return AllFillScenario.COMBINED_STRESS
     raise AllFillReplayError("costs are outside the frozen two-scenario protocol")
+
+
+def _snapshot_digest(candles: tuple[Candle, ...]) -> str:
+    return _integrity_seal(
+        "research-all-fill-execution-snapshot", candles, excluded_names=frozenset()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +274,8 @@ class AllFillReplayResult:
     entry_intent: EntryIntentProvenance | None
     entry_unfilled: UnfilledOrder | None
     branches: tuple[AllFillBranch, ...]
+    execution_snapshot: tuple[Candle, ...]
+    execution_snapshot_digest: str
     legacy_replay: (
         PairedTrendPullbackExitReplayResult
         | BreakoutRetestReplayResult
@@ -305,6 +312,10 @@ class AllFillReplayResult:
         require_utc(self.start, field="all-fill start")
         require_utc(self.end, field="all-fill end")
         self.costs.validate()
+        if not isinstance(self.execution_snapshot, tuple) or not compare_digest(
+            self.execution_snapshot_digest, _snapshot_digest(self.execution_snapshot)
+        ):
+            raise AllFillReplayError("execution snapshot digest differs from original evidence")
         if (
             self.schema_version != SCHEMA_VERSION
             or self.policy_version != POLICY_VERSION
@@ -327,6 +338,7 @@ class AllFillReplayResult:
                 or self.legacy_replay is not None
                 or self.branches
                 or self.entry_unfilled is not None
+                or self.execution_snapshot
             ):
                 raise AllFillReplayError("non-admitted decision has simulated evidence")
             if self.status is not _non_admitted_status(self.decision):
@@ -338,18 +350,86 @@ class AllFillReplayResult:
             raise AllFillReplayError("entry provenance differs from authorizer")
         if self.legacy_replay is None:
             raise AllFillReplayError("authorized decision lacks legacy replay provenance")
-        self.legacy_replay.validate()
-        if self.legacy_replay.entry_intent != self.entry_intent:
+        legacy = self.legacy_replay
+        if (
+            (
+                self.family is AllFillFamily.TREND_PULLBACK
+                and not isinstance(legacy, PairedTrendPullbackExitReplayResult)
+            )
+            or (
+                self.family is AllFillFamily.BREAKOUT_RETEST
+                and not isinstance(legacy, BreakoutRetestReplayResult)
+            )
+            or (
+                self.family is AllFillFamily.RANGE_MEAN_REVERSION
+                and not isinstance(legacy, RangeMeanReversionReplayResult)
+            )
+        ):
+            raise AllFillReplayError("legacy replay family differs from decision")
+        legacy.validate()
+        legacy_identity = (
+            legacy.originating_decision_identity
+            if isinstance(legacy, PairedTrendPullbackExitReplayResult)
+            else legacy.decision_identity
+        )
+        if (
+            legacy.entry_intent != self.entry_intent
+            or legacy_identity != self.decision.identity
+            or legacy.execution_series != self.series
+            or legacy.execution_costs != self.costs
+            or legacy.end != self.end
+            or (
+                isinstance(legacy, PairedTrendPullbackExitReplayResult)
+                and legacy.start != self.start
+            )
+            or (
+                not isinstance(legacy, PairedTrendPullbackExitReplayResult)
+                and self.start != self.decision.identity.observed_at
+            )
+        ):
             raise AllFillReplayError("legacy replay entry provenance mismatch")
+        entry_request = (
+            legacy.entry_order
+            if isinstance(legacy, PairedTrendPullbackExitReplayResult)
+            else legacy.entry_request
+        )
+        source_start = entry_source_start(
+            decision_at=self.entry_intent.decision_identity.observed_at,
+            authorized_at=self.entry_intent.authorized_at,
+            requested_start=(
+                self.start
+                if self.family is AllFillFamily.TREND_PULLBACK
+                else self.entry_intent.decision_identity.observed_at
+            ),
+            end=self.end,
+        )
+        bound = _BoundExecutionCandleSource(
+            self.series, source_start, self.end, self.execution_snapshot
+        )
+        entry_execution = BacktestExecutionSimulator(bound).run(
+            self.series, self.costs, (entry_request,), start=source_start, end=self.end
+        )
+        if entry_execution.fills != (
+            () if legacy.entry_fill is None else (legacy.entry_fill,)
+        ) or entry_execution.unfilled_orders != (
+            () if legacy.entry_unfilled is None else (legacy.entry_unfilled,)
+        ):
+            raise AllFillReplayError("entry outcome differs from bound execution snapshot")
         if self.entry_unfilled is not None:
             if (
                 self.status is not AllFillStatus.ENTRY_UNFILLED
                 or self.branches
                 or self.entry_unfilled != self.legacy_replay.entry_unfilled
+                or self.legacy_replay.entry_fill is not None
             ):
                 raise AllFillReplayError("unfilled entry has accounted branch")
             return
-        if not self.branches or self.status is AllFillStatus.ENTRY_UNFILLED:
+        if (
+            not self.branches
+            or self.status is AllFillStatus.ENTRY_UNFILLED
+            or self.legacy_replay.entry_fill is None
+            or self.legacy_replay.entry_unfilled is not None
+        ):
             raise AllFillReplayError("filled entry lacks accounted branches")
         if self.family is AllFillFamily.TREND_PULLBACK:
             if tuple(branch.label for branch in self.branches) != (
@@ -365,6 +445,8 @@ class AllFillReplayResult:
                 raise AllFillReplayError("branch risk differs from authorized intent")
             if branch.entry_fill != self.legacy_replay.entry_fill:
                 raise AllFillReplayError("accounted entry differs from replay fill")
+            if branch.final_position.observed_at != self.end:
+                raise AllFillReplayError("accounting snapshot differs from declared end")
         if len({branch.entry_fill for branch in self.branches}) != 1:
             raise AllFillReplayError("paired branches have different entry fills")
         if self.status is not self.branches[-1].status:
@@ -385,6 +467,12 @@ class AllFillReplayResult:
                 if (
                     source_branch is None
                     or branch.recovery is not None
+                    or branch.status
+                    is not (
+                        AllFillStatus.ORDINARY_CLOSED
+                        if source_branch.position_closed
+                        else AllFillStatus.ORDINARY_OPEN
+                    )
                     or (
                         branch.exit_request != source_branch.exit_request
                         or branch.exit_fill != source_branch.exit_fill
@@ -394,6 +482,20 @@ class AllFillReplayResult:
                     )
                 ):
                     raise AllFillReplayError("ordinary branch differs from legacy authority")
+                if branch.exit_request is not None:
+                    exit_execution = BacktestExecutionSimulator(bound).run(
+                        self.series,
+                        self.costs,
+                        (branch.exit_request,),
+                        start=source_start,
+                        end=self.end,
+                    )
+                    if exit_execution.fills != (
+                        () if branch.exit_fill is None else (branch.exit_fill,)
+                    ) or exit_execution.unfilled_orders != (
+                        () if branch.exit_unfilled is None else (branch.exit_unfilled,)
+                    ):
+                        raise AllFillReplayError("ordinary exit differs from bound snapshot")
         elif any(branch.recovery is None for branch in self.branches):
             raise AllFillReplayError("invalidated entry lacks accounted recovery")
         else:
@@ -413,40 +515,33 @@ class AllFillReplayResult:
                 if branch.recovery is None:
                     raise AllFillReplayError("invalidated entry lacks recovery authorization")
                 if (
-                    branch.recovery.sealed_midpoint != expected_midpoint
+                    branch.recovery.decision_identity != self.decision.identity
+                    or branch.recovery.entry_intent != self.entry_intent
+                    or branch.recovery.sealed_midpoint != expected_midpoint
                     or branch.recovery.reasons != expected_reasons
                 ):
                     raise AllFillReplayError("recovery geometry differs from sealed entry audit")
-                if branch.exit_fill is not None:
-                    fill = branch.exit_fill
-                    expected_quote = price_simulated_market_fill(
-                        side=branch.recovery.request.side,
-                        quantity=branch.recovery.request.quantity,
-                        reference_price=fill.reference_open_price,
-                        costs=self.costs,
-                    )
-                    if (
-                        fill.source_id != self.series.source_id
-                        or fill.execution_timeframe is not self.series.timeframe
-                        or fill.created_at != branch.recovery.request.created_at
-                        or fill.eligible_at
-                        != branch.recovery.request.created_at + self.costs.latency
-                        or fill.execution_candle_open_time != fill.fill_at
-                        or fill.fill_at < fill.eligible_at
-                        or fill.fill_price != expected_quote.fill_price
-                        or fill.fee_quote != expected_quote.fee_quote
-                        or fill.spread_bps != self.costs.spread_bps
-                        or fill.slippage_bps != self.costs.slippage_bps
-                        or fill.fee_bps != self.costs.fee_bps
-                    ):
-                        raise AllFillReplayError("recovery fill differs from shared simulator")
-                elif (
-                    branch.exit_unfilled is None
-                    or branch.exit_unfilled.order != branch.recovery.request
-                    or branch.exit_unfilled.eligible_at
-                    != branch.recovery.request.created_at + self.costs.latency
+                recovery_execution = BacktestExecutionSimulator(
+                    _AfterDetectionSource(bound, branch.recovery.detected_at)
+                ).run(
+                    self.series,
+                    self.costs,
+                    (branch.recovery.request,),
+                    start=source_start,
+                    end=self.end,
+                )
+                if recovery_execution.fills != (
+                    () if branch.exit_fill is None else (branch.exit_fill,)
+                ) or recovery_execution.unfilled_orders != (
+                    () if branch.exit_unfilled is None else (branch.exit_unfilled,)
                 ):
-                    raise AllFillReplayError("recovery-unfilled audit differs from request")
+                    raise AllFillReplayError("recovery differs from bound execution snapshot")
+            if len(self.branches) == 2 and (
+                self.branches[0].recovery != self.branches[1].recovery
+                or self.branches[0].exit_fill != self.branches[1].exit_fill
+                or self.branches[0].exit_unfilled != self.branches[1].exit_unfilled
+            ):
+                raise AllFillReplayError("paired recovery execution differs")
 
 
 def _family(decision: DecisionJournalEntry[object, object]) -> AllFillFamily:
@@ -589,6 +684,8 @@ class ResearchAllFillReplayRunner:
                 None,
                 None,
                 (),
+                (),
+                _snapshot_digest(()),
                 None,
             )
         intent = authorization.intent
@@ -647,6 +744,8 @@ class ResearchAllFillReplayRunner:
                 provenance,
                 legacy.entry_unfilled,
                 (),
+                bound.candles,
+                _snapshot_digest(bound.candles),
                 legacy,
             )
         fill = legacy.entry_fill
@@ -752,6 +851,8 @@ class ResearchAllFillReplayRunner:
             provenance,
             None,
             tuple(branches),
+            bound.candles,
+            _snapshot_digest(bound.candles),
             legacy,
         )
 
@@ -786,6 +887,9 @@ class AllFillReportCell:
     unresolved_count: int
     incurred_fees: Decimal
     closed_net_r_total: Decimal
+    mean_closed_net_r: Decimal | None
+    median_closed_net_r: Decimal | None
+    closed_r_profit_factor: Decimal | None
 
 
 def _row_key(
@@ -811,6 +915,28 @@ def _row_key(
         row.cohort,
         row.regime,
     )
+
+
+def _closed_distribution(
+    values: tuple[Decimal, ...],
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    """Describe only closed approved-risk R, never unresolved exposure."""
+
+    with localcontext(_CONTEXT):
+        if not values:
+            return None, None, None
+        ordered = sorted(values)
+        mean = sum(values, Decimal(0)) / Decimal(len(values))
+        middle = len(ordered) // 2
+        median = (
+            ordered[middle]
+            if len(ordered) % 2
+            else (ordered[middle - 1] + ordered[middle]) / Decimal(2)
+        )
+        positive = sum((value for value in values if value > 0), Decimal(0))
+        negative = -sum((value for value in values if value < 0), Decimal(0))
+        factor = positive / negative if negative > 0 else None
+        return mean, median, factor
 
 
 def _metrics(
@@ -849,22 +975,14 @@ def _metrics(
                 paired_both_closed += 1
     with localcontext(_CONTEXT):
         fees = sum(fee_values, Decimal(0))
-        profit = sum((value for value in closed_r if value > 0), Decimal(0))
-        loss_magnitude = -sum((value for value in closed_r if value < 0), Decimal(0))
-        mean = sum(closed_r, Decimal(0)) / Decimal(len(closed_r)) if closed_r else None
-        ordered_r = sorted(closed_r)
-        if not ordered_r:
-            median = None
-        elif len(ordered_r) % 2:
-            median = ordered_r[len(ordered_r) // 2]
-        else:
-            median = (
-                ordered_r[len(ordered_r) // 2 - 1] + ordered_r[len(ordered_r) // 2]
-            ) / Decimal(2)
-        factor = profit / loss_magnitude if loss_magnitude > 0 else None
+        mean, median, factor = _closed_distribution(tuple(closed_r))
         for key in declared_keys:
             members = tuple(row for row in rows if _row_key(row) == key)
             cell_branches = tuple(row.result.branches[-1] for row in members if row.result.branches)
+            cell_r = tuple(
+                branch.closed_net_r for branch in cell_branches if branch.closed_net_r is not None
+            )
+            cell_mean, cell_median, cell_factor = _closed_distribution(cell_r)
             cells.append(
                 AllFillReportCell(
                     *key,
@@ -876,13 +994,12 @@ def _metrics(
                         Decimal(0),
                     ),
                     sum(
-                        (
-                            branch.closed_net_r
-                            for branch in cell_branches
-                            if branch.closed_net_r is not None
-                        ),
+                        cell_r,
                         Decimal(0),
                     ),
+                    cell_mean,
+                    cell_median,
+                    cell_factor,
                 )
             )
     return (
@@ -903,6 +1020,7 @@ class AllFillPopulationReport:
     """Independent-opportunity descriptive projection; never a portfolio claim."""
 
     rows: tuple[AllFillPopulationRow, ...]
+    scenario: AllFillScenario
     declared_cell_keys: tuple[CellKey, ...]
     terminal_counts: tuple[tuple[AllFillStatus, int], ...]
     closed_denominator: int
@@ -951,6 +1069,12 @@ class AllFillPopulationReport:
         if len({row.decision.identity.symbol.quote for row in self.rows}) > 1:
             raise AllFillReplayError("mixed quote currencies cannot share economic totals")
         if (
+            not isinstance(self.scenario, AllFillScenario)
+            or any(row.result.scenario is not self.scenario for row in self.rows)
+            or any(key[2] is not self.scenario for key in self.declared_cell_keys)
+        ):
+            raise AllFillReplayError("population report must declare one exact scenario")
+        if (
             tuple(
                 sorted(
                     identities,
@@ -991,6 +1115,7 @@ def project_all_fill_population(
     results: tuple[AllFillReplayResult, ...],
     labels: tuple[tuple[str, str | None], ...],
     *,
+    scenario: AllFillScenario,
     declared_cell_keys: tuple[CellKey, ...] = (),
 ) -> AllFillPopulationReport:
     """Require the complete explicitly supplied population; never infer missing decisions."""
@@ -1002,4 +1127,4 @@ def project_all_fill_population(
         for decision, result, (cohort, regime) in zip(decisions, results, labels, strict=True)
     )
     keys = tuple(dict.fromkeys((*declared_cell_keys, *(_row_key(row) for row in rows))))
-    return AllFillPopulationReport(rows, keys, *_metrics(rows, keys))
+    return AllFillPopulationReport(rows, scenario, keys, *_metrics(rows, keys))

@@ -23,15 +23,21 @@ from adaptive_trading_bot.research.all_fill_replay import (
     AllFillScenario,
     AllFillStatus,
     ResearchAllFillReplayRunner,
+    _snapshot_digest,
     project_all_fill_population,
 )
 from adaptive_trading_bot.research.breakout_retest_corpus import (
     BreakoutRetestHistoricalCorpusGenerator,
     BreakoutRetestResearchConfiguration,
 )
+from adaptive_trading_bot.research.breakout_retest_replay import BreakoutRetestReplayResult
+from adaptive_trading_bot.research.breakout_retest_signal_edge import BreakoutRetestObservation
 from adaptive_trading_bot.research.paired_exit_replay import (
     HistoricalStrategyContextObservation,
     PairedTrendPullbackExitReplayResult,
+)
+from adaptive_trading_bot.research.range_mean_reversion_replay import (
+    RangeMeanReversionReplayResult,
 )
 from adaptive_trading_bot.strategies import CandidateAction, StrategyEvaluationContext
 
@@ -175,6 +181,11 @@ def test_positive_latency_and_entry_unfilled_do_not_reuse_entry_open() -> None:
     unfilled, _ = _run(opens=(100,), stress=True, end_count=1)
     assert unfilled.status is AllFillStatus.ENTRY_UNFILLED
     assert not unfilled.branches
+    recovery_unfilled, _ = _run(opens=(100, 70), stress=True, end_count=2)
+    assert recovery_unfilled.status is AllFillStatus.RECOVERY_OPEN
+    assert recovery_unfilled.branches[-1].exit_unfilled is not None
+    assert recovery_unfilled.branches[-1].final_position.quantity > 0
+    assert recovery_unfilled.branches[-1].final_position.cumulative_fees > 0
 
 
 def test_no_signal_does_not_load_market_or_create_accounting() -> None:
@@ -238,8 +249,14 @@ def test_ordinary_branch_matches_legacy_authority_and_report_reconciles() -> Non
             (ordinary.decision, deepcopy(ordinary.decision)),
             (ordinary, deepcopy(ordinary)),
             (("fixture", None), ("fixture", None)),
+            scenario=AllFillScenario.BASE,
         )
-    report = project_all_fill_population((no_signal.decision,), (no_signal,), (("fixture", None),))
+    report = project_all_fill_population(
+        (no_signal.decision,),
+        (no_signal,),
+        (("fixture", None),),
+        scenario=AllFillScenario.BASE,
+    )
     assert sum(count for _, count in report.terminal_counts) == 1
     assert report.closed_denominator == 0
     assert report.mean_closed_net_r is None
@@ -258,7 +275,10 @@ def test_ordinary_closed_path_and_primary_pair_report_counts_one_opportunity() -
     assert ordinary.status is AllFillStatus.ORDINARY_CLOSED
     assert all(branch.recovery is None for branch in ordinary.branches)
     report = project_all_fill_population(
-        (ordinary.decision,), (ordinary,), (("fixture", "synthetic-regime"),)
+        (ordinary.decision,),
+        (ordinary,),
+        (("fixture", "synthetic-regime"),),
+        scenario=AllFillScenario.BASE,
     )
     assert report.closed_denominator == 1
     assert report.paired_both_closed_count == 1
@@ -271,12 +291,18 @@ def test_recovery_and_report_are_independent_of_ambient_decimal_context() -> Non
     with localcontext(Context(prec=9, rounding=ROUND_DOWN)):
         low_precision, _ = _run(opens=(70, 110))
         low_report = project_all_fill_population(
-            (low_precision.decision,), (low_precision,), (("fixture", None),)
+            (low_precision.decision,),
+            (low_precision,),
+            (("fixture", None),),
+            scenario=AllFillScenario.BASE,
         )
     with localcontext(Context(prec=60, rounding=ROUND_HALF_EVEN)):
         high_precision, _ = _run(opens=(70, 110))
         high_report = project_all_fill_population(
-            (high_precision.decision,), (high_precision,), (("fixture", None),)
+            (high_precision.decision,),
+            (high_precision,),
+            (("fixture", None),),
+            scenario=AllFillScenario.BASE,
         )
     assert low_precision.branches == high_precision.branches
     assert low_report.mean_closed_net_r == high_report.mean_closed_net_r
@@ -309,6 +335,7 @@ def test_mixed_explicit_population_reconciles_terminal_funnel_and_zero_cell() ->
         (no_signal_decision, risk_decision, recovery.decision),
         (no_signal, risk_blocked, recovery),
         (("fixture", None), ("fixture", None), ("fixture", None)),
+        scenario=AllFillScenario.BASE,
     )
     first_key = first_report.declared_cell_keys[0]
     empty_key = (
@@ -324,6 +351,7 @@ def test_mixed_explicit_population_reconciles_terminal_funnel_and_zero_cell() ->
         (no_signal_decision, risk_decision, recovery.decision),
         (no_signal, risk_blocked, recovery),
         (("fixture", None), ("fixture", None), ("fixture", None)),
+        scenario=AllFillScenario.BASE,
         declared_cell_keys=(empty_key,),
     )
     assert sum(count for _, count in report.terminal_counts) == 3
@@ -466,3 +494,507 @@ def test_breakout_actual_entry_fill_is_accounted_after_invalidation(
     assert ordinary.status is AllFillStatus.ORDINARY_OPEN
     assert ordinary.branches[0].recovery is None
     ordinary.validate()
+
+
+def test_reconstructed_result_cannot_relabel_costs_range_or_snapshot() -> None:
+    ordinary, _ = _run(opens=(100, 110))
+    stress_costs = ExecutionCostConfiguration(
+        Decimal(4), Decimal(4), Decimal(20), timedelta(seconds=1)
+    )
+    with pytest.raises(AllFillReplayError, match="legacy replay"):
+        replace(ordinary, costs=stress_costs, scenario=AllFillScenario.COMBINED_STRESS)
+    with pytest.raises(AllFillReplayError, match="legacy replay"):
+        replace(ordinary, end=ordinary.end + timedelta(minutes=15))
+    with pytest.raises(AllFillReplayError, match="snapshot digest"):
+        replace(ordinary, execution_snapshot=ordinary.execution_snapshot[1:])
+    truncated = ordinary.execution_snapshot[1:]
+    with pytest.raises(AllFillReplayError, match="entry outcome"):
+        replace(
+            ordinary,
+            execution_snapshot=truncated,
+            execution_snapshot_digest=_snapshot_digest(truncated),
+        )
+    changed_high = (
+        replace(ordinary.execution_snapshot[0], high=ordinary.execution_snapshot[0].high + 1),
+        *ordinary.execution_snapshot[1:],
+    )
+    with pytest.raises(AllFillReplayError, match="snapshot digest"):
+        replace(ordinary, execution_snapshot=changed_high)
+
+    entry_unfilled, _ = _run(opens=(100,), stress=True)
+    with pytest.raises(AllFillReplayError, match="legacy replay"):
+        replace(
+            entry_unfilled,
+            costs=ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+            scenario=AllFillScenario.BASE,
+        )
+    recovery, _ = _run(opens=(70, 110))
+    with pytest.raises(AllFillReplayError, match="legacy replay"):
+        replace(recovery, end=NOW + timedelta(minutes=1))
+    recovery_open, _ = _run(opens=(70,))
+    with pytest.raises(AllFillReplayError, match="legacy replay"):
+        replace(recovery_open, costs=stress_costs, scenario=AllFillScenario.COMBINED_STRESS)
+    with pytest.raises(AllFillReplayError, match="snapshot digest"):
+        replace(recovery, execution_snapshot=recovery.execution_snapshot[:1])
+    truncated_recovery = recovery.execution_snapshot[:1]
+    with pytest.raises(AllFillReplayError, match="recovery differs"):
+        replace(
+            recovery,
+            execution_snapshot=truncated_recovery,
+            execution_snapshot_digest=_snapshot_digest(truncated_recovery),
+        )
+    alternate_recovery, _ = _run(opens=(70, 120))
+    with pytest.raises(AllFillReplayError, match="recovery differs"):
+        replace(
+            recovery,
+            branches=(recovery.branches[0], alternate_recovery.branches[1]),
+        )
+
+
+def test_one_scenario_per_report_and_recomputed_metrics() -> None:
+    base, _ = _run(opens=(70, 110))
+    stress, _ = _run(opens=(70, 110), stress=True)
+    base_report = project_all_fill_population(
+        (base.decision,),
+        (base,),
+        (("same-population", None),),
+        scenario=AllFillScenario.BASE,
+    )
+    stress_report = project_all_fill_population(
+        (stress.decision,),
+        (stress,),
+        (("same-population", None),),
+        scenario=AllFillScenario.COMBINED_STRESS,
+    )
+    assert base_report.scenario is AllFillScenario.BASE
+    assert stress_report.scenario is AllFillScenario.COMBINED_STRESS
+    assert base_report.incurred_fees != stress_report.incurred_fees
+    with pytest.raises(AllFillReplayError, match="one exact scenario"):
+        replace(base_report, scenario=AllFillScenario.COMBINED_STRESS)
+    with pytest.raises(AllFillReplayError, match="metrics"):
+        replace(base_report, incurred_fees=Decimal(0))
+    tampered = deepcopy(base)
+    object.__setattr__(tampered, "costs", stress.costs)
+    object.__setattr__(tampered, "scenario", AllFillScenario.COMBINED_STRESS)
+    with pytest.raises(AllFillReplayError, match="integrity"):
+        project_all_fill_population(
+            (base.decision,),
+            (tampered,),
+            (("same-population", None),),
+            scenario=AllFillScenario.COMBINED_STRESS,
+        )
+    with pytest.raises(AllFillReplayError, match=r"undeclared|one exact scenario"):
+        project_all_fill_population(
+            (stress.decision,),
+            (stress,),
+            (("fixture", None),),
+            scenario=AllFillScenario.BASE,
+        )
+
+
+@pytest.mark.parametrize("side", ("LONG", "SHORT"))
+@pytest.mark.parametrize("boundary", ("stop", "midpoint"))
+@pytest.mark.parametrize("beyond", (False, True))
+def test_range_actual_fill_equality_and_beyond_recovery(
+    side: str, boundary: str, beyond: bool
+) -> None:
+    helpers = runpy.run_path(
+        str(Path(__file__).with_name("test_range_mean_reversion_signal_edge.py"))
+    )
+    _, decision = helpers["_decision_prefix"](side)
+    audit = decision.strategy_evaluation.rule_audit
+    stop = EntryOrderIntentAuthorizer().authorize(decision).intent
+    assert stop is not None
+    target = stop.stop_basis if boundary == "stop" else audit.midpoint
+    assert target is not None
+    multiplier = Decimal("1.0003") if side == "LONG" else Decimal("0.9997")
+    with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+        opening = target / multiplier
+    if beyond:
+        opening += Decimal(-1 if (side == "LONG") == (boundary == "stop") else 1)
+    start = cast(datetime, helpers["START"])
+    symbol = helpers["SYMBOL"]
+    candles = tuple(
+        Candle(
+            symbol,
+            Timeframe.MINUTES_15,
+            start + index * Timeframe.MINUTES_15.duration,
+            start + (index + 1) * Timeframe.MINUTES_15.duration,
+            opening if index == 4 else Decimal(95),
+            (opening if index == 4 else Decimal(95)) + Decimal(1),
+            (opening if index == 4 else Decimal(95)) - Decimal(1),
+            opening if index == 4 else Decimal(95),
+            Decimal(100),
+        )
+        for index in (4, 5)
+    )
+    result = ResearchAllFillReplayRunner(RecordingExecutionSource(candles)).run(
+        decision,
+        (),
+        ExecutionSeries(helpers["SOURCE"], symbol, Timeframe.MINUTES_15),
+        ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+        start=decision.identity.observed_at,
+        end=candles[-1].close_time,
+    )
+    branch = result.branches[0]
+    assert result.status is AllFillStatus.RECOVERY_CLOSED
+    assert branch.recovery is not None
+    assert (
+        "STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL"
+        if boundary == "stop"
+        else "MIDPOINT_NOT_BEYOND_ACTUAL_ENTRY_FILL"
+    ) in branch.recovery.reasons
+    if not beyond:
+        assert branch.entry_fill.fill_price == target
+    assert branch.exit_fill is not None
+    assert branch.final_position.quantity == 0
+    result.validate()
+
+
+def test_fixed_base_and_stress_recovery_accounting_values() -> None:
+    expected = (
+        (
+            False,
+            (70, 110),
+            Decimal("70.0210"),
+            Decimal("0.05835083333333333333333333333333333"),
+            Decimal("109.9670"),
+            Decimal("0.09163916666666666666666666666666666"),
+            Decimal("33.28833333333333333333333333333333"),
+            Decimal("33.13834333333333333333333333333333"),
+            Decimal("1.325533733333333333333333333333333"),
+        ),
+        (
+            True,
+            (100, 70, 110),
+            Decimal("70.0420"),
+            Decimal("0.1167366666666666666666666666666667"),
+            Decimal("109.9340"),
+            Decimal("0.1832233333333333333333333333333333"),
+            Decimal("33.24333333333333333333333333333333"),
+            Decimal("32.94337333333333333333333333333333"),
+            Decimal("1.317734933333333333333333333333333"),
+        ),
+    )
+    for stress, opens, entry_price, entry_fee, exit_price, exit_fee, gross, net, net_r in expected:
+        result, _ = _run(opens=opens, stress=stress)
+        branch = result.branches[-1]
+        assert branch.exit_fill is not None
+        assert branch.entry_fill.fill_price == entry_price
+        assert branch.entry_fill.fee_quote == entry_fee
+        assert branch.exit_fill.fill_price == exit_price
+        assert branch.exit_fill.fee_quote == exit_fee
+        assert branch.final_position.cumulative_gross_realized_pnl == gross
+        assert branch.final_position.cumulative_net_realized_pnl == net
+        assert branch.closed_net_r == net_r
+
+
+def test_full_supplied_population_terminal_partition_and_zero_cells() -> None:
+    builder = _HELPERS["_journal_entry"]
+    context_builder = _HELPERS["_journal_context"]
+    series = ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15)
+    costs = ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10))
+
+    def shifted(
+        hour: int, outcome: str, opens: tuple[int, ...], *, stress: bool = False
+    ) -> AllFillReplayResult:
+        observed = NOW + timedelta(hours=hour)
+        decision = cast(
+            DecisionJournalEntry[object, object],
+            builder(
+                outcome,
+                context=context_builder(observed_at=observed),
+                strategy_id="trend_pullback",
+                strategy_version="1.0.0",
+            ),
+        )
+        candles = tuple(
+            Candle(
+                BTC,
+                Timeframe.MINUTES_15,
+                observed + index * Timeframe.MINUTES_15.duration,
+                observed + (index + 1) * Timeframe.MINUTES_15.duration,
+                Decimal(price),
+                Decimal(price + 10),
+                Decimal(price - 10),
+                Decimal(price),
+                Decimal(5),
+            )
+            for index, price in enumerate(opens)
+        )
+        return ResearchAllFillReplayRunner(RecordingExecutionSource(candles)).run(
+            decision,
+            (),
+            series,
+            (
+                ExecutionCostConfiguration(
+                    Decimal(4), Decimal(4), Decimal(20), timedelta(seconds=1)
+                )
+                if stress
+                else costs
+            ),
+            start=observed,
+            end=observed + max(1, len(opens)) * Timeframe.MINUTES_15.duration,
+        )
+
+    ordinary_closed, _ = _run(
+        contexts=(
+            cast(
+                StrategyEvaluationContext,
+                _current_context(15, close=Decimal(101), low=Decimal(75)),
+            ),
+        ),
+        opens=(100, 110, 120),
+    )
+    results = (
+        ordinary_closed,
+        shifted(1, "no_action", ()),
+        shifted(2, "risk_blocked", ()),
+        shifted(3, "safe_mode", ()),
+        shifted(4, "cleared", ()),
+        shifted(5, "cleared", (100,)),
+        shifted(6, "cleared", (70, 110)),
+        shifted(7, "cleared", (70,)),
+    )
+    assert tuple(item.status for item in results) == (
+        AllFillStatus.ORDINARY_CLOSED,
+        AllFillStatus.NO_SIGNAL,
+        AllFillStatus.RISK_BLOCKED,
+        AllFillStatus.SAFETY_BLOCKED,
+        AllFillStatus.ENTRY_UNFILLED,
+        AllFillStatus.ORDINARY_OPEN,
+        AllFillStatus.RECOVERY_CLOSED,
+        AllFillStatus.RECOVERY_OPEN,
+    )
+    empty_key = (
+        "BTC/USDT",
+        AllFillFamily.TREND_PULLBACK,
+        AllFillScenario.BASE,
+        "2026-09",
+        "BUY",
+        "empty-cohort",
+        None,
+    )
+    report = project_all_fill_population(
+        tuple(item.decision for item in results),
+        results,
+        (("fixture", None),) * len(results),
+        scenario=AllFillScenario.BASE,
+        declared_cell_keys=(empty_key,),
+    )
+    assert dict(report.terminal_counts) == {status: 1 for status in AllFillStatus}
+    assert report.closed_denominator == 2
+    assert report.unresolved_count == 2
+    assert report.paired_both_closed_count == 2
+    with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+        assert report.incurred_fees == sum(
+            (item.branches[-1].final_position.cumulative_fees for item in results if item.branches),
+            Decimal(0),
+        )
+    assert report.cells[0].observation_count == 0
+    assert report.cells[0].closed_count == 0
+    assert report.cells[0].mean_closed_net_r is None
+    assert report.cells[0].closed_r_profit_factor is None
+    assert sum(cell.closed_count for cell in report.cells) == 2
+    report.validate()
+    with pytest.raises(AllFillReplayError, match="metrics"):
+        replace(report, cells=(replace(report.cells[0], closed_count=1), *report.cells[1:]))
+    with pytest.raises(AllFillReplayError, match="missing or orphan"):
+        project_all_fill_population(
+            tuple(item.decision for item in results),
+            results[:-1],
+            (("fixture", None),) * len(results),
+            scenario=AllFillScenario.BASE,
+        )
+    with pytest.raises(AllFillReplayError, match="duplicate"):
+        project_all_fill_population(
+            (results[0].decision, results[0].decision),
+            (results[0], results[0]),
+            (("fixture", None),) * 2,
+            scenario=AllFillScenario.BASE,
+        )
+    distinct_stress = shifted(8, "no_action", (), stress=True)
+    with pytest.raises(AllFillReplayError, match="one exact scenario"):
+        project_all_fill_population(
+            (results[0].decision, distinct_stress.decision),
+            (results[0], distinct_stress),
+            (("fixture", None),) * 2,
+            scenario=AllFillScenario.BASE,
+        )
+    with pytest.raises(AllFillReplayError, match="one exact scenario"):
+        replace(
+            report,
+            declared_cell_keys=(
+                *report.declared_cell_keys,
+                (
+                    "BTC/USDT",
+                    AllFillFamily.TREND_PULLBACK,
+                    AllFillScenario.COMBINED_STRESS,
+                    "2026-09",
+                    "BUY",
+                    "empty",
+                    None,
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("side", ("LONG", "SHORT"))
+def test_range_ordinary_closed_open_and_entry_unfilled_match_legacy(side: str) -> None:
+    helpers = runpy.run_path(
+        str(Path(__file__).with_name("test_range_mean_reversion_signal_edge.py"))
+    )
+    _, decision = helpers["_decision_prefix"](side)
+    start = cast(datetime, helpers["START"])
+    symbol = helpers["SYMBOL"]
+    source_id = helpers["SOURCE"]
+    opening = Decimal(90 if side == "LONG" else 110)
+    candles = tuple(
+        Candle(
+            symbol,
+            Timeframe.MINUTES_15,
+            start + index * Timeframe.MINUTES_15.duration,
+            start + (index + 1) * Timeframe.MINUTES_15.duration,
+            opening,
+            Decimal(122) if index == 6 and side == "SHORT" else opening + 1,
+            Decimal(78) if index == 6 and side == "LONG" else opening - 1,
+            opening,
+            Decimal(100),
+        )
+        for index in range(4, 8)
+    )
+    contexts = tuple(
+        HistoricalStrategyContextObservation(
+            helpers["_context"](index + 1, side=side, candle=candle)
+        )
+        for index, candle in zip(range(4, 7), candles[:3], strict=True)
+    )
+    series = ExecutionSeries(source_id, symbol, Timeframe.MINUTES_15)
+    costs = ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10))
+
+    def replay(
+        path: tuple[Candle, ...],
+        observed: tuple[HistoricalStrategyContextObservation, ...],
+        end: datetime,
+        applied_costs: ExecutionCostConfiguration = costs,
+    ) -> AllFillReplayResult:
+        return ResearchAllFillReplayRunner(RecordingExecutionSource(path)).run(
+            decision,
+            observed,
+            series,
+            applied_costs,
+            start=decision.identity.observed_at,
+            end=end,
+        )
+
+    closed = replay(candles, contexts, candles[-1].close_time)
+    assert closed.status is AllFillStatus.ORDINARY_CLOSED
+    assert isinstance(closed.legacy_replay, RangeMeanReversionReplayResult)
+    assert closed.branches[0].accounting_events == closed.legacy_replay.accounting_events
+    assert closed.branches[0].final_position == closed.legacy_replay.final_position
+    opened = replay(candles[:1], (), candles[0].close_time)
+    assert opened.status is AllFillStatus.ORDINARY_OPEN
+    assert isinstance(opened.legacy_replay, RangeMeanReversionReplayResult)
+    assert opened.branches[0].final_position == opened.legacy_replay.final_position
+    unfilled = replay(
+        candles[:1],
+        (),
+        candles[0].close_time,
+        ExecutionCostConfiguration(Decimal(4), Decimal(4), Decimal(20), timedelta(seconds=1)),
+    )
+    assert unfilled.status is AllFillStatus.ENTRY_UNFILLED
+    assert isinstance(unfilled.legacy_replay, RangeMeanReversionReplayResult)
+    assert unfilled.entry_unfilled == unfilled.legacy_replay.entry_unfilled
+
+
+@pytest.mark.parametrize("side", ("LONG", "SHORT"))
+def test_breakout_ordinary_closed_open_and_entry_unfilled_match_legacy(
+    tmp_path: Path, side: str
+) -> None:
+    helpers = runpy.run_path(str(Path(__file__).with_name("test_breakout_retest_signal_edge.py")))
+    source_id = helpers["SOURCE"]
+    symbol = helpers["SYMBOL"]
+    start = cast(datetime, helpers["START"])
+    store = helpers["_store"](tmp_path) if side == "LONG" else helpers["_short_store"](tmp_path)
+    end = start + timedelta(hours=204)
+    corpus = BreakoutRetestHistoricalCorpusGenerator(store).generate(
+        BreakoutRetestResearchConfiguration((source_id,), (symbol,), start, end, Decimal(10000))
+    )
+    action = CandidateAction.LONG_CANDIDATE if side == "LONG" else CandidateAction.SHORT_CANDIDATE
+    decision = next(
+        item.decision
+        for item in corpus.decisions
+        if item.is_research_admissible_entry and item.decision.strategy_evaluation.action is action
+    )
+    intent = EntryOrderIntentAuthorizer().authorize(decision).intent
+    assert intent is not None
+    original = store.read(source_id, symbol, Timeframe.MINUTES_15, start=start, end=end)
+    index = next(
+        number
+        for number, candle in enumerate(original)
+        if candle.open_time == decision.identity.observed_at
+    )
+    entry, trigger, exit_candle = original[index : index + 3]
+    trigger = replace(
+        trigger,
+        high=max(trigger.high, intent.stop_basis) if side == "SHORT" else trigger.high,
+        low=min(trigger.low, intent.stop_basis) if side == "LONG" else trigger.low,
+    )
+    sealed_trigger = next(
+        item
+        for item in corpus.historical_contexts
+        if item.context.observed_at == trigger.close_time
+    )
+    sealed_trigger = HistoricalStrategyContextObservation(
+        replace(sealed_trigger.context, candle_15m=trigger)
+    )
+    sealed_entry = next(
+        item for item in corpus.historical_contexts if item.context.observed_at == entry.close_time
+    )
+    series = ExecutionSeries(source_id, symbol, Timeframe.MINUTES_15)
+    costs = ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10))
+
+    def replay(
+        path: tuple[Candle, ...],
+        observed: tuple[HistoricalStrategyContextObservation, ...],
+        replay_end: datetime,
+        applied_costs: ExecutionCostConfiguration = costs,
+    ) -> AllFillReplayResult:
+        return ResearchAllFillReplayRunner(RecordingExecutionSource(path)).run(
+            decision,
+            observed,
+            series,
+            applied_costs,
+            start=decision.identity.observed_at,
+            end=replay_end,
+        )
+
+    closed = replay(
+        (entry, trigger, exit_candle), (sealed_entry, sealed_trigger), exit_candle.close_time
+    )
+    assert closed.status is AllFillStatus.ORDINARY_CLOSED
+    assert isinstance(closed.legacy_replay, BreakoutRetestReplayResult)
+    assert closed.branches[0].accounting_events == closed.legacy_replay.accounting_events
+    assert closed.branches[0].final_position == closed.legacy_replay.final_position
+    opened = replay((entry,), (), entry.close_time)
+    assert opened.status is AllFillStatus.ORDINARY_OPEN
+    assert isinstance(opened.legacy_replay, BreakoutRetestReplayResult)
+    assert opened.branches[0].final_position == opened.legacy_replay.final_position
+    unfilled = replay(
+        (entry,),
+        (),
+        entry.close_time,
+        ExecutionCostConfiguration(Decimal(4), Decimal(4), Decimal(20), timedelta(seconds=1)),
+    )
+    assert unfilled.status is AllFillStatus.ENTRY_UNFILLED
+    assert isinstance(unfilled.legacy_replay, BreakoutRetestReplayResult)
+    assert unfilled.entry_unfilled == unfilled.legacy_replay.entry_unfilled
+    legacy_decision = next(
+        item for item in corpus.decisions if item.decision.identity == decision.identity
+    )
+    with pytest.raises(AttributeError, match="decision_identity"):
+        BreakoutRetestObservation(
+            legacy_decision,
+            closed.end,
+            cast(BreakoutRetestReplayResult, closed),
+        )
