@@ -23,7 +23,7 @@ If an issue conflicts with the Master Plan, STOP and report the conflict. Do not
 - Historical/large research datasets: Parquet.
 - Exchange access must be behind `ExchangeAdapter`.
 - Current V1 runtime/execution allowlists and tested trading instruments: BTC and ETH only; do not widen them implicitly.
-- A separately qualified, versioned research-only universe of at least ten assets is permitted before Live acceptance; the first bounded panel targets exactly ten. It requires a reviewed research allowlist and locked data. Membership is not Paper/Shadow/Live eligibility, ten concurrent trades, or permission to bypass Risk/Safety. See Master Plan v1.7 and `RESEARCH_V2_CHARTER_V1`.
+- A separately qualified, versioned research-only universe of at least ten assets is permitted before Live acceptance; the first bounded panel targets exactly ten. It requires a reviewed research allowlist and locked data. Membership is not Paper/Shadow/Live eligibility, ten concurrent trades, or permission to bypass Risk/Safety. See Master Plan v1.8, `RESEARCH_V2_CHARTER_V1`, and its selection-only current-snapshot exploratory annex.
 - Entry timeframe: 15m.
 - Context timeframes: 1h and 4h.
 - Qualified WEEX perpetual 5m LAST may be canonical historical input to derive those research frames; 5m is not a V1 entry strategy.

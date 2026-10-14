@@ -1,0 +1,1 @@
+{"at":"2026-10-14T16:08:29.224966Z","index":111,"method":"GET","path":"/capi/v3/market/historyKlines","plan_sha256":"ab7bae7844eea690599ef6b6fe5065c41e91a562adaef44d9557c2f3ca86de8f","query":{"endTime":"1791935999999","interval":"1d","limit":"100","priceType":"LAST","startTime":"1789344000000","symbol":"PEOPLEUSDT"},"retry":0}

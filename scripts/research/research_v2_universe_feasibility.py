@@ -35,6 +35,13 @@ MAX_BODY = 2_000_000
 STABLE_UNDERLYINGS = frozenset({"USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDE", "USD1"})
 LEVERAGED = re.compile(r"(?:[235]L|[235]S|UP|DOWN|BULL|BEAR)$")
 ORIGINAL_SOURCE_SHA256 = "89933757701faa8e1c078cfb6eb6c5ffedf9617e02fc186dd73fe553fe960ff3"
+ACCEPTED_SUPPLEMENT_SOURCE_SHA256 = (
+    "55421acaf614e46d33cdd1f936e1daa900f7fc7d1ff679eb53cd1be58cade7fa"
+)
+ACCEPTED_SUPPLEMENT_CODE_REVISION = "2dd18db6d2586d3510b1d53b04c1bd8cf67ec9ee"
+ACCEPTED_SUPPLEMENT_MANIFEST_SHA256 = (
+    "34c6e5153f7654eb6e66b004a0d57f9ce5df628229043209c48b809d5a906a87"
+)
 ORIGINAL_PLAN_SHA256 = "36ad7ba77ad52c254f48e55308aaf6e5ba77e4b5dac279934ea5d323ed0a9c71"
 ORIGINAL_MANIFEST_SHA256 = "88d715eedc6e958828bb14f9df475962738c8a9cd86f044875c6b32ed7bcf8ac"
 DECIMAL_CONTEXT = Context(prec=80)
@@ -825,7 +832,12 @@ def verify_bundle(root: Path) -> dict[str, object]:
     return summary
 
 
-def supplement_request_plan(original: Path) -> dict[str, object]:
+def supplement_request_plan(
+    original: Path,
+    *,
+    source_sha256: str | None = None,
+    code_revision: str | None = None,
+) -> dict[str, object]:
     if digest((original / "manifest.json").read_bytes()) != ORIGINAL_MANIFEST_SHA256:
         raise FeasibilityError("original manifest identity differs")
     if digest((original / "plan.json").read_bytes()) != ORIGINAL_PLAN_SHA256:
@@ -880,8 +892,8 @@ def supplement_request_plan(original: Path) -> dict[str, object]:
                 )
     return {
         "schema": SUPPLEMENT_SCHEMA,
-        "source_sha256": digest(Path(__file__).resolve().read_bytes()),
-        "code_revision": source_revision(),
+        "source_sha256": source_sha256 or digest(Path(__file__).resolve().read_bytes()),
+        "code_revision": code_revision or source_revision(),
         "original_source_sha256": ORIGINAL_SOURCE_SHA256,
         "original_plan_sha256": ORIGINAL_PLAN_SHA256,
         "original_manifest_sha256": ORIGINAL_MANIFEST_SHA256,
@@ -900,11 +912,17 @@ def supplement_analysis(original: Path, supplement: Path) -> dict[str, object]:
     attempts = raw_json((supplement / "attempts.json").read_bytes())
     if not isinstance(plan, dict) or not isinstance(attempts, list):
         raise FeasibilityError("supplement plan or attempts are malformed")
-    expected_plan = supplement_request_plan(original)
-    # The source revision/hash were frozen before transmission, not reinterpreted
-    # from the current checkout while reviewing an older artifact.
-    expected_plan["source_sha256"] = plan.get("source_sha256")
-    expected_plan["code_revision"] = plan.get("code_revision")
+    current_source = digest(Path(__file__).resolve().read_bytes())
+    if plan.get("source_sha256") == ACCEPTED_SUPPLEMENT_SOURCE_SHA256:
+        if plan.get("code_revision") != ACCEPTED_SUPPLEMENT_CODE_REVISION:
+            raise FeasibilityError("accepted supplement source revision differs")
+    elif plan.get("source_sha256") != current_source:
+        raise FeasibilityError("unknown supplement source generation")
+    expected_plan = supplement_request_plan(
+        original,
+        source_sha256=str(plan["source_sha256"]),
+        code_revision=str(plan["code_revision"]),
+    )
     if canonical(plan) != canonical(expected_plan):
         raise FeasibilityError("supplement request plan contradicts pinned originals")
     if len(attempts) > 16 or len(attempts) + 27 > 43:
@@ -1112,14 +1130,19 @@ def capture_supplement(
 
 
 def verify_supplement(original: Path, root: Path) -> dict[str, object]:
-    manifest = raw_json((root / "manifest.json").read_bytes())
+    manifest_bytes = (root / "manifest.json").read_bytes()
+    manifest = raw_json(manifest_bytes)
     if not isinstance(manifest, dict) or manifest.get("schema") != SUPPLEMENT_SCHEMA:
         raise FeasibilityError("supplement manifest schema differs")
+    if manifest.get("source_sha256") == ACCEPTED_SUPPLEMENT_SOURCE_SHA256:
+        if digest(manifest_bytes) != ACCEPTED_SUPPLEMENT_MANIFEST_SHA256:
+            raise FeasibilityError("unknown accepted supplement manifest identity")
+    elif manifest.get("source_sha256") != digest(Path(__file__).resolve().read_bytes()):
+        raise FeasibilityError("unknown supplement source generation")
     plan_bytes = (root / "plan.json").read_bytes()
     plan = raw_json(plan_bytes)
     if not isinstance(plan, dict) or any(
         (
-            manifest.get("source_sha256") != digest(Path(__file__).resolve().read_bytes()),
             plan.get("source_sha256") != manifest.get("source_sha256"),
             manifest.get("code_revision") != plan.get("code_revision"),
             manifest.get("original_manifest_sha256") != ORIGINAL_MANIFEST_SHA256,
