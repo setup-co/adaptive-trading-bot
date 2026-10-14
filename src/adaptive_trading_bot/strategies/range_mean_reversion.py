@@ -14,6 +14,7 @@ from adaptive_trading_bot.strategies.core import (
     StrategyEvaluationContext,
 )
 from adaptive_trading_bot.strategies.range_context import (
+    RANGE_PARTIAL_EVIDENCE_RETENTION_V1,
     RangeContextSnapshot,
     RangeReasonCode,
     RangeStatus,
@@ -87,6 +88,11 @@ class RangeMeanReversionRuleAudit:
     selected_side: RangeMeanReversionSide | None
     invalidation_reference: Decimal | None
     invalidation_distance: Decimal | None
+    partial_evidence_retained: bool = False
+    partial_evidence_reset: bool = False
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +155,7 @@ class RangeMeanReversionStrategy:
         default_factory=ValidatedRangeDetector, repr=False, compare=False
     )
     strategy_id: str = field(init=False, default="range_mean_reversion")
-    strategy_version: str = field(init=False, default="1.0.0")
+    strategy_version: str = field(init=False, default="2.0.0")
 
     def evaluate(self, context: StrategyEvaluationContext) -> Evaluation:
         """Process range state once, then return a candidate or explicit NO_TRADE."""
@@ -376,6 +382,7 @@ class RangeMeanReversionStrategy:
             snapshot.source_id != context.source_id
             or snapshot.symbol != context.symbol
             or snapshot.observed_at != context.observed_at
+            or snapshot.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
         )
 
     @staticmethod
@@ -448,6 +455,8 @@ class RangeMeanReversionStrategy:
             None,
             None,
             None,
+            snapshot.partial_evidence_retained,
+            snapshot.partial_evidence_reset,
         )
 
     @staticmethod
@@ -478,4 +487,6 @@ class RangeMeanReversionStrategy:
             side,
             invalidation,
             distance,
+            audit.partial_evidence_retained,
+            audit.partial_evidence_reset,
         )

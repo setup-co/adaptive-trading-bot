@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 from pathlib import Path
 
 from adaptive_trading_bot.domain import Candle, FrozenClock, Timeframe, TradingSymbol
@@ -12,7 +12,9 @@ from adaptive_trading_bot.regime import MultiTimeframeRegimeComposer, TechnicalR
 from adaptive_trading_bot.replay import HistoricalReplaySource, ReplayEngine, ReplaySeries
 from adaptive_trading_bot.storage import ParquetHistoricalCandleStore, SourceId
 from adaptive_trading_bot.strategies import (
+    CandidateAction,
     RangeContextSnapshot,
+    RangeMeanReversionStrategy,
     RangeStatus,
     ValidatedRangeDetector,
     assemble_strategy_contexts,
@@ -60,7 +62,11 @@ def _candle(index: int, timeframe: Timeframe, *, breakout: bool = False) -> Cand
 
 
 def _run(
-    path: Path, *, extra_candles: int = 0, breakout: bool = False
+    path: Path,
+    *,
+    extra_candles: int = 0,
+    breakout: bool = False,
+    strategy_outputs: list[tuple[CandidateAction, RangeStatus]] | None = None,
 ) -> tuple[RangeContextSnapshot, ...]:
     store = ParquetHistoricalCandleStore(path)
     store.merge(
@@ -87,6 +93,7 @@ def _run(
     regime_engine = TechnicalRegimeEngine()
     composer = MultiTimeframeRegimeComposer()
     detector = ValidatedRangeDetector()
+    strategy = RangeMeanReversionStrategy()
     outputs: list[RangeContextSnapshot] = []
     for batch in replay:
         observed = observed_candles_from_replay(batch)
@@ -95,18 +102,28 @@ def _run(
         technical = regime_engine.process(features, structures)
         regimes = composer.process(technical)
         contexts = assemble_strategy_contexts(observed, features, structures, regimes)
-        outputs.extend(detector.process(context) for context in contexts)
+        for context in contexts:
+            snapshot = detector.process(context)
+            outputs.append(snapshot)
+            if strategy_outputs is not None:
+                evaluation = strategy.evaluate(context)
+                strategy_outputs.append((evaluation.action, evaluation.rule_audit.range_status))
     return tuple(outputs)
 
 
 def test_parquet_replay_range_detection_is_causal_bounded_and_reproducible(
     tmp_path: Path,
 ) -> None:
-    bounded = _run(tmp_path / "bounded")
-    with_future = _run(tmp_path / "future", extra_candles=4)
-    repeated = _run(tmp_path / "repeated")
+    actions: list[tuple[CandidateAction, RangeStatus]] = []
+    with localcontext(Context(prec=12)):
+        bounded = _run(tmp_path / "bounded", strategy_outputs=actions)
+    with localcontext(Context(prec=50)):
+        with_future = _run(tmp_path / "future", extra_candles=4)
+        repeated = _run(tmp_path / "repeated")
 
     assert bounded == with_future == repeated
+    assert tuple(status for _, status in actions) == tuple(item.status for item in bounded)
+    assert all(action is CandidateAction.NO_TRADE for action, _ in actions[:816])
     assert len(bounded) == REPLAY_COUNTS[Timeframe.MINUTES_15]
     valid_indexes = tuple(
         index

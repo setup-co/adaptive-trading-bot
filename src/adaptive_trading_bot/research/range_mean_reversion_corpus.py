@@ -61,9 +61,12 @@ from adaptive_trading_bot.strategies import (
     RangeMeanReversionStrategy,
     assemble_strategy_contexts,
 )
-from adaptive_trading_bot.strategies.range_context import ValidatedRangeConfiguration
+from adaptive_trading_bot.strategies.range_context import (
+    RANGE_PARTIAL_EVIDENCE_RETENTION_V1,
+    ValidatedRangeConfiguration,
+)
 
-_SCHEMA = "range-mean-reversion-research-corpus-v1"
+_SCHEMA = "range-mean-reversion-research-corpus-v2"
 _TIMEFRAMES = (Timeframe.MINUTES_15, Timeframe.HOUR_1, Timeframe.HOURS_4)
 
 
@@ -95,6 +98,9 @@ class RangeMeanReversionResearchConfiguration:
         default_factory=ValidatedRangeConfiguration
     )
     schema_version: str = field(init=False, default=_SCHEMA)
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -141,7 +147,13 @@ class RangeMeanReversionResearchConfiguration:
         self._validate_facts()
 
     def _validate_facts(self) -> None:
-        if self.schema_version != _SCHEMA or self.start >= self.end:
+        if (
+            self.schema_version != _SCHEMA
+            or self.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+            or self.range_configuration.partial_evidence_policy_version
+            != self.partial_evidence_policy_version
+            or self.start >= self.end
+        ):
             raise RangeMeanReversionResearchError("research schema or range is invalid")
         if not self.source_ids or len(set(self.source_ids)) != len(self.source_ids):
             raise RangeMeanReversionResearchError("research sources must be unique and non-empty")
@@ -229,6 +241,9 @@ class RangeMeanReversionHistoricalResearchCorpus:
     corpus_digest: str = field(init=False)
     corpus_id: str = field(init=False)
     schema_version: str = field(init=False, default=_SCHEMA)
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
     is_trading_authority: bool = field(init=False, default=False)
     integrity_seal: str = field(init=False, repr=False)
 
@@ -282,7 +297,13 @@ class RangeMeanReversionHistoricalResearchCorpus:
 
     def _validate_facts(self) -> None:
         self.configuration.validate()
-        if self.schema_version != _SCHEMA or self.is_trading_authority:
+        if (
+            self.schema_version != _SCHEMA
+            or self.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+            or self.configuration.partial_evidence_policy_version
+            != self.partial_evidence_policy_version
+            or self.is_trading_authority
+        ):
             raise RangeMeanReversionResearchError("corpus schema or authority claim is invalid")
         if len(self.decisions) != len(self.historical_contexts):
             raise RangeMeanReversionResearchError("decision/context population differs")

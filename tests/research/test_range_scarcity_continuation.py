@@ -87,9 +87,33 @@ def _record(report: RangeScarcityReport) -> RangeScarcityUnitRecord:
     )
 
 
+def _validate_synthetic_eth_report(
+    report: RangeScarcityReport, definition: DiagnosticRunDefinition
+) -> None:
+    """Keep identity checks when isolating frozen serializer/projection internals."""
+    if definition not in CONTINUATION_RUNS or report.run_id != definition.run_id:
+        raise ScarcityContinuationError("only exact ETH B/C reports are accepted")
+    report.validate()
+
+
+def test_frozen_eth_boundary_rejects_new_range_policy_before_record_creation() -> None:
+    report = _report("B")
+    with pytest.raises(ScarcityContinuationError, match="new Range policy"):
+        RangeScarcityUnitRecord.from_report(
+            report,
+            CONTINUATION_RUNS[0],
+            source_code_sha=CODE_SHA,
+            full_report_sha256="a" * 64,
+            full_report_size_bytes=1,
+        )
+
+
 def test_compact_record_uses_report_object_and_keeps_canonical_report_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise the serializer with a synthetic report; the frozen entry gate
+    # separately rejects this prospective Range policy.
+    monkeypatch.setattr(continuation, "_validate_eth_report", _validate_synthetic_eth_report)
     report = _report("B")
     canonical = report.to_json()
     digest = report.report_digest
@@ -98,9 +122,9 @@ def test_compact_record_uses_report_object_and_keeps_canonical_report_unchanged(
     def forbid_json_parse(_raw: str) -> None:
         raise AssertionError("report JSON must not be parsed")
 
-    monkeypatch.setattr(json, "loads", forbid_json_parse)
-    record = _record(report)
-    monkeypatch.undo()
+    with monkeypatch.context() as json_guard:
+        json_guard.setattr(json, "loads", forbid_json_parse)
+        record = _record(report)
     value = json.loads(record.to_json())
     assert isinstance(value, dict)
     assert value["report_digest"] == digest
@@ -123,7 +147,10 @@ def test_compact_record_uses_report_object_and_keeps_canonical_report_unchanged(
     )
 
 
-def test_compact_record_rejects_tamper_wrong_run_and_bad_counts() -> None:
+def test_compact_record_rejects_tamper_wrong_run_and_bad_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(continuation, "_validate_eth_report", _validate_synthetic_eth_report)
     report = _report("B")
     record = _record(report)
     object.__setattr__(record, "full_report_size_bytes", 99)
@@ -312,6 +339,7 @@ def test_bc_ledger_detects_tamper_and_pending(tmp_path: Path) -> None:
 def test_anchored_projection_uses_only_anchor_for_a_and_reports_for_bc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(continuation, "_validate_eth_report", _validate_synthetic_eth_report)
     b_report = _report("B", candidate=True)
     c_report = _report("C")
     b_record = _record(b_report)

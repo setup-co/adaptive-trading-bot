@@ -62,8 +62,9 @@ from adaptive_trading_bot.research.weex_historical_corpus import (
     LockedWeexResearchCorpusStore,
 )
 from adaptive_trading_bot.storage import HistoricalCandleStore, SourceId
+from adaptive_trading_bot.strategies.range_context import RANGE_PARTIAL_EVIDENCE_RETENTION_V1
 
-_SCHEMA = "range-mean-reversion-signal-edge-v2"
+_SCHEMA = "range-mean-reversion-signal-edge-v3"
 _FROZEN_SCHEMA = "range-mean-reversion-signal-edge-v1"
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 SOURCE_ID = SourceId("weex-v3-last-e5b0c4035a19d5a80ca7")
@@ -244,6 +245,9 @@ class RangeMeanReversionSignalEdgeReport:
     unit_status: RangeMeanReversionUnitStatus = field(init=False)
     report_digest: str = field(init=False)
     entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
     schema_version: str = field(init=False, default=_SCHEMA)
     is_trading_authority: bool = field(init=False, default=False)
     is_portfolio_performance: bool = field(init=False, default=False)
@@ -301,6 +305,7 @@ class RangeMeanReversionSignalEdgeReport:
         if (
             self.schema_version != _SCHEMA
             or self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
+            or self.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
             or self.is_trading_authority
             or self.is_portfolio_performance
             or self.dependence_warnings != DEPENDENCE_WARNINGS
@@ -320,6 +325,8 @@ class RangeMeanReversionSignalEdgeReport:
                 or item.result.execution_costs != self.execution_costs
                 or item.result.entry_chronology_policy_version
                 != self.entry_chronology_policy_version
+                or item.result.partial_evidence_policy_version
+                != self.partial_evidence_policy_version
             ):
                 raise RangeMeanReversionScreenError("observation does not match report protocol")
         outcomes = _outcomes(self.observations)

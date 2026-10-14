@@ -54,6 +54,7 @@ from adaptive_trading_bot.research.range_mean_reversion_scarcity import (
     FROZEN_DIAGNOSTIC_RUNS,
     RangeScarcityError,
     TerminalStage,
+    _frozen_configuration,
     project_corpus,
     validate_frozen_unit,
 )
@@ -103,7 +104,10 @@ from adaptive_trading_bot.strategies import (
     RangeMeanReversionStrategy,
     StrategyEvaluationContext,
 )
-from adaptive_trading_bot.strategies.range_context import ValidatedRangeConfiguration
+from adaptive_trading_bot.strategies.range_context import (
+    RANGE_PARTIAL_EVIDENCE_RETENTION_V1,
+    ValidatedRangeConfiguration,
+)
 
 START = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 SYMBOL = TradingSymbol("BTC", "USDT")
@@ -395,7 +399,7 @@ def test_scarcity_projector_consumes_only_sealed_stateful_corpus() -> None:
     assert report.observations[3].identity == decision.identity
     assert report.observations[3].terminal is TerminalStage.RESEARCH_ADMISSIBLE
     assert len(report.to_json()) > 0
-    assert RangeMeanReversionStrategy().strategy_version == "1.0.0"
+    assert RangeMeanReversionStrategy().strategy_version == "2.0.0"
     assert RangeMeanReversionStrategy().configuration == RangeMeanReversionConfiguration()
     assert ValidatedRangeConfiguration() == corpus.configuration.range_configuration
     with pytest.raises(RangeScarcityError, match="sealed"):
@@ -427,11 +431,17 @@ def test_scarcity_warmup_and_frozen_unit_boundaries(tmp_path: Path) -> None:
     assert FROZEN_DIAGNOSTIC_RUNS[0].end == datetime(2026, 1, 1, tzinfo=UTC)
     assert FROZEN_DIAGNOSTIC_RUNS[1].end == datetime(2024, 12, 25, tzinfo=UTC)
     assert FROZEN_DIAGNOSTIC_RUNS[2].start == datetime(2025, 4, 2, tzinfo=UTC)
-    with pytest.raises(RangeScarcityError, match="locked WEEX"):
+    with pytest.raises(RangeScarcityError, match="rejects current Range policy"):
         validate_frozen_unit(
             cast(LockedWeexResearchCorpusStore, ParquetHistoricalCandleStore(tmp_path)),
             excluded,
             report,
+            FROZEN_DIAGNOSTIC_RUNS[0],
+        )
+    # This is called before corpus generation or a ledger STARTED transition.
+    with pytest.raises(RangeScarcityError, match="rejects current Range policy"):
+        _frozen_configuration(
+            cast(LockedWeexResearchCorpusStore, ParquetHistoricalCandleStore(tmp_path)),
             FROZEN_DIAGNOSTIC_RUNS[0],
         )
 
@@ -471,6 +481,7 @@ def test_synthetic_replay_generation_is_complete_deterministic_and_isolated(
     assert len(first.historical_contexts) == 16
     assert first.decisions[0].decision.strategy_evaluation.action is CandidateAction.NO_TRADE
     assert first.research_admissible_entry_identities == ()
+    assert first.partial_evidence_policy_version == RANGE_PARTIAL_EVIDENCE_RETENTION_V1
     report = RangeMeanReversionSignalEdgeRunner(store).run(
         first,
         timedelta(hours=4),
@@ -479,6 +490,12 @@ def test_synthetic_replay_generation_is_complete_deterministic_and_isolated(
     report.validate()
     assert report.population.raw_candidate_count == 0
     assert report.unit_status is RangeMeanReversionUnitStatus.INSUFFICIENT
+    assert report.partial_evidence_policy_version == RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    scarcity = project_corpus(first, "synthetic")
+    assert scarcity.partial_evidence_policy_version == RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    object.__setattr__(scarcity, "partial_evidence_policy_version", "forged")
+    with pytest.raises(RangeScarcityError, match="seal mismatch"):
+        scarcity.validate()
     with pytest.raises(ValueError, match="population"):
         RangeMeanReversionHistoricalResearchCorpus(
             config, first.decisions[:-1], first.historical_contexts[:-1]

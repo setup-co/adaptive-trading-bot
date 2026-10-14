@@ -13,6 +13,7 @@ from adaptive_trading_bot.regime import HigherTimeframeBias
 from adaptive_trading_bot.strategies.core import SourceIdentity, StrategyEvaluationContext
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
+RANGE_PARTIAL_EVIDENCE_RETENTION_V1 = "RANGE_PARTIAL_EVIDENCE_RETENTION_V1"
 
 
 class RangeStateError(Exception):
@@ -66,8 +67,13 @@ class ValidatedRangeConfiguration:
     breakout_invalidation_buffer_atr: Decimal = Decimal("0.15")
     maximum_bars_since_latest_qualifying_pivot: int = 16
     maximum_15m_trend_strength: int = 40
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
 
     def __post_init__(self) -> None:
+        if self.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1:
+            raise ValueError("unsupported range partial-evidence policy")
         if self.entry_timeframe is not Timeframe.MINUTES_15:
             raise ValueError("validated range entry_timeframe must be 15m")
         for name, integer_value, minimum in (
@@ -148,6 +154,9 @@ class RangeDetectorSeriesState:
     active_range: ValidatedRange | None
     seen_pivot_identities: tuple[RangePivotIdentity, ...]
     ambiguous_pivot_open_times: tuple[datetime, ...]
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +181,11 @@ class RangeContextSnapshot:
     upper_breakout_threshold: Decimal | None
     lower_breakout_threshold: Decimal | None
     reasons: tuple[RangeReasonCode, ...]
+    partial_evidence_retained: bool = False
+    partial_evidence_reset: bool = False
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +220,7 @@ class ValidatedRangeDetector:
     def process(self, context: StrategyEvaluationContext) -> RangeContextSnapshot:
         """Validate, stage, evaluate, then atomically commit one context."""
 
+        self.configuration.__post_init__()
         key = _SeriesKey(context.source_id.value, context.symbol)
         previous = self._states.get(key)
         if previous is not None:
@@ -214,7 +229,9 @@ class ValidatedRangeDetector:
                 raise RangeStateError("observed_at must advance by exactly one 15m interval")
         sequence = 1 if previous is None else previous.sequence + 1
         self._validate_new_pivots(context, previous)
-        staged, ambiguity_reason = self._stage_ingestion(context, previous, sequence)
+        staged, ambiguity_reason, partial_expired = self._stage_ingestion(
+            context, previous, sequence
+        )
 
         with localcontext(_DECIMAL_CONTEXT):
             breakout = self._active_breakout(context, staged)
@@ -222,18 +239,39 @@ class ValidatedRangeDetector:
             if breakout is not None:
                 snapshot = breakout
                 committed = _cleared(staged)
-            elif compatibility:
-                snapshot = self._empty_snapshot(context, compatibility)
-                committed = RangeDetectorSeriesState(
-                    context.observed_at,
-                    sequence,
-                    (),
-                    None,
-                    staged.seen_pivot_identities,
-                    staged.ambiguous_pivot_open_times,
-                )
             else:
-                snapshot, committed = self._evaluate_compatible(context, staged, ambiguity_reason)
+                hard_failure = bool(compatibility) and (
+                    staged.active_range is not None
+                    or not self._soft_incompatibility(context, compatibility)
+                )
+                if hard_failure:
+                    snapshot = self._empty_snapshot(
+                        context,
+                        compatibility,
+                        partial_evidence_reset=(
+                            staged.active_range is None and bool(staged.pivot_history)
+                        ),
+                    )
+                    committed = _cleared(staged)
+                else:
+                    partial_breakout = self._partial_breakout(
+                        context, previous, staged, partial_expired
+                    )
+                    if partial_breakout is not None:
+                        snapshot = partial_breakout
+                        committed = _cleared(staged)
+                    elif compatibility:
+                        snapshot = self._empty_snapshot(
+                            context,
+                            compatibility,
+                            partial_evidence_retained=bool(staged.pivot_history),
+                            partial_evidence_reset=partial_expired,
+                        )
+                        committed = staged
+                    else:
+                        snapshot, committed = self._evaluate_compatible(
+                            context, staged, ambiguity_reason, partial_expired
+                        )
         self._states[key] = committed
         return snapshot
 
@@ -314,8 +352,14 @@ class ValidatedRangeDetector:
         context: StrategyEvaluationContext,
         previous: RangeDetectorSeriesState | None,
         sequence: int,
-    ) -> tuple[RangeDetectorSeriesState, bool]:
+    ) -> tuple[RangeDetectorSeriesState, bool, bool]:
         history = list(() if previous is None else previous.pivot_history)
+        expired = bool(history) and (
+            sequence - history[-1].confirmation_sequence
+            > self.configuration.maximum_bars_since_latest_qualifying_pivot
+        )
+        if expired:
+            history = []
         seen = list(() if previous is None else previous.seen_pivot_identities)
         ambiguous = set(() if previous is None else previous.ambiguous_pivot_open_times)
         incoming = sorted(
@@ -359,13 +403,71 @@ class ValidatedRangeDetector:
                 tuple(sorted(ambiguous)),
             ),
             bool(newly_ambiguous),
+            expired,
         )
+
+    @staticmethod
+    def _soft_incompatibility(
+        context: StrategyEvaluationContext, failures: tuple[RangeReasonCode, ...]
+    ) -> bool:
+        soft = {RangeReasonCode.HTF_DIRECTIONAL, RangeReasonCode.ENTRY_TREND_TOO_STRONG}
+        bias = context.multi_timeframe_regime.higher_timeframe_bias
+        return (
+            bool(failures)
+            and set(failures) <= soft
+            and (
+                RangeReasonCode.HTF_DIRECTIONAL not in failures
+                or bias in {HigherTimeframeBias.UP, HigherTimeframeBias.DOWN}
+            )
+        )
+
+    def _partial_breakout(
+        self,
+        context: StrategyEvaluationContext,
+        previous: RangeDetectorSeriesState | None,
+        staged: RangeDetectorSeriesState,
+        partial_expired: bool,
+    ) -> RangeContextSnapshot | None:
+        """Check an old complete box first, so new pivots cannot hide its break."""
+        atr = context.features_15m.atr_14
+        if staged.active_range is not None or not isinstance(atr, Decimal) or atr <= 0:
+            return None
+        histories = (
+            (() if previous is None or partial_expired else previous.pivot_history),
+            staged.pivot_history,
+        )
+        for history in histories:
+            geometry = self._geometry(history, atr)
+            if geometry.reasons or geometry.latest_confirmation_sequence is None:
+                continue
+            age = staged.sequence - geometry.latest_confirmation_sequence
+            if age > self.configuration.maximum_bars_since_latest_qualifying_pivot:
+                continue
+            assert geometry.upper_boundary is not None and geometry.lower_boundary is not None
+            buffer = self.configuration.breakout_invalidation_buffer_atr * atr
+            close = context.candle_15m.close
+            reason = None
+            if close >= geometry.upper_boundary + buffer:
+                reason = RangeReasonCode.RANGE_BROKEN_UP
+            elif close <= geometry.lower_boundary - buffer:
+                reason = RangeReasonCode.RANGE_BROKEN_DOWN
+            if reason is not None:
+                return self._snapshot(
+                    context,
+                    RangeStatus.RANGE_BROKEN,
+                    geometry,
+                    age,
+                    (reason,),
+                    partial_evidence_reset=True,
+                )
+        return None
 
     def _evaluate_compatible(
         self,
         context: StrategyEvaluationContext,
         staged: RangeDetectorSeriesState,
         ambiguity_reason: bool,
+        partial_expired: bool,
     ) -> tuple[RangeContextSnapshot, RangeDetectorSeriesState]:
         active = staged.active_range
         atr = context.features_15m.atr_14
@@ -424,6 +526,7 @@ class ValidatedRangeDetector:
                     geometry,
                     None,
                     (*prefix, *geometry.reasons),
+                    partial_evidence_reset=partial_expired,
                 ),
                 RangeDetectorSeriesState(
                     staged.last_observed_at,
@@ -556,6 +659,9 @@ class ValidatedRangeDetector:
         self,
         context: StrategyEvaluationContext,
         reasons: tuple[RangeReasonCode, ...],
+        *,
+        partial_evidence_retained: bool = False,
+        partial_evidence_reset: bool = False,
     ) -> RangeContextSnapshot:
         return RangeContextSnapshot(
             context.source_id,
@@ -576,6 +682,8 @@ class ValidatedRangeDetector:
             None,
             None,
             reasons,
+            partial_evidence_retained,
+            partial_evidence_reset,
         )
 
     def _snapshot(
@@ -585,6 +693,8 @@ class ValidatedRangeDetector:
         geometry: _Geometry,
         age: int | None,
         reasons: tuple[RangeReasonCode, ...],
+        *,
+        partial_evidence_reset: bool = False,
     ) -> RangeContextSnapshot:
         atr = context.features_15m.atr_14
         upper_break = lower_break = None
@@ -615,6 +725,7 @@ class ValidatedRangeDetector:
             upper_breakout_threshold=upper_break,
             lower_breakout_threshold=lower_break,
             reasons=reasons,
+            partial_evidence_reset=partial_evidence_reset,
         )
 
 

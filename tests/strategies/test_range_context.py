@@ -441,8 +441,8 @@ def test_incompatible_context_invalidates_and_clears_history(
 
 
 def test_temporary_directional_context_clears_pivots_but_retains_seen_identities() -> None:
-    # Synthetic expectation: continuous LOW/HIGH/LOW/HIGH qualifies, while the
-    # identical fourth pivot on an incompatible bar is consumed but not retained.
+    # Issue #169 prospectively supersedes the #163 pre-validation F4 reset:
+    # confirmed evidence is retained, but incompatibility cannot authorize a range.
     sequence = (
         (PivotKind.LOW, Decimal(20)),
         (PivotKind.HIGH, Decimal(40)),
@@ -463,12 +463,12 @@ def test_temporary_directional_context_clears_pivots_but_retains_seen_identities
     assert interrupted_result.reasons == (RangeReasonCode.HTF_DIRECTIONAL,)
     state = interrupted.state_for(SOURCE, BTC)
     assert state is not None
-    assert state.pivot_history == () and state.active_range is None
+    assert len(state.pivot_history) == 4 and state.active_range is None
     assert len(state.seen_pivot_identities) == 4
 
     returned = interrupted.process(_context(5))
-    assert returned.status is RangeStatus.INSUFFICIENT_DATA
-    assert returned.reasons == (RangeReasonCode.NEED_FOUR_CONFIRMED_PIVOTS,)
+    assert returned.status is RangeStatus.VALID_RANGE
+    assert returned.latest_qualifying_pivot_age_bars == 1
     with pytest.raises(RangeStateError, match="duplicate"):
         interrupted.process(_context(6, ((PivotKind.HIGH, Decimal(40), 4),)))
     after = interrupted.state_for(SOURCE, BTC)
@@ -572,7 +572,223 @@ def test_usable_history_is_bounded() -> None:
     for sequence in range(1, 14):
         kind = PivotKind.LOW if sequence % 2 else PivotKind.HIGH
         detector.process(
-            _context(sequence, ((kind, Decimal(20 + 20 * (sequence % 2 == 0)), sequence),))
+            _context(
+                sequence,
+                ((kind, Decimal(20 + 20 * (sequence % 2 == 0)), sequence),),
+                bias=HigherTimeframeBias.UP,
+            )
         )
     state = detector.state_for(SOURCE, BTC)
-    assert state is not None and len(state.pivot_history) == 12
+    assert state is not None and state.active_range is None and len(state.pivot_history) == 12
+
+
+@pytest.mark.parametrize(
+    "soft",
+    [
+        {"bias": HigherTimeframeBias.UP},
+        {"bias": HigherTimeframeBias.DOWN},
+        {"trend_strength": 41},
+        {"bias": HigherTimeframeBias.UP, "trend_strength": 41},
+    ],
+)
+def test_prevalidation_soft_interruption_retains_once_and_recovers(
+    soft: dict[str, object],
+) -> None:
+    detector = ValidatedRangeDetector()
+    order = ((PivotKind.LOW, 20), (PivotKind.HIGH, 40), (PivotKind.LOW, 20))
+    for sequence, (kind, price) in enumerate(order, start=1):
+        detector.process(_context(sequence, ((kind, Decimal(price), sequence),)))
+    fourth = detector.process(
+        _context(4, ((PivotKind.HIGH, Decimal(40), 4),), **soft)  # type: ignore[arg-type]
+    )
+    assert fourth.status is RangeStatus.NOT_RANGE
+    assert not fourth.is_valid_range and fourth.partial_evidence_retained
+    state = detector.state_for(SOURCE, BTC)
+    assert state is not None and state.active_range is None
+    assert len(state.pivot_history) == len(state.seen_pivot_identities) == 4
+    assert tuple(item.confirmation_sequence for item in state.pivot_history) == (1, 2, 3, 4)
+    recovered = detector.process(_context(5))
+    assert recovered.status is RangeStatus.VALID_RANGE
+    assert recovered.latest_qualifying_pivot_age_bars == 1
+
+
+@pytest.mark.parametrize(
+    "hard",
+    [{"ready": False}, {"warmed": False}, {"atr": None}, {"atr": Decimal(0)}, {"extreme": True}],
+)
+def test_hard_failure_clears_partial_even_with_directional_reason(
+    hard: dict[str, object],
+) -> None:
+    detector = ValidatedRangeDetector()
+    detector.process(_context(1, ((PivotKind.LOW, Decimal(20), 1),)))
+    result = detector.process(
+        _context(2, ((PivotKind.HIGH, Decimal(40), 2),), bias=HigherTimeframeBias.UP, **hard)  # type: ignore[arg-type]
+    )
+    assert result.status is RangeStatus.NOT_RANGE
+    assert result.partial_evidence_reset and not result.partial_evidence_retained
+    state = detector.state_for(SOURCE, BTC)
+    assert state is not None and state.pivot_history == ()
+    assert len(state.seen_pivot_identities) == 2
+    assert detector.process(_context(3)).status is RangeStatus.INSUFFICIENT_DATA
+
+
+def test_partial_inactivity_age_16_and_17_and_new_pivot_after_expiry() -> None:
+    detector = ValidatedRangeDetector()
+    detector.process(_context(1, ((PivotKind.LOW, Decimal(20), 1),)))
+    for sequence in range(2, 18):
+        result = detector.process(_context(sequence, bias=HigherTimeframeBias.UP))
+    assert result.partial_evidence_retained
+    assert len(detector.state_for(SOURCE, BTC).pivot_history) == 1  # type: ignore[union-attr]
+    expired = detector.process(
+        _context(18, ((PivotKind.HIGH, Decimal(40), 18),), bias=HigherTimeframeBias.UP)
+    )
+    assert expired.partial_evidence_reset and expired.partial_evidence_retained
+    state = detector.state_for(SOURCE, BTC)
+    assert state is not None and len(state.pivot_history) == 1
+    assert state.pivot_history[0].confirmation_sequence == 18
+    assert len(state.seen_pivot_identities) == 2
+    assert detector.process(_context(19)).status is RangeStatus.INSUFFICIENT_DATA
+
+
+@pytest.mark.parametrize("return_sequence", [20, 21])
+def test_complete_partial_box_age_boundary_cannot_be_renewed_by_compatibility(
+    return_sequence: int,
+) -> None:
+    detector = ValidatedRangeDetector()
+    for sequence, (kind, price) in enumerate(
+        ((PivotKind.LOW, 20), (PivotKind.HIGH, 40), (PivotKind.LOW, 20), (PivotKind.HIGH, 40)),
+        start=1,
+    ):
+        detector.process(
+            _context(sequence, ((kind, Decimal(price), sequence),), bias=HigherTimeframeBias.UP)
+        )
+    for sequence in range(5, return_sequence):
+        detector.process(_context(sequence, bias=HigherTimeframeBias.UP))
+    returned = detector.process(_context(return_sequence))
+    if return_sequence == 20:
+        assert returned.status is RangeStatus.VALID_RANGE
+        assert returned.latest_qualifying_pivot_age_bars == 16
+    else:
+        assert returned.status is RangeStatus.INSUFFICIENT_DATA
+        assert returned.partial_evidence_reset
+        assert detector.state_for(SOURCE, BTC).pivot_history == ()  # type: ignore[union-attr]
+
+
+def test_unknown_htf_is_not_soft_eligible() -> None:
+    detector = ValidatedRangeDetector()
+    detector.process(_context(1, ((PivotKind.LOW, Decimal(20), 1),)))
+    result = detector.process(_context(2, bias=HigherTimeframeBias.UNKNOWN))
+    assert result.reasons == (RangeReasonCode.HTF_DIRECTIONAL,)
+    assert result.partial_evidence_reset
+    assert detector.state_for(SOURCE, BTC).pivot_history == ()  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    ("break_close", "reason"),
+    [
+        (Decimal("41.5"), RangeReasonCode.RANGE_BROKEN_UP),
+        (Decimal("18.5"), RangeReasonCode.RANGE_BROKEN_DOWN),
+    ],
+)
+def test_complete_partial_box_breaks_at_exact_closed_threshold_before_recovery(
+    break_close: Decimal, reason: RangeReasonCode
+) -> None:
+    detector = ValidatedRangeDetector()
+    order = ((PivotKind.LOW, 20), (PivotKind.HIGH, 40), (PivotKind.LOW, 20), (PivotKind.HIGH, 40))
+    for sequence, (kind, price) in enumerate(order, start=1):
+        detector.process(
+            _context(sequence, ((kind, Decimal(price), sequence),), bias=HigherTimeframeBias.UP)
+        )
+    # Wick alone has not broken the unvalidated box.
+    still_retained = detector.process(
+        _context(5, close=Decimal(30), high=Decimal(50), bias=HigherTimeframeBias.UP)
+    )
+    assert still_retained.partial_evidence_retained
+    broken = detector.process(_context(6, close=break_close, bias=HigherTimeframeBias.UP))
+    assert broken.status is RangeStatus.RANGE_BROKEN
+    assert broken.reasons == (reason,)
+    assert broken.partial_evidence_reset
+    state = detector.state_for(SOURCE, BTC)
+    assert state is not None and state.pivot_history == ()
+    assert detector.process(_context(7)).status is RangeStatus.INSUFFICIENT_DATA
+
+
+def test_previous_complete_box_break_cannot_be_hidden_by_new_pivot() -> None:
+    detector = ValidatedRangeDetector()
+    for sequence, (kind, price) in enumerate(
+        ((PivotKind.LOW, 20), (PivotKind.HIGH, 40), (PivotKind.LOW, 20), (PivotKind.HIGH, 40)),
+        start=1,
+    ):
+        detector.process(
+            _context(sequence, ((kind, Decimal(price), sequence),), bias=HigherTimeframeBias.UP)
+        )
+    broken = detector.process(
+        _context(
+            5,
+            ((PivotKind.LOW, Decimal(30), 5),),
+            close=Decimal("41.5"),
+            bias=HigherTimeframeBias.UP,
+        )
+    )
+    assert broken.status is RangeStatus.RANGE_BROKEN
+    assert detector.state_for(SOURCE, BTC).pivot_history == ()  # type: ignore[union-attr]
+    assert len(detector.state_for(SOURCE, BTC).seen_pivot_identities) == 5  # type: ignore[union-attr]
+
+
+def test_first_validation_does_not_publish_broken_unvalidated_box() -> None:
+    detector = ValidatedRangeDetector()
+    for sequence, (kind, price) in enumerate(
+        ((PivotKind.LOW, 20), (PivotKind.HIGH, 40), (PivotKind.LOW, 20)), start=1
+    ):
+        detector.process(_context(sequence, ((kind, Decimal(price), sequence),)))
+    result = detector.process(
+        _context(4, ((PivotKind.HIGH, Decimal(40), 4),), close=Decimal("41.5"))
+    )
+    assert result.status is RangeStatus.RANGE_BROKEN
+    assert result.partial_evidence_reset
+    assert detector.process(_context(5)).status is RangeStatus.INSUFFICIENT_DATA
+
+
+def test_recovery_bar_cannot_validate_previously_retained_box_after_close_break() -> None:
+    detector = ValidatedRangeDetector()
+    for sequence, (kind, price) in enumerate(
+        ((PivotKind.LOW, 20), (PivotKind.HIGH, 40), (PivotKind.LOW, 20), (PivotKind.HIGH, 40)),
+        start=1,
+    ):
+        detector.process(
+            _context(sequence, ((kind, Decimal(price), sequence),), bias=HigherTimeframeBias.UP)
+        )
+    result = detector.process(_context(5, close=Decimal("18.5")))
+    assert result.status is RangeStatus.RANGE_BROKEN
+    assert result.reasons == (RangeReasonCode.RANGE_BROKEN_DOWN,)
+    assert detector.process(_context(6)).status is RangeStatus.INSUFFICIENT_DATA
+
+
+def test_ambiguous_occurrence_and_duplicate_survive_retention_and_reset() -> None:
+    detector = ValidatedRangeDetector()
+    detector.process(_context(1, ((PivotKind.LOW, Decimal(20), 1),), bias=HigherTimeframeBias.UP))
+    detector.process(
+        _context(
+            2,
+            ((PivotKind.HIGH, Decimal(40), 2), (PivotKind.LOW, Decimal(20), 2)),
+            bias=HigherTimeframeBias.UP,
+        )
+    )
+    state = detector.state_for(SOURCE, BTC)
+    assert state is not None and len(state.pivot_history) == 1
+    assert len(state.seen_pivot_identities) == 3
+    detector.process(_context(3, ready=False))
+    before = detector.state_for(SOURCE, BTC)
+    with pytest.raises(RangeStateError, match="duplicate"):
+        detector.process(_context(4, ((PivotKind.HIGH, Decimal(40), 2),)))
+    assert detector.state_for(SOURCE, BTC) == before
+
+
+def test_mutated_detector_policy_fails_before_state_commit() -> None:
+    detector = ValidatedRangeDetector()
+    detector.process(_context(1, ((PivotKind.LOW, Decimal(20), 1),)))
+    before = detector.state_for(SOURCE, BTC)
+    object.__setattr__(detector.configuration, "partial_evidence_policy_version", "forged")
+    with pytest.raises(ValueError, match="unsupported range partial-evidence policy"):
+        detector.process(_context(2))
+    assert detector.state_for(SOURCE, BTC) == before
