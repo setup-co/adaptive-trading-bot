@@ -28,6 +28,16 @@ COMBINED_VERSION = "weex-research-v2-last-90d-issue-179-combined-v1"
 ORIGINAL_MANIFEST_SHA = "870b4b5676f63c52ba9e2ccbcb1699ed5fd4222779de913dc6d8116fd1d7cee3"
 ORIGINAL_REPORT_SHA = "d71e0cf14e3a21ab5996e7debae6808dd3e6c534dc6ee14e39d2e27f511750cd"
 FAILED_ORIGINAL_ID = "BTCUSDT-04-2"
+CAPTURED_C1_REVISION = "c4e6fffe265b63dff1522abec27f45e32eee66c9"
+CAPTURED_C1_PLAN_SHA = "c9911bc6917f189f37efea319dc8347d4ce8b063a82299973ba7d7531e11c2f1"
+_C1_CLI_SHA = "9e68048a61ff449c97fcc2890f3dd4a99ab4b908221fe29184ca19aab855ebe2"
+_C1_BASE_SHA = "116eb2f1f2f1f80bbf0c43a7b47c7c8a9bbf5fab0f15e29dd7928a05aa9d56e7"
+_C1_CONT_SHA = "0d91c547640f3756ab9e2db943fe6ec9b24eab11e9cf1262ffe82fbdf07fac84"
+CAPTURED_C1_SOURCE_SHA = {
+    "scripts/research/research_v2_corpus_continuation.py": _C1_CLI_SHA,
+    "src/adaptive_trading_bot/research/research_v2_corpus.py": _C1_BASE_SHA,
+    "src/adaptive_trading_bot/research/research_v2_corpus_continuation.py": _C1_CONT_SHA,
+}
 
 
 def _files_sha(repo: Path) -> dict[str, str]:
@@ -110,7 +120,12 @@ def validate_plan(repo: Path, root: Path, plan: dict[str, Any]) -> None:
         raise c.CorpusError("continuation plan bytes are not canonical")
     if not isinstance(plan.get("source_revision"), str) or len(plan["source_revision"]) != 40:
         raise c.CorpusError("continuation source revision malformed")
-    if plan != make_plan(repo, plan["source_revision"]):
+    expected = make_plan(repo, plan["source_revision"])
+    if plan["source_revision"] == CAPTURED_C1_REVISION:
+        if c.sha((root / "plan.json").read_bytes()) != CAPTURED_C1_PLAN_SHA:
+            raise c.CorpusError("captured C1 plan identity changed")
+        expected["source_sha256"] = CAPTURED_C1_SOURCE_SHA
+    if plan != expected:
         raise c.CorpusError("continuation plan/source/original ledger mismatch")
     if any(entry["id"] == FAILED_ORIGINAL_ID for entry in plan["requests"]):
         raise c.CorpusError("completed original failed chunk cannot be retried")
@@ -128,19 +143,25 @@ def _terminal_transport(state: dict[str, Any]) -> bool:
 
 def _route_state(
     states: dict[tuple[str, int], dict[str, Any]], requests: list[dict[str, Any]]
-) -> tuple[int, bool]:
+) -> tuple[int, dict[str, str] | None]:
     failures = 0
+    stop: dict[str, str] | None = None
     for entry in requests:
         attempts = [states.get((entry["id"], number)) for number in (0, 1)]
         terminal = attempts[1] or attempts[0]
         if terminal is None:
             break
+        if stop is not None:
+            raise c.CorpusError("attempt appears after route stop")
         if terminal["outcome"] == "HTTP_OK":
             failures = 0
         elif _terminal_transport(terminal):
             failures += 1
             if failures >= 3:
-                return failures, True
+                stop = {
+                    "reason": "THREE_CONSECUTIVE_TERMINAL_TRANSPORT_FAILURES",
+                    "last_request_id": entry["id"],
+                }
         elif c._record_retryable(terminal) and attempts[1] is None:
             break
         elif terminal["outcome"] in {
@@ -149,10 +170,23 @@ def _route_state(
             "NETWORK_UNAVAILABLE",
             "HTTP_FAILURE",
         }:
-            return failures, True
+            stop = {"reason": terminal["outcome"], "last_request_id": entry["id"]}
         else:
             failures = 0
-    return failures, False
+    return failures, stop
+
+
+def _validate_route_stop(
+    root: Path, states: dict[tuple[str, int], dict[str, Any]], requests: list[dict[str, Any]]
+) -> tuple[int, dict[str, str] | None]:
+    failures, expected = _route_state(states, requests)
+    sidecar = root / "route_stop.json"
+    if expected is None:
+        if sidecar.exists():
+            raise c.CorpusError("route-stop sidecar has no terminal ledger outcome")
+    elif not sidecar.exists() or sidecar.read_bytes() != c.canonical(expected):
+        raise c.CorpusError("route-stop sidecar missing or inconsistent with ledger")
+    return failures, expected
 
 
 def capture(
@@ -165,12 +199,19 @@ def capture(
 ) -> dict[str, int | str]:
     """One frozen C1 route; no network before complete old/new ledger validation."""
     validate_plan(repo, root, plan)
+    if (
+        c.sha((root / "plan.json").read_bytes()) == CAPTURED_C1_PLAN_SHA
+        or (root / "manifest.json").exists()
+        or (root / "combined").exists()
+        or any((root / "archives").glob("*.zip"))
+    ):
+        raise c.CorpusError("finalized or archived continuation is capture-closed")
     snapshot = c.audit_ledger(root, plan)
     states = snapshot["states"]
     if snapshot["attempts"] + 15 > 5393:
         raise c.CorpusError("cumulative budget exceeded")
-    consecutive, stopped = _route_state(states, plan["requests"])
-    if stopped or (root / "route_stop.json").exists():
+    consecutive, stopped = _validate_route_stop(root, states, plan["requests"])
+    if stopped is not None:
         return {"status": "ROUTE_STOPPED", "new_attempts": 0}
     transport = transport or c.PublicHistoryTransport()
     sleep = sleep or time.sleep
@@ -343,7 +384,8 @@ def _projection(
 
 def build(repo: Path, root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     validate_plan(repo, root, plan)
-    c.audit_ledger(root, plan)
+    snapshot = c.audit_ledger(root, plan)
+    _validate_route_stop(root, snapshot["states"], plan["requests"])
     if (root / "manifest.json").exists() or (root / "combined").exists():
         raise c.CorpusError("continuation projection already exists")
     archive_hashes = c.pack_attempts(root, plan)
@@ -434,6 +476,7 @@ def verify(repo: Path, root: Path) -> dict[str, Any]:
         symbol: c._archive_members(root, symbol, archive_hashes[symbol]) for symbol in c.PANEL
     }
     ledger = c.audit_ledger(root, plan, new_archives)
+    _validate_route_stop(root, ledger["states"], plan["requests"])
     if manifest["ledger"] != {key: ledger[key] for key in ("distinct", "attempts", "retries")}:
         raise c.CorpusError("combined ledger count mismatch")
     if manifest["cumulative"] != {

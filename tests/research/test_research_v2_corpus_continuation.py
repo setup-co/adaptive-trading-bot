@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import http.client
+import json
+import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -161,3 +164,146 @@ def test_original_verifier_runs_outside_repository_without_git_ancestry(tmp_path
         f"assert v['manifest_sha256']=={x.ORIGINAL_MANIFEST_SHA!r}"
     )
     subprocess.run([sys.executable, "-c", code], cwd=tmp_path, check=True, timeout=30)
+
+
+def test_captured_c1_verifier_runs_outside_repository_without_git_ancestry(
+    tmp_path: Path,
+) -> None:
+    code = (
+        "import sys; from pathlib import Path; "
+        f"sys.path.insert(0, {str(REPO / 'src')!r}); "
+        "from adaptive_trading_bot.research import research_v2_corpus_continuation as x; "
+        f"v=x.verify(Path({str(REPO)!r}),Path({str(REPO / x.ROOT)!r})); "
+        "assert v['ledger']=={'distinct':1904,'attempts':1904,'retries':0}"
+    )
+    subprocess.run([sys.executable, "-c", code], cwd=tmp_path, check=True, timeout=60)
+
+
+def _published_archive_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, dict[str, Any]]:
+    root = tmp_path / "published-c1"
+    shutil.copytree(REPO / x.ROOT, root, ignore=shutil.ignore_patterns("working"))
+    monkeypatch.setattr(x, "ROOT", root)
+    return root, c.read_json(root / "plan.json")
+
+
+def _rewrite_archive(root: Path, symbol: str, replacements: dict[str, bytes]) -> None:
+    path = root / "archives" / f"{symbol}.zip"
+    with zipfile.ZipFile(path) as source:
+        members = {name: source.read(name) for name in source.namelist()}
+    members.update(replacements)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for name, data in sorted(members.items()):
+            target.writestr(name, data)
+    manifest = c.read_json(root / "manifest.json")
+    manifest["files"][f"archives/{symbol}.zip"] = c.sha(path.read_bytes())
+    (root / "manifest.json").write_bytes(c.canonical(manifest))
+
+
+def test_published_generations_verify_archive_only_and_never_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = tmp_path / "published-original"
+    shutil.copytree(REPO / x.ORIGINAL_ROOT, original, ignore=shutil.ignore_patterns("working"))
+    original_plan = c.read_json(original / "plan.json")
+    original_verified = c.verify(REPO, original, REPO / x.SOURCE, REPO / x.DOCS)
+    assert original_verified["manifest_sha256"] == x.ORIGINAL_MANIFEST_SHA
+    assert original_verified["ledger"] == {"distinct": 15, "attempts": 15, "retries": 0}
+    original_transport = FakeTransport([])
+    with pytest.raises(c.CorpusError, match="capture-closed"):
+        c.capture(original, original_plan, original_transport)
+    assert original_transport.queries == []
+
+    root, plan = _published_archive_only(tmp_path, monkeypatch)
+    verified = x.verify(REPO, root)
+    assert verified["manifest_sha256"] == (
+        "1a4e38d06a1847d902645bee287613de0e913ab6d523ebfb6e2424b3cee764ed"
+    )
+    assert verified["ledger"] == {"distinct": 1904, "attempts": 1904, "retries": 0}
+    assert verified["report"]["ten_member_usable_overlap"] == []
+    transport = FakeTransport([])
+    with pytest.raises(c.CorpusError, match="capture-closed"):
+        x.capture(REPO, root, plan, transport)
+    assert transport.queries == []
+
+
+@pytest.mark.parametrize("sidecar", ["missing", "inconsistent"])
+def test_published_stop_sidecar_is_bound_to_archived_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sidecar: str
+) -> None:
+    root, plan = _published_archive_only(tmp_path, monkeypatch)
+    stop = root / "route_stop.json"
+    if sidecar == "missing":
+        stop.unlink()
+    else:
+        stop.write_bytes(c.canonical({"reason": "DENIED", "last_request_id": "BTWUSDT-09-0"}))
+    with pytest.raises(c.CorpusError, match="route-stop sidecar"):
+        x.verify(REPO, root)
+    transport = FakeTransport([])
+    with pytest.raises(c.CorpusError, match="capture-closed"):
+        x.capture(REPO, root, plan, transport)
+    assert transport.queries == []
+
+
+def test_rehashed_archive_start_cannot_change_captured_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = _published_archive_only(tmp_path, monkeypatch)
+    name = "BTCUSDT-05-0/0.started.json"
+    with zipfile.ZipFile(root / "archives/BTCUSDT.zip") as archive:
+        started = json.loads(archive.read(name))
+    started["query"]["startTime"] = str(int(started["query"]["startTime"]) + 1)
+    _rewrite_archive(root, "BTCUSDT", {name: c.canonical(started)})
+    with pytest.raises(c.CorpusError, match="attempt start differs"):
+        x.verify(REPO, root)
+
+
+def test_rehashed_post_dns_stop_attempt_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, plan = _published_archive_only(tmp_path, monkeypatch)
+    after = next(
+        plan["requests"][index + 1]
+        for index, entry in enumerate(plan["requests"])
+        if entry["id"] == "BTWUSDT-09-0"
+    )
+    stem = after["id"] + "/0"
+    started = {
+        "request_id": after["id"],
+        "attempt": 0,
+        "query": after["query"],
+        "started_at": "2026-10-15T00:00:00Z",
+        "plan_sha256": c.sha((root / "plan.json").read_bytes()),
+    }
+    result = {
+        "request_id": after["id"],
+        "attempt": 0,
+        "completed_at": "2026-10-15T00:00:01Z",
+        "status": 200,
+        "outcome": "HTTP_OK",
+        "retryable": False,
+        "raw_sha256": c.sha(b"[]"),
+        "raw_bytes": 2,
+    }
+    _rewrite_archive(
+        root,
+        "BTWUSDT",
+        {
+            stem + ".started.json": c.canonical(started),
+            stem + ".result.json": c.canonical(result),
+            stem + ".raw": b"[]",
+        },
+    )
+    with pytest.raises(c.CorpusError, match="after route stop"):
+        x.verify(REPO, root)
+
+
+def test_denied_route_rejects_later_attempt_even_with_valid_results() -> None:
+    requests = [{"id": "one"}, {"id": "two"}]
+    states = {
+        ("one", 0): {"outcome": "DENIED", "retryable": False, "status": 403},
+        ("two", 0): {"outcome": "HTTP_OK", "retryable": False, "status": 200},
+    }
+    with pytest.raises(c.CorpusError, match="after route stop"):
+        x._route_state(states, requests)

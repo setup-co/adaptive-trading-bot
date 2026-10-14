@@ -88,8 +88,9 @@ ceilings. The committed raw archives preserve the exact working ledger bytes.
 
 BTC's exact excluded interval is
 `[2026-07-20T16:40:00Z,2026-07-21T00:00:00Z)`; its two data-only epochs
-must never be bridged. Its post-50-complete-4h usable interval begins only at
-`2026-07-29T08:00:00Z` in the second epoch. BTW's observed 5m epoch ends at
+must never be bridged. In the second epoch, `2026-07-29T08:00:00Z` is the
+**open** of the first retained post-warm-up 15m candle; its first eligible
+completed-candle observation is at `2026-07-29T08:15:00Z`. BTW's observed 5m epoch ends at
 `2026-07-25T00:00:00Z`; the failed chunk and later unattempted range remain
 distinct exclusions. Six complete individual price grids do not qualify the
 ten-member panel or any historical contract units. The ten-member usable

@@ -781,12 +781,20 @@ def capture(
     root: Path, plan: dict[str, Any], transport: Transport | None = None, *, sleep: Any = None
 ) -> dict[str, int | str]:
     """Resume only unattempted shapes/retryable second attempts on one frozen ledger."""
-    transport = transport or PublicHistoryTransport()
-    sleep = sleep or __import__("time").sleep
     requests = plan["requests"]
     if plan.get("schema") != SCHEMA or len(requests) != 2704 or plan["attempt_budget"] != 5408:
         raise CorpusError("capture requires the exact frozen inventory/budget")
+    if (
+        sha((root / "plan.json").read_bytes()) == ORIGINAL_PLAN_SHA
+        or (root / "manifest.json").exists()
+        or (root / "report.json").exists()
+        or any((root / "archives").glob("*.zip"))
+        or (root / "parquet").exists()
+    ):
+        raise CorpusError("finalized or archived generation is capture-closed")
     audit_ledger(root, plan)
+    transport = transport or PublicHistoryTransport()
+    sleep = sleep or __import__("time").sleep
     transmitted = 0
     last_sent: float | None = None
     for entry in requests:
