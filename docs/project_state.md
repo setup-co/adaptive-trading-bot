@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-10-14
+**Snapshot date:** 2026-10-15
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -52,6 +52,14 @@ has a post-warm-up usable epoch, and there is no ten-member overlap. See
 `docs/research/research_v2_corpus_issue_179_result.md` and its raw-to-Parquet
 manifest. The stopped same-ledger route cannot be silently retried or reset;
 Package A's executable research admission remains pending architect review.
+PR #180's separate source-frozen C1 continuation did not rewrite that
+generation. It sent 1,904 previously unattempted public GETs, then stopped
+on non-timeout DNS at `BTWUSDT-09-0`; 785 shapes remain unattempted and the
+original BTC 88-open gap remains. The independently verified combined
+projection has six complete individual 90-day 5m grids but no ten-member
+usable overlap and is still `PARTIAL_OR_BLOCKED`. See
+`docs/research/research_v2_corpus_issue_179_continuation.md`; this is data-only
+evidence, not Package A study activation or executable research admission.
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -326,7 +334,9 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    population or ten-asset history. Package B's prospective all-fill economics
    is merged. Issue #179's bounded Package A data/corpus attempt stopped at
    a non-timeout transport failure and locked a partial, non-admissible
-   artifact; it did not add executable research admission. Any later
+   artifact. Its separate bounded C1 continuation also stopped on DNS and
+   remains ten-member `PARTIAL_OR_BLOCKED`; neither generation added
+   executable research admission. Any later
    qualification or activation needs its own
    architect decision and frozen identities/folds/code/sufficiency rules.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
