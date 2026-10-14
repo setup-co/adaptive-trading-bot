@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.7
+**Document version:** 1.8
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -113,6 +113,18 @@ A valid trade can lose. A poor trade can win by chance. Journal and learning sys
 - Research membership does not confer Paper, Shadow or Live eligibility. Those gates remain per instrument and strategy, with Risk/Safety sovereignty and Live disabled. Ten research assets imply neither ten simultaneous trades nor ten independent risks.
 
 New research symbols require an explicit, separately reviewed research-only allowlist/configuration and qualified WEEX data. Existing BTC/ETH runtime symbol validation must not be removed or bypassed. Research selection and the initial reference model are specified in [`RESEARCH_V2_CHARTER_V1`](research/research_v2_charter.md); it authorizes no study or trading expansion.
+
+`CURRENT_SNAPSHOT_EXPLORATORY_PANEL_V1` is a separate selection-only exception to
+the charter's historical-as-of selection design. It uses the saved 2026-10-14
+current WEEX catalog and direct daily USDT quote turnover for the preceding
+thirty complete UTC days. Its output, if evidence-qualified, is only selected
+for further data qualification. It is not a January-2026 historical population,
+a survivorship-free/confirmatory universe, accepted 5m history, a runtime
+allowlist, or study/trading authorization. Retrospective periods through the
+ranking cutoff are selection-informed. A later confirmatory evaluation needs
+separately predeclared protected data after population, strategy and protocol
+decisions are frozen; no dates are assigned here. See the
+[exploratory-panel annex](research/research_v2_current_snapshot_panel.md).
 
 ## Timeframes
 
@@ -1709,14 +1721,27 @@ Approved:
 - Target Version: V1 research scope / Master Plan v1.7
 - Approved: Architect instruction in Issue #171; design only. Neither data/implementation qualification nor study execution or trading is authorized.
 
+### 2026-10-14 — Current-snapshot exploratory Research V2 selection route
+
+- Date: 2026-10-14
+- Change ID: Issue #175 / `CURRENT_SNAPSHOT_EXPLORATORY_PANEL_V1` / Master Plan v1.8
+- Old Decision: The charter's historical-as-of catalog and 30-day turnover rule was the sole intended ten-member selection route; #173 could not prove that historical population.
+- New Decision: Permit one explicitly exploratory, survivor/selection-biased retrospective panel selected from the separately captured 2026-10-14 current WEEX catalogs. Freeze a 2026-10-14 00:00 UTC ranking cutoff and the prior thirty complete UTC days; qualify unique crypto linear USDT exposures and directly reported USDT daily quote turnover; select BTC/ETH anchors plus eight other highest medians only after a bounded raw-evidence capture. Preserve the original historical-as-of standard for any claim of that kind.
+- Reason: Obtain a reproducible data-qualification candidate panel without fabricating unavailable historical catalog authority.
+- Expected Benefit: A bounded, reviewable path to instrument-specific historical data qualification while retaining an honest exploratory label.
+- Risk: Current survivors and prior inspection contaminate retrospective inference. All periods through the cutoff are selection-informed; no outcome study, confirmatory edge claim, 5m acceptance or trading authority follows from selection.
+- Affected Modules: Master Plan, Research V2 charter pointer, new selection annex, project state, standalone public-data script/tests/evidence only. No application/runtime/Risk/Safety/execution/accounting changes.
+- Target Version: Research V2 design / Master Plan v1.8
+- Approved: Architect instruction in Issue #175; selection-only. Any study activation requires separate review and prerequisites.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. Review Issue #173's bounded public-data feasibility evidence under the merged `RESEARCH_V2_CHARTER_V1`. Current catalog and daily probe rows do not establish historical as-of universe membership or full 5m anchor coverage/reconciliation. No research panel is selected. The charter is **not** an execution-ready protocol.
-2. Implement only separately approved prerequisites: (A) explicit research-only symbol scope and as-of universe/data qualification; (B) prospective all-fill replay/report accounting with synthetic compatibility evidence. Neither package may silently widen runtime allowlists or rewrite frozen reports.
+1. Issue #173's accepted public-data evidence is `PARTIAL / NOT QUALIFIED` for historical-as-of membership; its later supplement established four exact within-provider 5m/daily anchor-day reconciliations. Issue #175 may select an explicitly exploratory ten-member candidate panel from the saved current catalog and separately locked thirty-day daily pages. It cannot convert current survivors into a historical-as-of population, accept 5m history, or authorize a study. The charter remains **not** an execution-ready protocol.
+2. Implement only separately approved prerequisites: (A) explicit research-only symbol scope and qualified data, retaining historical-as-of proof for any historical-as-of claim or the declared exploratory limitation for the current-snapshot route; (B) prospective all-fill replay/report accounting with synthetic compatibility evidence. Neither package may silently widen runtime allowlists or rewrite frozen reports.
 3. Before a new study, the architect must approve an activation annex with selected qualified instruments, locked source/manifest hashes, exact UTC folds/epochs/warm-ups/follow-ups, executable code SHA and pre-result sufficiency/dependence rules. No historical run is authorized now. Limited unleveraged/pre-funding signal evidence remains distinct from **representative leveraged-perpetual validation**; the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account survival.
 
 Issue #118 is permanently stopped. Frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under new chronology, Range or population policy. Current BTC/ETH runtime/execution validation, Risk/Safety and Live-disabled gates remain. Standing venue stops and durable real-exchange fill reconciliation remain unqualified.

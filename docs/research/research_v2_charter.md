@@ -6,6 +6,8 @@
 
 **Authority:** Issue [#171](https://github.com/setup-co/adaptive-trading-bot/issues/171) and Master Plan v1.7. This is not an activated or fully locked study. A later architect-approved activation annex must lock the executable SHA, qualified data manifests, selected instruments, UTC calendar and acceptance rules before any run.
 
+Master Plan v1.8 / Issue #175 separately permits a **current-snapshot exploratory** selection-only route; see [its annex](research_v2_current_snapshot_panel.md). This does not satisfy the historical-as-of requirement below or authorize any retrospective confirmatory claim, data import, strategy study or trading.
+
 ## Scope and universe decision
 
 The product targets support for **at least ten assets**. The initial research panel targets **exactly ten** to bound qualification and comparison; ten is not a product ceiling. Research membership does not change today's BTC/ETH runtime/execution allowlists, admit ten simultaneous positions, create ten independent risks, prove any strategy, or confer Paper/Shadow/Live eligibility. Each instrument/strategy must separately pass the full gates. WEEX remains the sole primary source/venue policy. Decisions stay on closed 15m candles with 1h/4h context; qualified WEEX perpetual 5m LAST is historical input used to derive those frames, not a 5m entry strategy. Risk/Safety and Risk-owned bounded leverage remain sovereign; Live stays disabled.

@@ -8,13 +8,14 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after Issue #171 / PR #172 squash merge:
+Verified `main` after Issue #173 / PR #174 squash merge:
 
-`c3e10d121d3eddbcb034f60f973d4083aa11a97c`
+`6a24486f2efb6ab9466f6d7e28b36a9632bf3c13`
 
-This is the exact base for Issue #173's bounded public-data feasibility task,
-**not** a prediction of its future merge SHA. PR #172's reviewed HEAD and
-merged main have the same file tree (`ae3714708cce67500c1f289ea6f4f3d257a615d6`).
+This is the exact base for Issue #175's bounded current-snapshot exploratory
+panel-selection task, **not** a prediction of its future merge SHA. PR #174's
+reviewed HEAD and merged main have the same file tree
+(`a87f92c3db5141cde30c26ceb5ff248b5dc2f4f7`).
 PR #164 records the old-baseline audit in
 `docs/research/v1_decision_execution_semantics_audit.md`. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
@@ -27,8 +28,10 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169 and #171 are closed;
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171 and #173 are closed;
 Master Plan v1.7 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
+Issue #175 proposes the narrow Master Plan v1.8 exploratory-selection route;
+that proposed amendment is not merged authority yet.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
@@ -37,7 +40,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#173 — bounded Research V2 public-data feasibility is active.**
+**#175 — bounded Research V2 current-snapshot exploratory selection is active.**
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -49,18 +52,22 @@ The merged #171 charter specifies a separately qualified ten-asset research targ
 a runtime/Live allowlist expansion. Its two pending prerequisites are (A)
 research-universe/data qualification and (B) prospective all-fill replay/report
 accounting. It neither names accepted new symbols nor activates a study.
-Issue #173 permits only fixed public GET captures and offline verification.
+Issue #173's original and supplementary public captures are complete and immutable.
 Its original 27-request evidence reports a current-only catalog and complete
 daily probe rows, but its right-anchored 5m pages were incomplete. The separate
 review-authorized eight-request missing-prefix supplement reused those original
 bytes and now yields four complete 288/288 anchor days with exact same-provider
 daily/5m quote-volume matches. Both generations remain distinct and immutable.
 Historical as-of population and historical contract-unit comparability remain
-unestablished; probe identifiers are not a selected panel. See
+unestablished; probe identifiers are not a selected panel. Issue #175 may rank
+only explicitly qualified current-snapshot exposures by directly reported
+recent daily USDT quote turnover; success remains exploratory selection for
+further data qualification, not a historical-as-of claim or study activation. See
 `docs/research/research_v2_universe_feasibility.md` and the two raw-evidence
 manifests. No new historical economic or scarcity execution is authorized.
-Master Plan v1.7 §38's current-action wording predates the supplement; its
-research-qualification and no-study rules are unchanged. The prior #161
+The proposed Master Plan v1.8 §38 reconciles the accepted supplement and
+the separately authorized exploratory-selection route; no study is enabled.
+The prior #161
 one-time non-economic ETH-only scarcity continuation completed under
 the frozen #159 code SHA. A fresh B/C-only ledger recorded B=`COMPLETED`
 and C=`COMPLETED`, each exactly once. The anchored A+B+C descriptive
@@ -288,16 +295,15 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #173's bounded public-data feasibility evidence, preserving
-   original and supplementary capture provenance. The merged
-   `RESEARCH_V2_CHARTER_V1` is design authority, not an execution-ready study.
-   Four anchor days now have complete 5m coverage and exact daily quote-field
-   matches, but historical as-of membership and historical contract units are
-   not established; no ten-asset panel is selected. A prospective or
-   exploratory alternative requires separate architect approval. Package B's
-   prospective all-fill research economics remains a separate prerequisite.
-   Any later activation annex must lock qualified membership, manifests,
-   dated folds, code SHA and sufficiency rules before a study.
+1. Execute only Issue #175's predeclared current-snapshot exploratory
+   selection, preserving both #173 evidence generations. The four exact
+   anchor-day reconciliations do not establish historical-as-of population or
+   ten-asset history. Rank only evidence-qualified recent direct USDT quote
+   turnover after freezing eligibility and the missing-request plan. A selected
+   panel, if one qualifies, remains a candidate for future data qualification,
+   not an execution-ready study. Package B's prospective all-fill economics
+   remains a separate prerequisite. Any later activation annex must lock
+   qualified membership, manifests, folds, code SHA and sufficiency rules.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
