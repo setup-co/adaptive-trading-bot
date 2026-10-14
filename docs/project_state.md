@@ -8,13 +8,14 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after Issue #175 / PR #176 squash merge:
+Verified `main` after Issue #177 / PR #178 squash merge:
 
-`31510b5c69bfe33edcdc37880ab2a32e289cf162`
+`8b7d7c19697c6fc1eafcdce7666653861f8dcde3`
 
-This is the exact base for Issue #177's prospective all-fill research
-implementation. The merged Issue #175 exploratory selection is evidence for
-data qualification only, not historical-study activation.
+This is the exact base for Issue #179's bounded ten-member LAST data/corpus
+qualification. Issue #177's prospective all-fill research implementation is
+merged as Package B. The merged Issue #175 exploratory selection is evidence
+for data qualification only, not historical-study activation.
 PR #164 records the old-baseline audit in
 `docs/research/v1_decision_execution_semantics_audit.md`. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
@@ -24,7 +25,7 @@ screens are frozen NEGATIVE scientific results, not trading authority.
 PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 stopped correctly under fail-closed rules. PR #125 fixed the paired-research
 tooling blocker by recording `ENTRY_FILL_INVALIDATED` without an accounting
-branch in the legacy research result. Issue #177 adds separate prospective
+branch in the legacy research result. Issue #177 added separate prospective
 all-fill accounting. PR #126 then made leverage a bounded, versioned,
 predeclared Risk-owned V1 parameter and required representative perpetual
 mechanics before Live readiness. None is evidence for or against EMA50 performance.
@@ -33,7 +34,7 @@ mechanics before Live readiness. None is evidence for or against EMA50 performan
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173 and #175 are closed;
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175 and #177 are closed;
 Master Plan v1.8 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
@@ -43,7 +44,14 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#177 — prospective Research V2 all-fill economics implementation; no real historical study authorized.**
+**#179 — bounded Research V2 selected-panel LAST corpus qualification; no real historical study authorized.**
+The exact frozen 90-day public acquisition stopped after 15 new GET attempts
+(14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
+separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
+has a post-warm-up usable epoch, and there is no ten-member overlap. See
+`docs/research/research_v2_corpus_issue_179_result.md` and its raw-to-Parquet
+manifest. The stopped same-ledger route cannot be silently retried or reset;
+Package A's executable research admission remains pending architect review.
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -55,7 +63,7 @@ The merged #171 charter specifies a separately qualified ten-asset research targ
 a runtime/Live allowlist expansion. Issue #175 selected a current-snapshot
 exploratory panel for data qualification only. Package A's selected-instrument
 history/identity and research-only admission remain pending. Issue #177
-implements Package B's prospective all-fill replay/report accounting with
+completed Package B's prospective all-fill replay/report accounting with
 synthetic evidence; neither package activates a study.
 Issue #173's original and supplementary public captures are complete and immutable.
 Its original 27-request evidence reports a current-only catalog and complete
@@ -315,10 +323,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    `SELECTED_FOR_DATA_QUALIFICATION` combined projection. Do not issue another
    KAS request or infer study readiness from the exploratory panel. The four
    #173 exact anchor-day reconciliations do not establish historical-as-of
-   population or ten-asset history. Package B's
-   prospective all-fill economics remains a separate prerequisite; any later
-   qualification or activation needs its own architect decision and frozen
-   identities/folds/code/sufficiency rules before a study.
+   population or ten-asset history. Package B's prospective all-fill economics
+   is merged. Issue #179's bounded Package A data/corpus attempt stopped at
+   a non-timeout transport failure and locked a partial, non-admissible
+   artifact; it did not add executable research admission. Any later
+   qualification or activation needs its own
+   architect decision and frozen identities/folds/code/sufficiency rules.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
