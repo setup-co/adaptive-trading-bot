@@ -20,14 +20,16 @@ from adaptive_trading_bot.journal.decision import DecisionIdentity, DecisionJour
 from adaptive_trading_bot.orders import (
     EntryOrderIntentIdentity,
     EntrySide,
+    ExitIntentPurpose,
     ExitOrderIntentIdentity,
     ExitSide,
 )
+from adaptive_trading_bot.orders.exit_intent import POST_FILL_STOP_RECOVERY_POLICY_VERSION
 from adaptive_trading_bot.risk import OperationalSafetyStatus, RiskDecisionStatus
 from adaptive_trading_bot.strategies.core import CandidateAction, SourceIdentity
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-_JOURNAL_SCHEMA_VERSION = "1.0.0"
+_JOURNAL_SCHEMA_VERSION = "2.0.0"
 _PAPER_SIMULATION_SCHEMA_VERSION = "1.0.0"
 _COMPLETED_TRADE_ENTRY_TOKEN = object()
 
@@ -44,6 +46,7 @@ class TradeExitReason(StrEnum):
     """Currently authoritative Paper close reasons."""
 
     PROTECTIVE_STOP = "PROTECTIVE_STOP"
+    ENTRY_STOP_INVALIDATION = "ENTRY_STOP_INVALIDATION"
 
 
 class TradeOutcomeClassification(StrEnum):
@@ -127,6 +130,7 @@ class CompletedTradeJournalEntry:
     accounting_entry_fill_id: str
     accounting_exit_fill_id: str
     outcome_classification: TradeOutcomeClassification
+    recovery_policy_version: str | None = None
     _creation_token: InitVar[object] = None
     journal_schema_version: str = field(init=False, default=_JOURNAL_SCHEMA_VERSION)
     _creation_seal: object = field(init=False, repr=False, compare=False)
@@ -348,8 +352,21 @@ def _validate_execution_and_accounting(entry: CompletedTradeJournalEntry) -> Non
         raise TypeError("completed symbol must be a TradingSymbol")
     if not isinstance(entry.entry_side, EntrySide) or not isinstance(entry.exit_side, ExitSide):
         raise TypeError("completed trade sides are invalid")
-    if entry.exit_reason is not TradeExitReason.PROTECTIVE_STOP:
+    if entry.exit_reason not in set(TradeExitReason):
         raise CompletedTradeJournalValidationError("unsupported completed exit reason")
+    recovery = entry.exit_reason is TradeExitReason.ENTRY_STOP_INVALIDATION
+    expected_purpose = (
+        ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+        if recovery
+        else ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
+    )
+    if (
+        entry.identity.exit_intent_identity.purpose is not expected_purpose
+        or entry.identity.exit_intent_identity.exit_intent_schema_version != "2.0.0"
+        or entry.recovery_policy_version
+        != (POST_FILL_STOP_RECOVERY_POLICY_VERSION if recovery else None)
+    ):
+        raise CompletedTradeJournalValidationError("completed exit purpose/provenance is invalid")
     if entry.outcome_classification not in set(TradeOutcomeClassification):
         raise CompletedTradeJournalValidationError("outcome classification is invalid")
     for name, value in (
@@ -370,10 +387,12 @@ def _validate_execution_and_accounting(entry: CompletedTradeJournalEntry) -> Non
         require_utc(entry.exit_authorized_at, field="exit_authorized_at"),
         require_utc(entry.exit_fill_at, field="exit_fill_at"),
     )
-    if not (
-        times[0] <= times[1] <= times[2] < times[3] == times[4] <= times[5]
-        and entry.identity.exit_intent_identity.trigger_observed_at == times[3]
-    ):
+    chronology = (
+        times[0] <= times[1] <= times[2] == times[3] == times[4] < times[5]
+        if recovery
+        else times[0] <= times[1] <= times[2] < times[3] == times[4] <= times[5]
+    )
+    if not chronology or entry.identity.exit_intent_identity.trigger_observed_at != times[3]:
         raise CompletedTradeJournalValidationError("completed trade chronology is invalid")
     expected_duration = entry.exit_fill_at - entry.entry_fill_at
     if not isinstance(entry.duration, timedelta) or entry.duration != expected_duration:
@@ -421,7 +440,17 @@ def _validate_execution_and_accounting(entry: CompletedTradeJournalEntry) -> Non
     trigger_valid = (
         entry.entry_side is EntrySide.BUY and entry.trigger_reference_price <= entry.stop_basis
     ) or (entry.entry_side is EntrySide.SELL and entry.trigger_reference_price >= entry.stop_basis)
-    if entry.exit_side is not expected_exit_side or not trigger_valid:
+    invalidated_entry = (
+        entry.entry_side is EntrySide.BUY and entry.entry_fill_price <= entry.stop_basis
+    ) or (entry.entry_side is EntrySide.SELL and entry.entry_fill_price >= entry.stop_basis)
+    if (
+        entry.exit_side is not expected_exit_side
+        or (
+            recovery
+            and (not invalidated_entry or entry.trigger_reference_price != entry.entry_fill_price)
+        )
+        or (not recovery and (invalidated_entry or not trigger_valid))
+    ):
         raise CompletedTradeJournalValidationError("protective exit geometry is inconsistent")
 
     entry_quote = price_simulated_market_fill(

@@ -1,4 +1,4 @@
-"""Fail-closed protective-exit fill adapter for shared position accounting."""
+"""Fail-closed full-close exit fill adapter for shared position accounting."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from adaptive_trading_bot.execution import (
     price_simulated_market_fill,
 )
 from adaptive_trading_bot.orders import ExitIntentPurpose, ExitSide
+from adaptive_trading_bot.orders.exit_intent import POST_FILL_STOP_RECOVERY_POLICY_VERSION
 from adaptive_trading_bot.paper.exit_execution import PaperExitMarketFill
 from adaptive_trading_bot.strategies.core import SourceIdentity
 
@@ -61,9 +62,9 @@ def _validate_exit_fill(
     if (
         identity.originating_entry_intent_identity != entry_identity
         or entry_identity.decision_identity != decision
-        or identity.purpose is not ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
-        or identity.exit_intent_schema_version != "1.0.0"
-        or fill.simulation_schema_version != "1.0.0"
+        or identity.purpose not in set(ExitIntentPurpose)
+        or identity.exit_intent_schema_version != "2.0.0"
+        or fill.simulation_schema_version != "2.0.0"
         or not isinstance(decision.source_id, SourceIdentity)
         or decision.source_id != fill.source_id
         or decision.symbol != fill.symbol
@@ -93,7 +94,32 @@ def _validate_exit_fill(
     if (
         identity.trigger_observed_at != trigger_at
         or authorized_at != trigger_at
-        or not decision_at < trigger_at <= eligible_at <= fill_at
+        or not decision_at <= trigger_at <= eligible_at <= fill_at
+        or (
+            identity.purpose is ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
+            and decision_at >= trigger_at
+        )
+        or (
+            identity.purpose is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+            and fill_at <= trigger_at
+        )
+        or (
+            identity.purpose is ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
+            and (
+                fill.originating_accounting_fill_id is not None
+                or fill.recovery_policy_version is not None
+            )
+        )
+        or (
+            identity.purpose is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+            and (
+                not isinstance(fill.originating_accounting_fill_id, str)
+                or not fill.originating_accounting_fill_id
+                or fill.originating_accounting_fill_id
+                != fill.originating_accounting_fill_id.strip()
+                or fill.recovery_policy_version != POST_FILL_STOP_RECOVERY_POLICY_VERSION
+            )
+        )
     ):
         raise PaperExitFillAccountingAdapterError("Paper exit fill chronology is inconsistent")
     for name, decimal_value in (
@@ -140,7 +166,12 @@ def _exit_fill_id(fill: PaperExitMarketFill) -> str:
     decision = fill.originating_decision_identity
     canonical = "|".join(
         (
-            "paper-protective-exit",
+            (
+                "paper-entry-stop-recovery-exit"
+                if fill.exit_intent_identity.purpose
+                is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+                else "paper-protective-exit"
+            ),
             fill.source_id.value,
             str(fill.symbol),
             decision.observed_at.isoformat(),

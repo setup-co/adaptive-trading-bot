@@ -27,6 +27,7 @@ from adaptive_trading_bot.journal import (
 from adaptive_trading_bot.journal.trade_outcome import (
     CompletedTradeJournalEntry,
     CompletedTradeJournalSnapshot,
+    TradeExitReason,
 )
 from adaptive_trading_bot.regime import (
     Direction,
@@ -48,7 +49,7 @@ _SAMPLE_SCHEMA_VERSION = "1.0.0"
 _SAMPLE_INTEGRITY_SEAL_VERSION = "1.0.0"
 _SAMPLE_SNAPSHOT_SCHEMA_VERSION = "1.0.0"
 _DECISION_JOURNAL_SCHEMA_VERSION = "1.0.0"
-_COMPLETED_TRADE_JOURNAL_SCHEMA_VERSION = "1.0.0"
+_COMPLETED_TRADE_JOURNAL_SCHEMA_VERSION = "2.0.0"
 _ENTRY_CANDIDATES = frozenset({"LONG_CANDIDATE", "SHORT_CANDIDATE"})
 
 
@@ -384,7 +385,9 @@ class ExperienceTradeSample:
         if self.outcome_classification not in {"PROFIT", "LOSS", "BREAKEVEN"}:
             raise ExperienceProjectionError("sample outcome classification is invalid")
         if self.exit_reason != "PROTECTIVE_STOP":
-            raise ExperienceProjectionError("sample exit reason is invalid")
+            raise ExperienceProjectionError(
+                "Experience V1 sample projection supports protective-stop exits only"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,6 +503,10 @@ def _project_sample(
     decision: DecisionJournalEntry[object, object],
     trade: CompletedTradeJournalEntry,
 ) -> ExperienceTradeSample:
+    if trade.exit_reason is not TradeExitReason.PROTECTIVE_STOP:
+        raise ExperienceProjectionError(
+            "Experience V1 sample projection supports protective-stop exits only"
+        )
     action = decision.strategy_evaluation.action.value
     risk = decision.risk_decision
     safety = decision.safety_decision

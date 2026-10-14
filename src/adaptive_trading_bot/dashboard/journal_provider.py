@@ -131,7 +131,7 @@ class SnapshotDashboardJournalProvider:
         decisions: tuple[DecisionJournalEntry[object, object], ...],
     ) -> tuple[CompletedTradeJournalEntry, ...]:
         snapshot = self._completed
-        if snapshot.journal_schema_version != "1.0.0" or not isinstance(snapshot.entries, tuple):
+        if snapshot.journal_schema_version != "2.0.0" or not isinstance(snapshot.entries, tuple):
             raise DashboardJournalProviderError("completed journal snapshot is inconsistent")
         identities: set[object] = set()
         origins: set[DecisionIdentity] = set()

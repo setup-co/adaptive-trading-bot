@@ -717,15 +717,18 @@ def test_favorable_fill_keeps_approved_risk_and_notional_capacity_locked() -> No
     assert opened.locked_open_risk_quote == authorized.intent.approved_risk_quote
 
 
-def test_invalid_post_fill_stop_geometry_fails_before_accounting_commit() -> None:
+def test_valid_stop_invalidating_fill_is_accounted_with_pending_recovery() -> None:
     paper = coordinator()
     paper.start_batch((candidate(),))
-    before = paper.snapshot()
+    result = paper.observe_batch((observation(BTC, price=Decimal(70)),))
 
-    with pytest.raises(PaperPortfolioObservationError, match="stop basis"):
-        paper.observe_batch((observation(BTC, price=Decimal(70)),))
-
-    assert paper.snapshot() == before
+    assert len(result.newly_filled) == 1
+    assert result.newly_filled[0].recovery_required
+    assert len(result.active_exit_intents) == 1
+    assert result.accounting_positions[0][1].quantity != 0
+    assert paper.account_snapshot(NOW).cumulative_entry_fees_quote == (
+        result.newly_filled[0].fee_quote
+    )
 
 
 def test_lifecycle_clone_is_independent_from_raw_mutation() -> None:
