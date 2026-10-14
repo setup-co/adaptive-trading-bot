@@ -40,7 +40,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#175 — bounded Research V2 current-snapshot exploratory selection is active.**
+**#175 — bounded Research V2 current-snapshot exploratory selection evidence is captured; PR review pending.**
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -61,8 +61,13 @@ daily/5m quote-volume matches. Both generations remain distinct and immutable.
 Historical as-of population and historical contract-unit comparability remain
 unestablished; probe identifiers are not a selected panel. Issue #175 may rank
 only explicitly qualified current-snapshot exposures by directly reported
-recent daily USDT quote turnover; success remains exploratory selection for
-further data qualification, not a historical-as-of claim or study activation. See
+recent daily USDT quote turnover. Its one-shot 171-request acquisition recorded
+170 new raw daily pages plus five reusable #173 pages, but `KASUSDT` had one
+non-retryable `NETWORK_UNAVAILABLE` result. The full rank is consequently
+`RANKING_INCOMPLETE`, with **no ten-member selection**; the 175 observed medians
+are partial/descriptive only. No retry or alternate panel is authorized by this
+result. See the new exploratory-panel annex. Selection success would still
+mean only further data qualification, not historical-as-of proof or a study. See
 `docs/research/research_v2_universe_feasibility.md` and the two raw-evidence
 manifests. No new historical economic or scarcity execution is authorized.
 The proposed Master Plan v1.8 §38 reconciles the accepted supplement and
@@ -295,15 +300,13 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Execute only Issue #175's predeclared current-snapshot exploratory
-   selection, preserving both #173 evidence generations. The four exact
-   anchor-day reconciliations do not establish historical-as-of population or
-   ten-asset history. Rank only evidence-qualified recent direct USDT quote
-   turnover after freezing eligibility and the missing-request plan. A selected
-   panel, if one qualifies, remains a candidate for future data qualification,
-   not an execution-ready study. Package B's prospective all-fill economics
-   remains a separate prerequisite. Any later activation annex must lock
-   qualified membership, manifests, folds, code SHA and sufficiency rules.
+1. Review Issue #175's locked one-shot `RANKING_INCOMPLETE` result. Do not
+   retry the missing `KASUSDT` page or substitute a ten-member panel under
+   this completed budget. The four #173 exact anchor-day reconciliations do
+   not establish historical-as-of population or ten-asset history. Package B's
+   prospective all-fill economics remains a separate prerequisite; any later
+   qualification or activation needs its own architect decision and frozen
+   identities/folds/code/sufficiency rules before a study.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
