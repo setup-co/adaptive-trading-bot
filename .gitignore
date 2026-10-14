@@ -14,3 +14,4 @@ node_modules/
 coverage/
 *.tsbuildinfo
 /data/market_data/
+/data/research_corpus/issue-179-weex-last-90d-v1/working/
