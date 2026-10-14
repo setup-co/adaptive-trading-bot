@@ -41,6 +41,7 @@ from adaptive_trading_bot.strategies import (
     StrategyEvaluation,
     StrategyEvaluationContext,
 )
+from adaptive_trading_bot.strategies.range_context import RANGE_PARTIAL_EVIDENCE_RETENTION_V1
 
 START = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 BTC = TradingSymbol("BTC", "USDT")
@@ -241,8 +242,70 @@ def test_shared_strategy_contract_and_identity_are_unchanged() -> None:
 
     assert isinstance(strategy, Strategy)
     assert strategy.strategy_id == "range_mean_reversion"
-    assert strategy.strategy_version == "1.0.0"
+    assert strategy.strategy_version == "2.0.0"
     assert result.action is CandidateAction.LONG_CANDIDATE
+
+
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+def test_real_detector_soft_interruption_cannot_trade_but_recovery_obeys_entry_rules(
+    side: str,
+) -> None:
+    strategy = RangeMeanReversionStrategy()
+    pivots = (
+        (PivotKind.LOW, Decimal(80), 1),
+        (PivotKind.HIGH, Decimal(120), 2),
+        (PivotKind.LOW, Decimal(80), 3),
+        (PivotKind.HIGH, Decimal(120), 4),
+    )
+    for sequence, pivot in enumerate(pivots[:3], start=1):
+        assert (
+            strategy.evaluate(_context(sequence, pivots=(pivot,))).action
+            is CandidateAction.NO_TRADE
+        )
+    price = (
+        {
+            "open_price": Decimal(85),
+            "high": Decimal(95),
+            "low": Decimal("82.5"),
+            "close": Decimal(90),
+            "rsi": Decimal(45),
+        }
+        if side == "LONG"
+        else {
+            "open_price": Decimal(115),
+            "high": Decimal("117.5"),
+            "low": Decimal(105),
+            "close": Decimal(110),
+            "rsi": Decimal(55),
+        }
+    )
+    fourth = _context(4, pivots=(pivots[3],), **price)  # type: ignore[arg-type]
+    incompatible = replace(
+        fourth,
+        multi_timeframe_regime=replace(
+            fourth.multi_timeframe_regime, higher_timeframe_bias=HigherTimeframeBias.UP
+        ),
+    )
+    blocked = strategy.evaluate(incompatible)
+    assert blocked.action is CandidateAction.NO_TRADE
+    assert blocked.rule_audit.partial_evidence_retained
+    assert blocked.rule_audit.partial_evidence_policy_version == RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    recovered = strategy.evaluate(_context(5, **price))  # type: ignore[arg-type]
+    assert recovered.action is (
+        CandidateAction.LONG_CANDIDATE if side == "LONG" else CandidateAction.SHORT_CANDIDATE
+    )
+    assert (
+        recovered.rule_audit.partial_evidence_policy_version == RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
+
+
+def test_strategy_rejects_mismatched_range_policy_snapshot() -> None:
+    context = _context()
+    snapshot = _valid_snapshot(context)
+    object.__setattr__(snapshot, "partial_evidence_policy_version", "forged")
+    result = RangeMeanReversionStrategy(range_detector=StubDetector(snapshot)).evaluate(context)
+    assert result.action is CandidateAction.NO_TRADE
+    assert result.reasons_against == (RangeMeanReversionReasonCode.RANGE_SNAPSHOT_INCONSISTENT,)
 
 
 def test_configuration_defaults_and_validation_are_exact() -> None:

@@ -43,14 +43,17 @@ from adaptive_trading_bot.research.paired_exit_replay import (
 )
 from adaptive_trading_bot.research.trend_pullback_corpus import _integrity_seal
 from adaptive_trading_bot.strategies import CandidateAction, RangeMeanReversionStrategy
-from adaptive_trading_bot.strategies.range_context import RangeStatus
+from adaptive_trading_bot.strategies.range_context import (
+    RANGE_PARTIAL_EVIDENCE_RETENTION_V1,
+    RangeStatus,
+)
 from adaptive_trading_bot.strategies.range_mean_reversion import (
     RangeMeanReversionRuleAudit,
     RangeMeanReversionSide,
 )
 
 POLICY_VERSION = "RANGE_MEAN_REVERSION_ENTRY_MIDPOINT_V1"
-_SCHEMA = "range-mean-reversion-midpoint-replay-v2"
+_SCHEMA = "range-mean-reversion-midpoint-replay-v3"
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 
 
@@ -134,6 +137,7 @@ def _entry_rule_audit(
     )
     if (
         audit.range_status is not RangeStatus.VALID_RANGE
+        or audit.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
         or audit.selected_side is not expected_side
         or audit.lower_boundary is None
         or audit.upper_boundary is None
@@ -181,6 +185,9 @@ class RangeMeanReversionReplayResult:
     unresolved_quantity: Decimal | None = None
     unresolved_average_entry_price: Decimal | None = None
     policy_version: str = field(init=False, default=POLICY_VERSION)
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
     entry_chronology_policy_version: str = field(init=False, default=CAUSAL_ENTRY_CHRONOLOGY_V2)
     schema_version: str = field(init=False, default=_SCHEMA)
     integrity_seal: str = field(init=False, repr=False)
@@ -214,6 +221,8 @@ class RangeMeanReversionReplayResult:
         if (
             self.schema_version != _SCHEMA
             or self.policy_version != POLICY_VERSION
+            or self.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+            or audit.partial_evidence_policy_version != self.partial_evidence_policy_version
             or self.entry_chronology_policy_version != CAUSAL_ENTRY_CHRONOLOGY_V2
             or self.decision_identity != self.entry_intent.decision_identity
             or self.execution_series.source_id != self.entry_intent.source_id

@@ -581,7 +581,9 @@ def test_results_snapshots_and_permits_are_immutable_and_permit_is_not_forgeable
 def test_all_v1_strategy_reason_and_audit_types_are_generic(
     reason: object, audit_type: type[object]
 ) -> None:
-    audit = cast(Any, audit_type)(**{item.name: None for item in cast(Any, fields)(audit_type)})
+    audit = cast(Any, audit_type)(
+        **{item.name: None for item in cast(Any, fields)(audit_type) if item.init}
+    )
     result = _evaluate(_candidate(reason=reason, audit=audit))
 
     assert result.status is PortfolioAdmissionStatus.ADMITTED

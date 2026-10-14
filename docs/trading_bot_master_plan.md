@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.5
+**Document version:** 1.6
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -419,6 +419,27 @@ Typical evidence:
 - exhaustion/mean-reversion condition;
 - no genuine breakout confirmation;
 - no major opposing fundamental shock.
+
+`RANGE_PARTIAL_EVIDENCE_RETENTION_V1` prospectively distinguishes confirmed,
+pre-validation pivot evidence from an active validated range. Only a data-valid,
+fully ready/warmed context with positive finite ATR and no extreme volatility
+may retain bounded partial evidence during actual HTF UP/DOWN bias and/or entry
+trend strength above the unchanged maximum. This never validates a range or
+permits a candidate while incompatible. An already validated range still resets
+on incompatibility. Hard blockers clear partial building history, while seen
+pivot identities and ambiguity records remain for deduplication. Partial
+evidence expires after the existing 16-bar latest-confirmation inactivity bound
+(age 16 eligible; 17 expired), including incompatible bars; new pivots cannot
+resurrect expired history. A complete unvalidated qualifying box is invalidated
+by a closed price at or beyond its existing ATR-buffered breakout thresholds,
+including before first validation and before incoming pivots can hide a known
+break. Wicks alone do not break it. Return to compatibility re-evaluates only
+the latest four causally confirmed usable pivots against current unchanged
+geometry/eligibility rules. Range strategy version `2.0.0` identifies this
+prospective decision behavior; numerical entry/detector thresholds are unchanged.
+Frozen #153/#157/#161 protocols and evidence retain their original code/version
+authority and reject this policy. This is a research/strategy-context rule, not
+Paper/Live admission authority or proof of improved signal economics.
 
 ---
 
@@ -1654,17 +1675,30 @@ Approved:
 - Target Version: V1 / Master Plan v1.5
 - Approved: Architect implementation instruction in Issue #167; no Paper service activation, exchange order or historical study is authorized.
 
+### 2026-10-14 — Bounded pre-validation Range evidence retention
+
+- Date: 2026-10-14
+- Change ID: Issue #169 / `RANGE_PARTIAL_EVIDENCE_RETENTION_V1` / Master Plan v1.6
+- Old Decision: Every compatibility failure cleared both active validated ranges and pre-validation usable pivot history.
+- New Decision: Preserve bounded confirmed partial evidence only during data-valid HTF directional and/or over-strength incompatibility before any active range; retain the existing active-range reset, hard-blocker clearing, latest-confirmation expiry, and closed-price breakout invalidation. No candidate is allowed during incompatibility.
+- Reason: Confirmed structural facts before validation are not themselves permission to trade, and the original #31 active-range reset did not settle all pre-validation retention cases.
+- Expected Benefit: An explicit causal, auditable retention rule without relaxing eligibility or numerical thresholds.
+- Risk: Changed candidate availability in future research; frozen studies cannot be reinterpreted or rerun under this policy. A retained box may still fail on current geometry, freshness, breakout, or strategy entry gates.
+- Affected Modules: Range detector/strategy version, directly affected sealed Range research provenance and frozen-protocol rejection guards, synthetic tests, Master Plan and project state. Risk/Safety, execution, Paper recovery and qualified datasets are unchanged.
+- Target Version: V1 / Master Plan v1.6
+- Approved: Architect implementation instruction in Issue #169; no historical study, trading activation or asset expansion is authorized.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. #165 is complete. Implement and review Issue #167's bounded offline Paper post-fill stop recovery without rerunning frozen studies or activating a trading service.
-2. Separately decide Range partial-evidence retention and remaining execution realism. Range midpoint/target recovery, standing venue stops and durable real-exchange fill reconciliation are not qualified by #167.
+1. #165 and #167 are complete. Review Issue #169's bounded prospective Range partial-evidence retention implementation without rerunning frozen studies or activating a trading service.
+2. After #169 review, separately decide the asset-universe scope and minimum execution assumptions for any fresh, explicitly predeclared research protocol. Range midpoint/target recovery, standing venue stops and durable real-exchange fill reconciliation remain unqualified.
 3. Separately authorized, limited unleveraged/pre-funding signal research is distinguishable from **representative leveraged-perpetual validation**. Missing historical liquidation mechanics do not automatically forbid the former, but the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account-survival behavior. This paragraph authorizes no study.
 
-Issue #118 is permanently stopped and must never be resumed. The frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under the new timing policy. Any future study requires its own architect-approved, predeclared scope and locked code SHA. None of this relaxes the V1 BTC/ETH boundary; a target of at least ten assets remains a separate pending architecture decision.
+Issue #118 is permanently stopped and must never be resumed. The frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under the new chronology or Range policy. Any future study requires its own architect-approved, predeclared scope and locked code SHA. None of this relaxes the V1 BTC/ETH boundary; a target of at least ten assets remains a separate pending architecture decision.
 
 ---
 

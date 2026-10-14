@@ -26,6 +26,7 @@ from adaptive_trading_bot.research.range_mean_reversion_corpus import (
 from adaptive_trading_bot.research.range_mean_reversion_scarcity import (
     DATASET_VERSION,
     FROZEN_DIAGNOSTIC_RUNS,
+    FROZEN_SCHEMA_VERSION,
     MANIFEST_SHA256,
     SOURCE_ID,
     DiagnosticRunDefinition,
@@ -419,6 +420,8 @@ class RangeScarcityUnitRecord:
 def _validate_eth_report(report: RangeScarcityReport, definition: DiagnosticRunDefinition) -> None:
     if definition not in CONTINUATION_RUNS or report.run_id != definition.run_id:
         raise ScarcityContinuationError("only exact ETH B/C reports are accepted")
+    if report.schema_version != FROZEN_SCHEMA_VERSION:
+        raise ScarcityContinuationError("new Range policy is not frozen ETH evidence")
     report.validate()
     if any(
         row.identity.symbol != definition.symbol

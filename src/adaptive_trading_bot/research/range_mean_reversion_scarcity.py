@@ -45,11 +45,13 @@ from adaptive_trading_bot.strategies import (
     RangeMeanReversionRuleAudit,
 )
 from adaptive_trading_bot.strategies.range_context import (
+    RANGE_PARTIAL_EVIDENCE_RETENTION_V1,
     RangeReasonCode,
     RangeStatus,
 )
 
-SCHEMA_VERSION = "range-mean-reversion-scarcity-v1"
+SCHEMA_VERSION = "range-mean-reversion-scarcity-v2"
+FROZEN_SCHEMA_VERSION = "range-mean-reversion-scarcity-v1"
 PROTOCOL_VERSION = "RANGE_MEAN_REVERSION_CANDIDATE_SCARCITY_V1"
 SOURCE_ID = SourceId("weex-v3-last-e5b0c4035a19d5a80ca7")
 DATASET_VERSION = "weex-v1-5m-last-a629a29b580b2e103adba918"
@@ -297,6 +299,9 @@ class RangeScarcityReport:
     counts: ScarcityCounts = field(init=False)
     report_digest: str = field(init=False)
     schema_version: str = field(init=False, default=SCHEMA_VERSION)
+    partial_evidence_policy_version: str = field(
+        init=False, default=RANGE_PARTIAL_EVIDENCE_RETENTION_V1
+    )
     is_trading_authority: bool = field(init=False, default=False)
     integrity_seal: str = field(init=False, repr=False)
 
@@ -324,6 +329,7 @@ class RangeScarcityReport:
     def _validate_facts(self) -> None:
         if (
             self.schema_version != SCHEMA_VERSION
+            or self.partial_evidence_policy_version != RANGE_PARTIAL_EVIDENCE_RETENTION_V1
             or self.is_trading_authority
             or not self.run_id
             or self.corpus_id != f"range-mean-reversion-research-corpus:{self.corpus_digest}"
@@ -377,6 +383,8 @@ def project_corpus(
         audit = evaluation.rule_audit
         if not isinstance(audit, RangeMeanReversionRuleAudit):
             raise RangeScarcityError("Range Mean Reversion rule audit is unavailable")
+        if audit.partial_evidence_policy_version != corpus.partial_evidence_policy_version:
+            raise RangeScarcityError("Range policy provenance differs")
         if not isinstance(evaluation.reasons_against, tuple):
             raise RangeScarcityError("strategy counter-evidence is malformed")
         rows.append(
@@ -445,6 +453,7 @@ def validate_frozen_unit(
     definition: DiagnosticRunDefinition,
 ) -> None:
     """Require exact locked WEEX identity and immutable-manifest warm-up policy."""
+    _require_frozen_range_policy()
     if (
         not isinstance(store, LockedWeexResearchCorpusStore)
         or definition not in FROZEN_DIAGNOSTIC_RUNS
@@ -466,6 +475,7 @@ def validate_frozen_unit(
 def _frozen_configuration(
     store: LockedWeexResearchCorpusStore, definition: DiagnosticRunDefinition
 ) -> RangeMeanReversionResearchConfiguration:
+    _require_frozen_range_policy()
     return RangeMeanReversionResearchConfiguration(
         (SOURCE_ID,),
         (definition.symbol,),
@@ -474,6 +484,17 @@ def _frozen_configuration(
         RESEARCH_EQUITY,
         warmup_exclusions=locked_warmup_exclusions(store, (definition.symbol,)),
     )
+
+
+def _require_frozen_range_policy() -> None:
+    """Never reinterpret #157/#161 through a newly versioned detector default."""
+    from adaptive_trading_bot.strategies import RangeMeanReversionStrategy
+    from adaptive_trading_bot.strategies.range_context import ValidatedRangeConfiguration
+
+    if RangeMeanReversionStrategy().strategy_version != "1.0.0" or hasattr(
+        ValidatedRangeConfiguration(), "partial_evidence_policy_version"
+    ):
+        raise RangeScarcityError("frozen scarcity protocol rejects current Range policy")
 
 
 def run_predeclared_diagnostic_unit(
