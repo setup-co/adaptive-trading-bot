@@ -22,7 +22,9 @@ Before changing code, read:
 
 - Python Modular Monolith
 - PostgreSQL + Parquet
-- BTC / ETH only
+- BTC / ETH only in current runtime/execution allowlists; a separately qualified
+  ten-asset research panel is designed in [`RESEARCH_V2_CHARTER_V1`](docs/research/research_v2_charter.md),
+  not yet implemented, qualified or authorized for a study or trading
 - 15m entry timeframe
 - 1h / 4h context
 - Trend Pullback
