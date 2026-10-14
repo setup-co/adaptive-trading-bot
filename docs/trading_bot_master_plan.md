@@ -1715,7 +1715,7 @@ Approved:
 
 The current critical-path sequence is:
 
-1. Review Issue #171's documentation-only `RESEARCH_V2_CHARTER_V1`. Its design is specified, but research-universe implementation, data qualification and all-fill economics are pending. The charter is **not** an execution-ready protocol.
+1. Review Issue #173's bounded public-data feasibility evidence under the merged `RESEARCH_V2_CHARTER_V1`. Current catalog and daily probe rows do not establish historical as-of universe membership or full 5m anchor coverage/reconciliation. No research panel is selected. The charter is **not** an execution-ready protocol.
 2. Implement only separately approved prerequisites: (A) explicit research-only symbol scope and as-of universe/data qualification; (B) prospective all-fill replay/report accounting with synthetic compatibility evidence. Neither package may silently widen runtime allowlists or rewrite frozen reports.
 3. Before a new study, the architect must approve an activation annex with selected qualified instruments, locked source/manifest hashes, exact UTC folds/epochs/warm-ups/follow-ups, executable code SHA and pre-result sufficiency/dependence rules. No historical run is authorized now. Limited unleveraged/pre-funding signal evidence remains distinct from **representative leveraged-perpetual validation**; the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account survival.
 

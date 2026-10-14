@@ -8,13 +8,13 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after Issue #169 / PR #170 squash merge:
+Verified `main` after Issue #171 / PR #172 squash merge:
 
-`14e11068b6499b60f2e087df60d90994ef73d37d`
+`c3e10d121d3eddbcb034f60f973d4083aa11a97c`
 
-This is the exact base for Issue #171's documentation-only Research V2 charter,
-**not** a prediction of its future merge SHA. PR #170's reviewed HEAD and
-merged main have the same file tree (`c404a1c68b0d7dec7647b1a52c75f50462e09b4f`).
+This is the exact base for Issue #173's bounded public-data feasibility task,
+**not** a prediction of its future merge SHA. PR #172's reviewed HEAD and
+merged main have the same file tree (`ae3714708cce67500c1f289ea6f4f3d257a615d6`).
 PR #164 records the old-baseline audit in
 `docs/research/v1_decision_execution_semantics_audit.md`. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
@@ -27,9 +27,8 @@ PR #119 remains accepted evidence that the first locked-WEEX primary EMA50 study
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142 and #169 are closed;
-Master Plan v1.6 is merged. The v1.7 research/trading-scope distinction is
-proposed in Issue #171, not yet merged policy at this snapshot.
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169 and #171 are closed;
+Master Plan v1.7 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
@@ -38,7 +37,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#171 — documentation-only Research V2 architecture/charter design is active.**
+**#173 — bounded Research V2 public-data feasibility is active.**
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -46,12 +45,17 @@ admissions until a distinct causal full close. Merged #169 prospectively retains
 bounded confirmed Range pivot evidence only before validation and only through
 data-valid temporary direction/trend incompatibility; active-range reset,
 hard-blocker clearing, freshness, breakout and no-trade eligibility remain.
-Issue #171 specifies a separately qualified ten-asset research target, not
+The merged #171 charter specifies a separately qualified ten-asset research target, not
 a runtime/Live allowlist expansion. Its two pending prerequisites are (A)
 research-universe/data qualification and (B) prospective all-fill replay/report
 accounting. It neither names accepted new symbols nor activates a study.
-Architect review of its documentation PR is the next gate. No new historical
-economic or scarcity execution is authorized. The prior #161
+Issue #173 permits only a fixed public GET capture and offline verification.
+Its evidence reports a current-only catalog and complete daily probe rows but
+does not establish historical as-of population, complete anchor 5m days or
+daily/5m volume reconciliation. The probe identifiers are not a selected panel.
+See `docs/research/research_v2_universe_feasibility.md` and its new immutable
+raw-capture manifest. No new historical economic or scarcity execution is
+authorized. The prior #161
 one-time non-economic ETH-only scarcity continuation completed under
 the frozen #159 code SHA. A fresh B/C-only ledger recorded B=`COMPLETED`
 and C=`COMPLETED`, each exactly once. The anchored A+B+C descriptive
@@ -279,11 +283,13 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #171's `RESEARCH_V2_CHARTER_V1` and Master Plan v1.7 proposal.
-   It is design specified, implementation/data qualification pending and
-   execution NOT AUTHORIZED. The next bounded implementation packages are
-   research-only symbol/data qualification and prospective all-fill research
-   economics; the later activation annex must lock membership, manifests,
+1. Review Issue #173's bounded public-data feasibility evidence. The merged
+   `RESEARCH_V2_CHARTER_V1` is design authority, not an execution-ready study.
+   This probe does not establish historical as-of membership or full 5m anchor
+   coverage/reconciliation; no ten-asset panel is selected. A prospective or
+   exploratory alternative requires separate architect approval. Package B's
+   prospective all-fill research economics remains a separate prerequisite.
+   Any later activation annex must lock qualified membership, manifests,
    dated folds, code SHA and sufficiency rules before a study.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
@@ -296,4 +302,4 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 4. Keep the current BTC/ETH runtime and execution allowlists intact. A target
    of at least ten research assets does not qualify any new instrument for
    Paper, Shadow or Live. No strategy study, new symbol admission or trading
-   activation is authorized by this documentation gate.
+   activation is authorized by this feasibility gate.
