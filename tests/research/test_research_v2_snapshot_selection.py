@@ -354,6 +354,7 @@ def test_unmocked_original_verification_after_squash_in_shallow_checkout(
         panel.ORIGINAL,
         panel.SUPPLEMENT,
         panel.CAPTURE_BUNDLE,
+        panel.KAS_SUPPLEMENT,
     ):
         shutil.copytree(root / relative, source / relative)
     for relative in (
@@ -424,6 +425,24 @@ def test_unmocked_original_verification_after_squash_in_shallow_checkout(
         check=True,
     )
     assert json.loads(completed.stdout)["status"] == "RANKING_INCOMPLETE"
+    kas_verified = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.research.research_v2_snapshot_selection",
+            "kas-verify",
+            "--repo",
+            str(shallow),
+            "--evidence",
+            str(shallow / panel.KAS_SUPPLEMENT),
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(shallow)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(kas_verified.stdout)["status"] == "SELECTED_FOR_DATA_QUALIFICATION"
     helper = shallow / "scripts/research/research_v2_universe_feasibility.py"
     helper.write_bytes(helper.read_bytes() + b"\n# unreviewed verifier mutation\n")
     rejected = subprocess.run(
@@ -556,3 +575,39 @@ def test_kas_persistence_failure_blocks_before_get(
     with pytest.raises(panel.SelectionError, match="persistence"):
         panel.capture_kas(repo, evidence, Fake())
     assert calls == 0
+
+
+def test_locked_kas_completion_identity_and_raw_derived_panel() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    evidence = repo / panel.KAS_SUPPLEMENT
+    assert panel.sha((evidence / "plan.json").read_bytes()) == (
+        "515454fe2064bd90feccee243a6b06bfea46e449d8ef58c4be3000ef9148d756"
+    )
+    assert panel.sha((evidence / "001.raw.json").read_bytes()) == (
+        "f71383de530cbe2ac308482cbfa2be8beca9eb3f54e0c7001e26856aebee02a7"
+    )
+    assert panel.sha((evidence / "combined_selection.json").read_bytes()) == (
+        "80c2574deb124357f671785d6bcb64368a0441fa921d250f1ac2d6bc6cae41c4"
+    )
+    assert panel.sha((evidence / "manifest.json").read_bytes()) == (
+        "de96989dd4c582001db271a44f6e8174dee504f620e84c4631501574c369ec79"
+    )
+    result = panel.verify_kas(repo, evidence)
+    assert result["status"] == "SELECTED_FOR_DATA_QUALIFICATION"
+    assert result["supplement_attempt_count"] == 1
+    assert result["selected_symbols"] == [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "XRPUSDT",
+        "ZECUSDT",
+        "ZAMAUSDT",
+        "BCHUSDT",
+        "BTWUSDT",
+        "AVAXUSDT",
+        "DOGEUSDT",
+    ]
+    kas = next(row for row in result["candidate_records"] if row["symbol"] == "KASUSDT")
+    assert kas["rank"] == 96
+    assert kas["median_daily_usdt_quote_turnover"] == "624885.73020"
+    assert kas["selected"] is False

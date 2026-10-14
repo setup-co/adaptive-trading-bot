@@ -156,3 +156,55 @@ No historic 5m/full-history data, strategy outcome, account data, order or
 runtime symbol admission was requested or produced. The original 27 plus #173
 supplementary 8 requests remain separate: 35 old + 171 new = **206 recorded
 public attempts**, with no #173 request repeated. Package A is not complete.
+
+## Architect-authorized KAS-only completion (PR #176 correction)
+
+The original `RANKING_INCOMPLETE` selection and all #173/#175 capture bytes
+above remain immutable. The reviewed PR #176 correction first fixed the
+CI-style test import and made accepted #173/#175 source-bound offline
+verification independent of Git ancestry: the exact historical source,
+revision, plan, selection and manifest identities remain pinned, while raw
+responses are re-derived in a squash-equivalent shallow checkout and from
+outside the repository. The current #173 verifier generation is itself
+SHA-256 pinned; this does not rewrite the accepted capture identities.
+
+Only after focused and full offline checks passed, a separate KAS-only plan
+was frozen and committed before public I/O. Its source revision is
+`e9e57ef37a2825f8d858f6e611a397e9cc43a3f2`, source SHA-256 is
+`c5e7cb15ad58527b4febbf764068cdc9374cdc064f282003491ac6c111af60a7`,
+and plan SHA-256 is
+`515454fe2064bd90feccee243a6b06bfea46e449d8ef58c4be3000ef9148d756`.
+It permits only one `GET` to the official public V3 historical-Kline route
+with `symbol=KASUSDT`, `interval=1d`, `priceType=LAST`, `limit=100`,
+`startTime=1789344000000`, `endTime=1791935999999`; a second transmitted
+attempt was allowed only for a timeout or HTTP 5xx. No other missing page,
+successful page or #173 request was repeated.
+
+Exactly **one** supplementary request was transmitted and returned HTTP 200.
+Its 3,816-byte raw response SHA-256 is
+`f71383de530cbe2ac308482cbfa2be8beca9eb3f54e0c7001e26856aebee02a7`.
+The offline verifier finds exactly 30 complete valid daily rows for KASUSDT,
+median directly reported USDT quote turnover `624885.73020`, and final rank
+96 of 176 metadata-eligible, complete daily series. There is no remaining
+ranking blocker. The separate combined raw-to-rank result is
+`SELECTED_FOR_DATA_QUALIFICATION` and selects, in frozen order:
+`BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `ZECUSDT`, `ZAMAUSDT`, `BCHUSDT`,
+`BTWUSDT`, `AVAXUSDT`, `DOGEUSDT`. KASUSDT is **not** selected. The combined
+projection SHA-256 is
+`80c2574deb124357f671785d6bcb64368a0441fa921d250f1ac2d6bc6cae41c4`;
+the separate supplement manifest SHA-256 is
+`de96989dd4c582001db271a44f6e8174dee504f620e84c4631501574c369ec79`.
+Both are stored under
+`data/research_evidence/issue-175-weex-kas-completion-v1/`, not over the
+original #175 selection. There are now 172 Issue #175 attempts (171 original
+plus one authorized supplement), or 207 across both #173 and #175 evidence
+generations. This is **current-snapshot exploratory selection for future data
+qualification only**, not historical-as-of universe proof, a qualified 5m
+panel, or strategy-study activation.
+
+Reproduce both generations entirely offline:
+
+```text
+python -m scripts.research.research_v2_snapshot_selection verify --repo . --evidence data/research_evidence/issue-175-weex-current-panel-cf541a3
+python -m scripts.research.research_v2_snapshot_selection kas-verify --repo . --evidence data/research_evidence/issue-175-weex-kas-completion-v1
+```

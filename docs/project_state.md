@@ -40,7 +40,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#175 — bounded Research V2 current-snapshot exploratory selection evidence is captured; PR review pending.**
+**#175 — bounded Research V2 current-snapshot exploratory selection evidence is captured; PR #176 correction review pending.**
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -64,10 +64,15 @@ only explicitly qualified current-snapshot exposures by directly reported
 recent daily USDT quote turnover. Its one-shot 171-request acquisition recorded
 170 new raw daily pages plus five reusable #173 pages, but `KASUSDT` had one
 non-retryable `NETWORK_UNAVAILABLE` result. The full rank is consequently
-`RANKING_INCOMPLETE`, with **no ten-member selection**; the 175 observed medians
-are partial/descriptive only. No retry or alternate panel is authorized by this
-result. See the new exploratory-panel annex. Selection success would still
-mean only further data qualification, not historical-as-of proof or a study. See
+`RANKING_INCOMPLETE`, with **no ten-member selection** in that original
+immutable result. The latest architect review authorized exactly one separate
+KASUSDT missing-page completion plan, not a general retry. Its single public
+GET returned a complete 30-day series; the separately stored, raw-rederived
+combined result is `SELECTED_FOR_DATA_QUALIFICATION` for BTCUSDT, ETHUSDT,
+SOLUSDT, XRPUSDT, ZECUSDT, ZAMAUSDT, BCHUSDT, BTWUSDT, AVAXUSDT and DOGEUSDT.
+KASUSDT ranks 96th and is not selected. See the exploratory-panel annex for
+both immutable identities. This selection permits only further data
+qualification, not historical-as-of proof or a study. See
 `docs/research/research_v2_universe_feasibility.md` and the two raw-evidence
 manifests. No new historical economic or scarcity execution is authorized.
 The proposed Master Plan v1.8 §38 reconciles the accepted supplement and
@@ -300,10 +305,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #175's locked one-shot `RANKING_INCOMPLETE` result. Do not
-   retry the missing `KASUSDT` page or substitute a ten-member panel under
-   this completed budget. The four #173 exact anchor-day reconciliations do
-   not establish historical-as-of population or ten-asset history. Package B's
+1. Review Issue #175's original locked one-shot `RANKING_INCOMPLETE` result
+   alongside the separate architect-authorized KAS-only completion and
+   `SELECTED_FOR_DATA_QUALIFICATION` combined projection. Do not issue another
+   KAS request or infer study readiness from the exploratory panel. The four
+   #173 exact anchor-day reconciliations do not establish historical-as-of
+   population or ten-asset history. Package B's
    prospective all-fill economics remains a separate prerequisite; any later
    qualification or activation needs its own architect decision and frozen
    identities/folds/code/sufficiency rules before a study.
