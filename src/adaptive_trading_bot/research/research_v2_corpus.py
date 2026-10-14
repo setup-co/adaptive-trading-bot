@@ -17,7 +17,7 @@ import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Context, Decimal, InvalidOperation, localcontext
+from decimal import Context, Decimal, Inexact, InvalidOperation, Rounded, localcontext
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Protocol
@@ -68,6 +68,22 @@ HELPERS = (
     Path("scripts/research/research_v2_snapshot_selection.py"),
 )
 DECIMAL_CONTEXT = Context(prec=100)
+DECIMAL_CONTEXT.traps[Inexact] = True
+DECIMAL_CONTEXT.traps[Rounded] = True
+ORIGINAL_PLAN_SHA = "b98eb68a1d9d62f04c05a6245d2c2ddd70a85c0cde6b8b5b8559e78cb9dffac6"
+ORIGINAL_SOURCE_SHA = "fb95f011706a3c00b94cebdf10f943cee62e3fb4f8866e51e811acbcd96601ed"
+ORIGINAL_DOCS_SHA = "7eaa3a08c4f570f4cde8c110e616f55d271719eb45e318b6c81e81ae808582ce"
+ORIGINAL_HELPERS = {
+    "scripts/research/research_v2_corpus.py": (
+        "4a8724ea5b1c461f41d5b73bcdb8bfc257bccdd50e3607930d30cb76632c5640"
+    ),
+    "scripts/research/research_v2_snapshot_selection.py": (
+        "c5e7cb15ad58527b4febbf764068cdc9374cdc064f282003491ac6c111af60a7"
+    ),
+    "scripts/research/research_v2_universe_feasibility.py": (
+        "623ef9825ef09e75549f1222d035efc49e27abe9f1a93180cd8ab5ae93f66fd1"
+    ),
+}
 FIELDS = (
     "open_time_ms",
     "open",
@@ -285,16 +301,63 @@ def make_plan(repo: Path, source_sha: str, source_revision: str, docs_sha: str) 
 
 
 def validate_plan(repo: Path, plan: dict[str, Any], source_file: Path, docs_file: Path) -> None:
-    if plan != make_plan(
-        repo,
-        sha(source_file.read_bytes().replace(b"\r\n", b"\n")),
-        plan["source_revision"],
-        sha(docs_file.read_bytes().replace(b"\r\n", b"\n")),
-    ):
+    if plan.get("source_sha256") == ORIGINAL_SOURCE_SHA:
+        # The captured generation is immutable. Its source bytes are identified by
+        # the original plan, not by whichever verifier revision is installed now.
+        expected = make_plan(repo, ORIGINAL_SOURCE_SHA, plan["source_revision"], ORIGINAL_DOCS_SHA)
+        expected["helper_sha256"] = ORIGINAL_HELPERS
+        if plan["source_revision"] != "1c723a523544f1e13ab9ae5ac1b63b660b0e3343":
+            raise CorpusError("original capture source revision mismatch")
+    else:
+        expected = make_plan(
+            repo,
+            sha(source_file.read_bytes().replace(b"\r\n", b"\n")),
+            plan["source_revision"],
+            sha(docs_file.read_bytes().replace(b"\r\n", b"\n")),
+        )
+    if plan != expected:
         raise CorpusError("frozen plan/source/old evidence mismatch")
     ids = [entry["id"] for entry in plan["requests"]]
     if len(ids) != len(set(ids)) or len(ids) != plan["distinct_budget"]:
         raise CorpusError("duplicate or missing query identity")
+    validate_original_inventory(plan)
+
+
+def validate_original_inventory(plan: dict[str, Any]) -> None:
+    """Check fixed query semantics even when a plan/start hash is forged together."""
+    expected: list[dict[str, object]] = []
+    for symbol in PANEL:
+        for day_index in range(90):
+            day = START + day_index * DAY
+            if symbol in PANEL[:2] and day_index == 89:
+                continue
+            for chunk_index, (offset, length) in enumerate(((0, 100), (100, 100), (200, 88))):
+                begin = day + offset * FIVE
+                expected.append(
+                    {
+                        "id": f"{symbol}-{day_index:02d}-{chunk_index}",
+                        "query": query(symbol, "5m", begin, begin + length * FIVE),
+                        "expected_rows": length,
+                    }
+                )
+        expected.append(
+            {
+                "id": f"{symbol}-earlier-daily",
+                "query": query(symbol, "1d", START, RECENT_START),
+                "expected_rows": 60,
+            }
+        )
+    if (
+        plan.get("requests") != expected
+        or plan.get("panel") != list(PANEL)
+        or plan.get("start") != stamp(START)
+        or plan.get("end") != stamp(END)
+        or plan.get("endpoint") != HOST + ROUTE
+        or plan.get("price_type") != "LAST"
+        or plan.get("distinct_budget") != 2704
+        or plan.get("attempt_budget") != 5408
+    ):
+        raise CorpusError("plan request inventory/policy differs from frozen protocol")
 
 
 def _number(value: object, positive: bool = False) -> Decimal:
@@ -381,26 +444,31 @@ def epochs(rows: dict[int, Row], step: int = 300_000) -> list[tuple[int, int]]:
 def derive(rows: dict[int, Row], spans: list[tuple[int, int]], size: int) -> list[Row]:
     step = size * 300_000
     derived: list[Row] = []
-    with localcontext(DECIMAL_CONTEXT):
-        for begin, end in spans:
-            aligned = ((begin + step - 1) // step) * step
-            for opened in range(aligned, end - step + 1, step):
-                parts = [rows[opened + i * 300_000] for i in range(size)]
-                derived.append(
-                    Row(
-                        opened,
-                        parts[0].open,
-                        max(row.high for row in parts),
-                        min(row.low for row in parts),
-                        parts[-1].close,
-                        sum((row.base_volume for row in parts), Decimal(0)),
-                        opened + step,
-                        sum((row.quote_volume for row in parts), Decimal(0)),
-                        sum(row.trade_count for row in parts),
-                        sum((row.taker_buy_base_volume for row in parts), Decimal(0)),
-                        sum((row.taker_buy_quote_volume for row in parts), Decimal(0)),
+    try:
+        with localcontext(DECIMAL_CONTEXT):
+            for begin, end in spans:
+                aligned = ((begin + step - 1) // step) * step
+                for opened in range(aligned, end - step + 1, step):
+                    parts = [rows[opened + i * 300_000] for i in range(size)]
+                    derived.append(
+                        Row(
+                            opened,
+                            parts[0].open,
+                            max(row.high for row in parts),
+                            min(row.low for row in parts),
+                            parts[-1].close,
+                            sum((row.base_volume for row in parts), Decimal(0)),
+                            opened + step,
+                            sum((row.quote_volume for row in parts), Decimal(0)),
+                            sum(row.trade_count for row in parts),
+                            sum((row.taker_buy_base_volume for row in parts), Decimal(0)),
+                            sum((row.taker_buy_quote_volume for row in parts), Decimal(0)),
+                        )
                     )
-                )
+    except (Inexact, Rounded) as exc:
+        raise CorpusError(
+            "derived Decimal arithmetic is not exact within the checked bound"
+        ) from exc
     return derived
 
 
@@ -536,6 +604,179 @@ def attempt_state(root: Path, request_id: str, number: int) -> dict[str, Any] | 
     return state
 
 
+def _utc_event(value: object) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise CorpusError("attempt timestamp is not canonical UTC")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CorpusError("attempt timestamp is malformed") from exc
+    if parsed.tzinfo != UTC or stamp(parsed) != value:
+        raise CorpusError("attempt timestamp is not exact UTC")
+    return parsed
+
+
+def _record_retryable(result: dict[str, Any]) -> bool:
+    if "status" in result:
+        status: object = result["status"]
+        if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
+            raise CorpusError("attempt HTTP status invalid")
+        expected_outcome = (
+            "HTTP_OK"
+            if status == 200
+            else "DENIED"
+            if status in {401, 403, 429}
+            else "POLICY_FAILURE"
+            if 300 <= status <= 399
+            else "HTTP_FAILURE"
+        )
+        if result.get("outcome") != expected_outcome:
+            raise CorpusError("attempt outcome contradicts HTTP status")
+        if any(key in result for key in ("error_class", "reason_class", "errno")):
+            raise CorpusError("HTTP attempt contains network-error facts")
+        return 500 <= status <= 599
+    if result.get("outcome") != "NETWORK_UNAVAILABLE":
+        raise CorpusError("network attempt outcome/status inconsistent")
+    error_class = result.get("error_class")
+    reason_class = result.get("reason_class")
+    if not isinstance(error_class, str) or not error_class:
+        raise CorpusError("network error class missing")
+    if reason_class is not None and not isinstance(reason_class, str):
+        raise CorpusError("network reason class malformed")
+    errno = result.get("errno")
+    if errno is not None and (isinstance(errno, bool) or not isinstance(errno, int)):
+        raise CorpusError("network errno malformed")
+    return error_class in {"TimeoutError", "timeout"} or (
+        error_class == "URLError" and reason_class in {"TimeoutError", "timeout"}
+    )
+
+
+def audit_ledger(
+    root: Path,
+    plan: dict[str, Any],
+    members_by_symbol: dict[str, dict[str, bytes]] | None = None,
+) -> dict[str, Any]:
+    """Validate every durable attempt before capture or raw-to-report projection.
+
+    Recorded retry flags are audit claims, never retry authority. Archive and
+    working copies, when both present, must be byte-identical.
+    """
+    plan_path = root / "plan.json"
+    plan_bytes = plan_path.read_bytes()
+    if plan_bytes != canonical(plan):
+        raise CorpusError("plan bytes differ from frozen canonical plan")
+    plan_sha = sha(plan_bytes)
+    if plan.get("schema") == SCHEMA:
+        validate_original_inventory(plan)
+        if plan.get("source_sha256") == ORIGINAL_SOURCE_SHA and plan_sha != ORIGINAL_PLAN_SHA:
+            raise CorpusError("original plan identity changed")
+    expected: dict[str, dict[str, Any]] = {entry["id"]: entry for entry in plan["requests"]}
+    if len(expected) != len(plan["requests"]):
+        raise CorpusError("duplicate planned request ID")
+    allowed: set[str] = set()
+    states: dict[tuple[str, int], dict[str, Any]] = {}
+    previous_finished: datetime | None = None
+    retries = 0
+    unfinished_prefix = False
+    for entry in plan["requests"]:
+        request_id = entry["id"]
+        previous: dict[str, Any] | None = None
+        for number in (0, 1):
+            stem = f"{request_id}/{number}"
+            names = {
+                suffix: f"{stem}{suffix}" for suffix in (".started.json", ".result.json", ".raw")
+            }
+            archive = (members_by_symbol or {}).get(entry["query"]["symbol"], {})
+            record_bytes: dict[str, bytes] = {}
+            for suffix, member_name in names.items():
+                work_path = root / "working" / member_name
+                if work_path.with_suffix(work_path.suffix + ".pending").exists():
+                    raise CorpusError("ambiguous pending attempt")
+                from_work = work_path.read_bytes() if work_path.exists() else None
+                from_archive = archive.get(member_name)
+                if from_work is not None and from_archive is not None and from_work != from_archive:
+                    raise CorpusError("working/archive attempt copies disagree")
+                content = from_archive if from_archive is not None else from_work
+                if content is not None:
+                    record_bytes[suffix] = content
+                    allowed.add(member_name)
+            if not record_bytes:
+                if number == 0 or (
+                    number == 1 and previous is not None and _record_retryable(previous)
+                ):
+                    unfinished_prefix = True
+                continue
+            if unfinished_prefix:
+                raise CorpusError("attempt appears after an unattempted/pending plan cursor")
+            if set(record_bytes) not in (
+                {".started.json", ".result.json"},
+                {".started.json", ".result.json", ".raw"},
+            ):
+                raise CorpusError("ambiguous STARTED attempt or orphaned raw/result")
+            if number == 1 and (previous is None or not _record_retryable(previous)):
+                raise CorpusError("retry lacks a genuinely retryable predecessor")
+            if number == 1:
+                retries += 1
+            try:
+                started = json.loads(record_bytes[".started.json"])
+                result = json.loads(record_bytes[".result.json"])
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise CorpusError("attempt JSON malformed") from exc
+            if started != {
+                "request_id": request_id,
+                "attempt": number,
+                "query": entry["query"],
+                "started_at": started.get("started_at"),
+                "plan_sha256": plan_sha,
+            }:
+                raise CorpusError("attempt start differs from planned query/generation")
+            began = _utc_event(started["started_at"])
+            ended = _utc_event(result.get("completed_at"))
+            if ended < began or (previous_finished is not None and began < previous_finished):
+                raise CorpusError("attempt chronology is inconsistent")
+            previous_finished = ended
+            if result.get("request_id") != request_id or result.get("attempt") != number:
+                raise CorpusError("attempt result identity mismatch")
+            actual_retryable = _record_retryable(result)
+            if result.get("retryable") is not actual_retryable:
+                raise CorpusError("recorded retry eligibility contradicts status/error")
+            raw = record_bytes.get(".raw")
+            if "status" in result:
+                if (
+                    raw is None
+                    or result.get("raw_sha256") != sha(raw)
+                    or result.get("raw_bytes") != len(raw)
+                ):
+                    raise CorpusError("HTTP raw presence/hash/length mismatch")
+            elif raw is not None or "raw_sha256" in result or "raw_bytes" in result:
+                raise CorpusError("network error cannot claim raw HTTP bytes")
+            states[(request_id, number)] = result
+            previous = result
+    working = root / "working"
+    if working.exists():
+        for path in working.rglob("*"):
+            if path.is_file():
+                name = path.relative_to(working).as_posix()
+                if name not in allowed:
+                    raise CorpusError("unplanned/orphaned working evidence file")
+                if members_by_symbol is not None and not any(
+                    name in members for members in members_by_symbol.values()
+                ):
+                    raise CorpusError("working attempt missing from frozen archive")
+    if members_by_symbol is not None:
+        for members in members_by_symbol.values():
+            if set(members) - allowed:
+                raise CorpusError("unplanned/orphaned archived evidence member")
+    if len(states) > plan["attempt_budget"]:
+        raise CorpusError("cumulative attempt budget exceeded")
+    return {
+        "states": states,
+        "attempts": len(states),
+        "distinct": len({request_id for request_id, _ in states}),
+        "retries": retries,
+    }
+
+
 def capture(
     root: Path, plan: dict[str, Any], transport: Transport | None = None, *, sleep: Any = None
 ) -> dict[str, int | str]:
@@ -543,8 +784,9 @@ def capture(
     transport = transport or PublicHistoryTransport()
     sleep = sleep or __import__("time").sleep
     requests = plan["requests"]
-    if len(requests) != 2704 or plan["attempt_budget"] != 5408:
+    if plan.get("schema") != SCHEMA or len(requests) != 2704 or plan["attempt_budget"] != 5408:
         raise CorpusError("capture requires the exact frozen inventory/budget")
+    audit_ledger(root, plan)
     transmitted = 0
     last_sent: float | None = None
     for entry in requests:
@@ -809,44 +1051,47 @@ def _rows_for_symbol(
 
 def _daily_comparisons(five: dict[int, Row], daily: dict[int, Row]) -> list[dict[str, Any]]:
     compared: list[dict[str, Any]] = []
-    with localcontext(DECIMAL_CONTEXT):
-        for day in range(90):
-            opened = utc_ms(START + day * DAY)
-            parts = [five.get(opened + i * 300_000) for i in range(288)]
-            if any(row is None for row in parts):
-                continue
-            full = [row for row in parts if row is not None]
-            daily_row = daily.get(opened)
-            if daily_row is None:
-                compared.append({"day_open_ms": opened, "status": "DAILY_UNAVAILABLE"})
-                continue
-            actual = {
-                "open": full[0].open,
-                "high": max(row.high for row in full),
-                "low": min(row.low for row in full),
-                "close": full[-1].close,
-                "base_volume": sum((row.base_volume for row in full), Decimal(0)),
-                "quote_volume": sum((row.quote_volume for row in full), Decimal(0)),
-                "taker_buy_base_volume": sum(
-                    (row.taker_buy_base_volume for row in full), Decimal(0)
-                ),
-                "taker_buy_quote_volume": sum(
-                    (row.taker_buy_quote_volume for row in full), Decimal(0)
-                ),
-                "trade_count": sum(row.trade_count for row in full),
-            }
-            deltas = {
-                field: str(value - getattr(daily_row, field)) for field, value in actual.items()
-            }
-            compared.append(
-                {
-                    "day_open_ms": opened,
-                    "status": "MATCH"
-                    if all(Decimal(value) == 0 for value in deltas.values())
-                    else "MISMATCH",
-                    "deltas": deltas,
+    try:
+        with localcontext(DECIMAL_CONTEXT):
+            for day in range(90):
+                opened = utc_ms(START + day * DAY)
+                parts = [five.get(opened + i * 300_000) for i in range(288)]
+                if any(row is None for row in parts):
+                    continue
+                full = [row for row in parts if row is not None]
+                daily_row = daily.get(opened)
+                if daily_row is None:
+                    compared.append({"day_open_ms": opened, "status": "DAILY_UNAVAILABLE"})
+                    continue
+                actual = {
+                    "open": full[0].open,
+                    "high": max(row.high for row in full),
+                    "low": min(row.low for row in full),
+                    "close": full[-1].close,
+                    "base_volume": sum((row.base_volume for row in full), Decimal(0)),
+                    "quote_volume": sum((row.quote_volume for row in full), Decimal(0)),
+                    "taker_buy_base_volume": sum(
+                        (row.taker_buy_base_volume for row in full), Decimal(0)
+                    ),
+                    "taker_buy_quote_volume": sum(
+                        (row.taker_buy_quote_volume for row in full), Decimal(0)
+                    ),
+                    "trade_count": sum(row.trade_count for row in full),
                 }
-            )
+                deltas = {
+                    field: str(value - getattr(daily_row, field)) for field, value in actual.items()
+                }
+                compared.append(
+                    {
+                        "day_open_ms": opened,
+                        "status": "MATCH"
+                        if all(Decimal(value) == 0 for value in deltas.values())
+                        else "MISMATCH",
+                        "deltas": deltas,
+                    }
+                )
+    except (Inexact, Rounded) as exc:
+        raise CorpusError("daily Decimal arithmetic is not exact within the checked bound") from exc
     return compared
 
 
@@ -859,24 +1104,7 @@ def _report_symbol(
         name: derive(five, spans, factor) for name, factor in (("15m", 3), ("1h", 12), ("4h", 48))
     }
     comparisons = _daily_comparisons(five, daily)
-    warm: list[dict[str, object]] = []
-    for begin, end in spans:
-        complete_4h = [
-            row for row in derived["4h"] if begin <= row.open_time_ms and row.close_time_ms <= end
-        ]
-        if len(complete_4h) >= 50:
-            boundary = complete_4h[49].close_time_ms
-            usable = [row for row in derived["15m"] if row.open_time_ms >= boundary]
-            usable = [row for row in usable if row.close_time_ms <= end]
-            if usable:
-                warm.append(
-                    {
-                        "start_ms": usable[0].open_time_ms,
-                        "end_ms": usable[-1].close_time_ms,
-                        "complete_4h_warmup": 50,
-                        "boundary_observation_excluded": True,
-                    }
-                )
+    warm = warmup_intervals(derived, spans)
     missing = exclusions(five, reasons)
     planned = [entry for entry in plan["requests"] if entry["query"]["symbol"] == symbol]
     new_attempts = (
@@ -918,6 +1146,31 @@ def _report_symbol(
     return report, {"5m": [five[key] for key in sorted(five)], **derived}
 
 
+def warmup_intervals(
+    derived: dict[str, list[Row]], spans: list[tuple[int, int]]
+) -> list[dict[str, object]]:
+    """Fifty *complete* 4h closes per epoch, then the first subsequent 15m open."""
+    warm: list[dict[str, object]] = []
+    for begin, end in spans:
+        complete_4h = [
+            row for row in derived["4h"] if begin <= row.open_time_ms and row.close_time_ms <= end
+        ]
+        if len(complete_4h) >= 50:
+            boundary = complete_4h[49].close_time_ms
+            usable = [row for row in derived["15m"] if row.open_time_ms >= boundary]
+            usable = [row for row in usable if row.close_time_ms <= end]
+            if usable:
+                warm.append(
+                    {
+                        "start_ms": usable[0].open_time_ms,
+                        "end_ms": usable[-1].close_time_ms,
+                        "complete_4h_warmup": 50,
+                        "boundary_observation_excluded": True,
+                    }
+                )
+    return warm
+
+
 def _table(symbol: str, timeframe: str, rows: list[Row]) -> pa.Table:
     values: dict[str, list[int | str]] = {
         "symbol": [symbol] * len(rows),
@@ -943,6 +1196,7 @@ def build(repo: Path, root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     checked_old(repo)
     if any((root / name).exists() for name in ("manifest.json", "report.json")):
         raise CorpusError("corpus already built; immutable output cannot be replaced")
+    audit_ledger(root, plan)
     archive_hashes = pack_attempts(root, plan)
     report: dict[str, Any] = {
         "schema": SCHEMA,
@@ -1055,6 +1309,11 @@ def verify(repo: Path, root: Path, source_file: Path, docs_file: Path) -> dict[s
         path = root / name
         if sha(path.read_bytes()) != expected:
             raise CorpusError(f"artifact hash mismatch: {name}")
+    archived = {
+        symbol: _archive_members(root, symbol, manifest["files"][f"archives/{symbol}.zip"])
+        for symbol in PANEL
+    }
+    ledger = audit_ledger(root, plan, archived)
     recalculated: dict[str, Any] = {
         "schema": SCHEMA,
         "dataset_version": DATASET_VERSION,
@@ -1067,7 +1326,7 @@ def verify(repo: Path, root: Path, source_file: Path, docs_file: Path) -> dict[s
         "symbols": {},
     }
     for symbol in PANEL:
-        members = _archive_members(root, symbol, manifest["files"][f"archives/{symbol}.zip"])
+        members = archived[symbol]
         allowed_ids = {
             entry["id"] for entry in plan["requests"] if entry["query"]["symbol"] == symbol
         }
@@ -1093,6 +1352,7 @@ def verify(repo: Path, root: Path, source_file: Path, docs_file: Path) -> dict[s
         "manifest_sha256": sha((root / "manifest.json").read_bytes()),
         "status": expected_status,
         "symbols": recalculated["symbols"],
+        "ledger": {key: ledger[key] for key in ("distinct", "attempts", "retries")},
     }
 
 
@@ -1114,23 +1374,51 @@ class LockedResearchV2CorpusReader:
         if sha((root / "manifest.json").read_bytes()) != manifest_sha256:
             raise CorpusError("unknown/changed manifest version")
         self._verified = verify(repo, root, source_file, docs_file)
-        self._root = root
+        manifest = read_json(root / "manifest.json")
+        self._tables: dict[tuple[str, str], pa.Table] = {}
+        for symbol in PANEL:
+            for timeframe in ("5m", "15m", "1h", "4h"):
+                name = f"parquet/{symbol}-{timeframe}.parquet"
+                content = (root / name).read_bytes()
+                if sha(content) != manifest["files"][name]:
+                    raise CorpusError("Parquet changed during locked snapshot construction")
+                self._tables[(symbol, timeframe)] = pq.read_table(pa.BufferReader(content))
+
+    def data_only_epochs(self, symbol: str) -> tuple[tuple[int, int], ...]:
+        """Validated contiguous price-data spans; not research admission or execution authority."""
+        if symbol not in PANEL:
+            raise CorpusError("foreign symbol")
+        return tuple(
+            (span["start_ms"], span["end_ms"])
+            for span in self._verified["symbols"][symbol]["epochs"]
+        )
 
     def read(self, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> pa.Table:
         if symbol not in PANEL or timeframe not in {"5m", "15m", "1h", "4h"}:
             raise CorpusError("foreign symbol/timeframe")
-        if not isinstance(start_ms, int) or not isinstance(end_ms, int) or start_ms >= end_ms:
+        if (
+            isinstance(start_ms, bool)
+            or isinstance(end_ms, bool)
+            or not isinstance(start_ms, int)
+            or not isinstance(end_ms, int)
+            or start_ms >= end_ms
+        ):
             raise CorpusError("invalid read interval")
-        report = self._verified["symbols"][symbol]
-        if report["status"] != "CORPUS_REVIEW_READY" or not any(
-            span["start_ms"] <= start_ms and end_ms <= span["end_ms"] for span in report["epochs"]
+        step = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}[timeframe]
+        if start_ms % step or end_ms % step:
+            raise CorpusError("read interval is off the exact timeframe grid")
+        if not any(
+            begin <= start_ms and end_ms <= finish
+            for begin, finish in self.data_only_epochs(symbol)
         ):
             raise CorpusError("unqualified or cross-gap read")
-        table = pq.read_table(self._root / "parquet" / f"{symbol}-{timeframe}.parquet")
+        table = self._tables[(symbol, timeframe)]
         opened = table.column("open_time_ms").to_pylist()
         selected = [
             index
             for index, value in enumerate(opened)
             if isinstance(value, int) and start_ms <= value < end_ms
         ]
+        if [opened[index] for index in selected] != list(range(start_ms, end_ms, step)):
+            raise CorpusError("requested interval lacks complete exact timeframe coverage")
         return table.take(pa.array(selected, type=pa.int64()))
