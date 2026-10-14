@@ -49,13 +49,18 @@ The merged #171 charter specifies a separately qualified ten-asset research targ
 a runtime/Live allowlist expansion. Its two pending prerequisites are (A)
 research-universe/data qualification and (B) prospective all-fill replay/report
 accounting. It neither names accepted new symbols nor activates a study.
-Issue #173 permits only a fixed public GET capture and offline verification.
-Its evidence reports a current-only catalog and complete daily probe rows but
-does not establish historical as-of population, complete anchor 5m days or
-daily/5m volume reconciliation. The probe identifiers are not a selected panel.
-See `docs/research/research_v2_universe_feasibility.md` and its new immutable
-raw-capture manifest. No new historical economic or scarcity execution is
-authorized. The prior #161
+Issue #173 permits only fixed public GET captures and offline verification.
+Its original 27-request evidence reports a current-only catalog and complete
+daily probe rows, but its right-anchored 5m pages were incomplete. The separate
+review-authorized eight-request missing-prefix supplement reused those original
+bytes and now yields four complete 288/288 anchor days with exact same-provider
+daily/5m quote-volume matches. Both generations remain distinct and immutable.
+Historical as-of population and historical contract-unit comparability remain
+unestablished; probe identifiers are not a selected panel. See
+`docs/research/research_v2_universe_feasibility.md` and the two raw-evidence
+manifests. No new historical economic or scarcity execution is authorized.
+Master Plan v1.7 §38's current-action wording predates the supplement; its
+research-qualification and no-study rules are unchanged. The prior #161
 one-time non-economic ETH-only scarcity continuation completed under
 the frozen #159 code SHA. A fresh B/C-only ledger recorded B=`COMPLETED`
 and C=`COMPLETED`, each exactly once. The anchored A+B+C descriptive
@@ -283,10 +288,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #173's bounded public-data feasibility evidence. The merged
+1. Review Issue #173's bounded public-data feasibility evidence, preserving
+   original and supplementary capture provenance. The merged
    `RESEARCH_V2_CHARTER_V1` is design authority, not an execution-ready study.
-   This probe does not establish historical as-of membership or full 5m anchor
-   coverage/reconciliation; no ten-asset panel is selected. A prospective or
+   Four anchor days now have complete 5m coverage and exact daily quote-field
+   matches, but historical as-of membership and historical contract units are
+   not established; no ten-asset panel is selected. A prospective or
    exploratory alternative requires separate architect approval. Package B's
    prospective all-fill research economics remains a separate prerequisite.
    Any later activation annex must lock qualified membership, manifests,
