@@ -1,4 +1,4 @@
-"""Non-forgeable, environment-neutral protective exit authority.
+"""Non-forgeable, environment-neutral full-close exit authority.
 
 Exit intents are authorization records, not fills or exchange orders.  Their only
 supported creation path is the private factory used after the Paper coordinator has
@@ -20,14 +20,16 @@ from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders.intent import EntryOrderIntentIdentity
 from adaptive_trading_bot.strategies.core import SourceIdentity
 
-_EXIT_INTENT_SCHEMA_VERSION = "1.0.0"
+_EXIT_INTENT_SCHEMA_VERSION = "2.0.0"
+POST_FILL_STOP_RECOVERY_POLICY_VERSION = "POST_FILL_STOP_RECOVERY_V1"
 _EXIT_INTENT_AUTHORIZATION_TOKEN = object()
 
 
 class ExitIntentPurpose(StrEnum):
-    """The sole risk-reducing exit authority supported in V1."""
+    """Distinct coordinator-owned full-close purposes."""
 
     PROTECTIVE_STOP_FULL_CLOSE = "PROTECTIVE_STOP_FULL_CLOSE"
+    ENTRY_STOP_INVALIDATION_FULL_CLOSE = "ENTRY_STOP_INVALIDATION_FULL_CLOSE"
 
 
 class ExitSide(StrEnum):
@@ -39,18 +41,18 @@ class ExitSide(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ExitOrderIntentIdentity:
-    """Deterministic identity rooted in one entry and one observed stop trigger."""
+    """Deterministic identity rooted in one entry and purpose-specific trigger."""
 
     originating_entry_intent_identity: EntryOrderIntentIdentity
     trigger_observed_at: datetime
-    purpose: ExitIntentPurpose = field(
-        init=False, default=ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
-    )
+    purpose: ExitIntentPurpose = ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
     exit_intent_schema_version: str = field(init=False, default=_EXIT_INTENT_SCHEMA_VERSION)
 
     def __post_init__(self) -> None:
         if not isinstance(self.originating_entry_intent_identity, EntryOrderIntentIdentity):
             raise TypeError("originating entry intent identity is invalid")
+        if not isinstance(self.purpose, ExitIntentPurpose):
+            raise TypeError("exit purpose is invalid")
         object.__setattr__(
             self,
             "trigger_observed_at",
@@ -60,7 +62,11 @@ class ExitOrderIntentIdentity:
 
 @dataclass(frozen=True, slots=True, init=False)
 class ExitOrderIntent:
-    """Full-close authority that can only be minted by its internal authorizer."""
+    """Full-close authority minted only after coordinator-owned state checks.
+
+    For recovery, ``trigger_reference_price`` is the authoritative entry fill
+    price, not a separate market quote or a promised recovery execution price.
+    """
 
     identity: ExitOrderIntentIdentity
     originating_entry_intent_identity: EntryOrderIntentIdentity
@@ -75,6 +81,8 @@ class ExitOrderIntent:
     trigger_reference_price: Decimal
     risk_policy_version: str
     safety_policy_version: str
+    originating_accounting_fill_id: str | None
+    recovery_policy_version: str | None
     authorized_for_execution: bool = field(init=False, default=True)
     _authority_fingerprint: tuple[object, ...] = field(repr=False, compare=False)
     _authorization_seal: object = field(repr=False, compare=False)
@@ -122,6 +130,7 @@ def exit_order_intent_is_authoritative(intent: object) -> bool:
             or not _positive_finite(intent.trigger_reference_price)
             or not _canonical_version(intent.risk_policy_version)
             or not _canonical_version(intent.safety_policy_version)
+            or not _valid_purpose_provenance(intent)
             or intent.authorized_for_execution is not True
         ):
             return False
@@ -147,6 +156,77 @@ def _authorize_protective_stop_full_close(
 ) -> ExitOrderIntent:
     """Mint authority from values already validated as coordinator-owned state."""
 
+    return _authorize_full_close(
+        originating_entry_intent_identity=originating_entry_intent_identity,
+        originating_decision_identity=originating_decision_identity,
+        source_id=source_id,
+        symbol=symbol,
+        trigger_observed_at=trigger_observed_at,
+        side=side,
+        quantity=quantity,
+        stop_basis=stop_basis,
+        trigger_reference_price=trigger_reference_price,
+        risk_policy_version=risk_policy_version,
+        safety_policy_version=safety_policy_version,
+        purpose=ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE,
+        originating_accounting_fill_id=None,
+        recovery_policy_version=None,
+    )
+
+
+def _authorize_entry_stop_invalidation_full_close(
+    *,
+    originating_entry_intent_identity: EntryOrderIntentIdentity,
+    originating_decision_identity: DecisionIdentity,
+    source_id: SourceIdentity,
+    symbol: TradingSymbol,
+    trigger_observed_at: datetime,
+    side: ExitSide,
+    quantity: Decimal,
+    stop_basis: Decimal,
+    trigger_reference_price: Decimal,
+    risk_policy_version: str,
+    safety_policy_version: str,
+    originating_accounting_fill_id: str,
+) -> ExitOrderIntent:
+    """Mint one recovery exit only after the coordinator has accounted the entry."""
+
+    return _authorize_full_close(
+        originating_entry_intent_identity=originating_entry_intent_identity,
+        originating_decision_identity=originating_decision_identity,
+        source_id=source_id,
+        symbol=symbol,
+        trigger_observed_at=trigger_observed_at,
+        side=side,
+        quantity=quantity,
+        stop_basis=stop_basis,
+        trigger_reference_price=trigger_reference_price,
+        risk_policy_version=risk_policy_version,
+        safety_policy_version=safety_policy_version,
+        purpose=ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE,
+        originating_accounting_fill_id=originating_accounting_fill_id,
+        recovery_policy_version=POST_FILL_STOP_RECOVERY_POLICY_VERSION,
+    )
+
+
+def _authorize_full_close(
+    *,
+    originating_entry_intent_identity: EntryOrderIntentIdentity,
+    originating_decision_identity: DecisionIdentity,
+    source_id: SourceIdentity,
+    symbol: TradingSymbol,
+    trigger_observed_at: datetime,
+    side: ExitSide,
+    quantity: Decimal,
+    stop_basis: Decimal,
+    trigger_reference_price: Decimal,
+    risk_policy_version: str,
+    safety_policy_version: str,
+    purpose: ExitIntentPurpose,
+    originating_accounting_fill_id: str | None,
+    recovery_policy_version: str | None,
+) -> ExitOrderIntent:
+
     decision = _copy_decision_identity(originating_decision_identity)
     entry_identity = EntryOrderIntentIdentity(decision)
     if (
@@ -164,9 +244,21 @@ def _authorize_protective_stop_full_close(
         raise ValueError("exit prices and quantity must be finite and positive")
     if not _canonical_version(risk_policy_version) or not _canonical_version(safety_policy_version):
         raise ValueError("exit policy versions must be canonical non-empty strings")
+    if purpose is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE:
+        if (
+            not _canonical_version(originating_accounting_fill_id)
+            or recovery_policy_version != POST_FILL_STOP_RECOVERY_POLICY_VERSION
+        ):
+            raise ValueError("recovery exit provenance is invalid")
+    elif (
+        purpose is not ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
+        or originating_accounting_fill_id is not None
+        or recovery_policy_version is not None
+    ):
+        raise ValueError("protective exit cannot carry recovery provenance")
 
     intent = ExitOrderIntent(_exit_intent_authorization_token=_EXIT_INTENT_AUTHORIZATION_TOKEN)
-    identity = ExitOrderIntentIdentity(entry_identity, trigger_at)
+    identity = ExitOrderIntentIdentity(entry_identity, trigger_at, purpose)
     values: tuple[tuple[str, object], ...] = (
         ("identity", identity),
         ("originating_entry_intent_identity", entry_identity),
@@ -181,6 +273,8 @@ def _authorize_protective_stop_full_close(
         ("trigger_reference_price", trigger_reference_price),
         ("risk_policy_version", risk_policy_version),
         ("safety_policy_version", safety_policy_version),
+        ("originating_accounting_fill_id", originating_accounting_fill_id),
+        ("recovery_policy_version", recovery_policy_version),
         ("authorized_for_execution", True),
         ("_authorization_seal", _EXIT_INTENT_AUTHORIZATION_TOKEN),
     )
@@ -197,7 +291,7 @@ def _copy_authoritative_exit_intent(intent: ExitOrderIntent) -> ExitOrderIntent:
 
     if not exit_order_intent_is_authoritative(intent):
         raise ValueError("exit intent is not authoritative")
-    return _authorize_protective_stop_full_close(
+    return _authorize_full_close(
         originating_entry_intent_identity=intent.originating_entry_intent_identity,
         originating_decision_identity=intent.originating_decision_identity,
         source_id=intent.source_id,
@@ -209,6 +303,9 @@ def _copy_authoritative_exit_intent(intent: ExitOrderIntent) -> ExitOrderIntent:
         trigger_reference_price=intent.trigger_reference_price,
         risk_policy_version=intent.risk_policy_version,
         safety_policy_version=intent.safety_policy_version,
+        purpose=intent.identity.purpose,
+        originating_accounting_fill_id=intent.originating_accounting_fill_id,
+        recovery_policy_version=intent.recovery_policy_version,
     )
 
 
@@ -237,8 +334,23 @@ def _current_fingerprint(intent: ExitOrderIntent) -> tuple[object, ...]:
         intent.trigger_reference_price,
         intent.risk_policy_version,
         intent.safety_policy_version,
+        intent.originating_accounting_fill_id,
+        intent.recovery_policy_version,
         intent.authorized_for_execution,
     )
+
+
+def _valid_purpose_provenance(intent: ExitOrderIntent) -> bool:
+    if intent.identity.purpose is ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE:
+        return (
+            intent.originating_accounting_fill_id is None and intent.recovery_policy_version is None
+        )
+    if intent.identity.purpose is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE:
+        return (
+            _canonical_version(intent.originating_accounting_fill_id)
+            and intent.recovery_policy_version == POST_FILL_STOP_RECOVERY_POLICY_VERSION
+        )
+    return False
 
 
 def _copy_decision_identity(identity: DecisionIdentity) -> DecisionIdentity:

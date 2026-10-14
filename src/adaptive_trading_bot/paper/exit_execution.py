@@ -1,4 +1,4 @@
-"""Causal Paper execution for authoritative protective full-close exits."""
+"""Causal Paper execution for authoritative full-close exit purposes."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from adaptive_trading_bot.execution import (
 from adaptive_trading_bot.journal import DecisionIdentity
 from adaptive_trading_bot.orders import (
     EntryOrderIntentIdentity,
+    ExitIntentPurpose,
     ExitOrderIntent,
     ExitOrderIntentIdentity,
     ExitSide,
@@ -30,7 +31,7 @@ from adaptive_trading_bot.strategies.core import SourceIdentity
 if TYPE_CHECKING:
     from adaptive_trading_bot.paper.execution import PaperExecutionObservation
 
-_PAPER_EXIT_SCHEMA_VERSION = "1.0.0"
+_PAPER_EXIT_SCHEMA_VERSION = "2.0.0"
 _PAPER_EXIT_LIFECYCLE_TOKEN = object()
 
 
@@ -63,12 +64,14 @@ class PaperExitAuthorizationSnapshot:
     trigger_reference_price: Decimal
     risk_policy_version: str
     safety_policy_version: str
+    originating_accounting_fill_id: str | None
+    recovery_policy_version: str | None
     authorized_for_execution: bool
 
 
 @dataclass(frozen=True, slots=True)
 class PaperExitMarketFill:
-    """One immutable protective exit fill with complete authority provenance."""
+    """One immutable full-close exit fill with complete authority provenance."""
 
     exit_intent_identity: ExitOrderIntentIdentity
     originating_entry_intent_identity: EntryOrderIntentIdentity
@@ -91,6 +94,8 @@ class PaperExitMarketFill:
     fee_quote: Decimal
     risk_policy_version: str
     safety_policy_version: str
+    originating_accounting_fill_id: str | None
+    recovery_policy_version: str | None
     simulation_schema_version: str = field(init=False, default=_PAPER_EXIT_SCHEMA_VERSION)
 
 
@@ -186,7 +191,11 @@ class PaperProtectiveExitSimulator:
             raise PaperProtectiveExitExecutionError(
                 "exit observation identity does not match authority"
             )
-        if observation.observed_at < authority.authorized_at:
+        if observation.observed_at < authority.authorized_at or (
+            authority.exit_intent_identity.purpose
+            is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+            and observation.observed_at == authority.authorized_at
+        ):
             raise PaperProtectiveExitExecutionError("exit observation precedes authorization")
         if (
             lifecycle.last_observed_at is not None
@@ -238,6 +247,8 @@ class PaperProtectiveExitSimulator:
             fee_quote=quote.fee_quote,
             risk_policy_version=authority.risk_policy_version,
             safety_policy_version=authority.safety_policy_version,
+            originating_accounting_fill_id=authority.originating_accounting_fill_id,
+            recovery_policy_version=authority.recovery_policy_version,
         )
         return _create_lifecycle(
             intent=lifecycle.intent,
@@ -325,6 +336,11 @@ def _validate_lifecycle(lifecycle: PaperProtectiveExitLifecycle) -> None:
         or fill.authorized_at != authority.authorized_at
         or fill.eligible_at != lifecycle.eligible_at
         or fill.fill_at < lifecycle.eligible_at
+        or (
+            authority.exit_intent_identity.purpose
+            is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+            and fill.fill_at <= authority.authorized_at
+        )
         or fill.trigger_observed_at != authority.trigger_observed_at
         or fill.trigger_reference_price != authority.trigger_reference_price
         or fill.stop_basis != authority.stop_basis
@@ -335,6 +351,8 @@ def _validate_lifecycle(lifecycle: PaperProtectiveExitLifecycle) -> None:
         or fill.fee_quote != quote.fee_quote
         or fill.risk_policy_version != authority.risk_policy_version
         or fill.safety_policy_version != authority.safety_policy_version
+        or fill.originating_accounting_fill_id != authority.originating_accounting_fill_id
+        or fill.recovery_policy_version != authority.recovery_policy_version
         or fill.simulation_schema_version != _PAPER_EXIT_SCHEMA_VERSION
     ):
         raise PaperProtectiveExitExecutionError("exit fill diverged from accepted authority")
@@ -350,7 +368,9 @@ def _snapshot_authority(intent: ExitOrderIntent) -> PaperExitAuthorizationSnapsh
         decision.strategy_version,
     )
     entry_identity = EntryOrderIntentIdentity(copied_decision)
-    exit_identity = ExitOrderIntentIdentity(entry_identity, intent.trigger_observed_at)
+    exit_identity = ExitOrderIntentIdentity(
+        entry_identity, intent.trigger_observed_at, intent.identity.purpose
+    )
     return PaperExitAuthorizationSnapshot(
         tuple(exit_order_intent_fingerprint(intent)),
         exit_identity,
@@ -366,6 +386,8 @@ def _snapshot_authority(intent: ExitOrderIntent) -> PaperExitAuthorizationSnapsh
         intent.trigger_reference_price,
         intent.risk_policy_version,
         intent.safety_policy_version,
+        intent.originating_accounting_fill_id,
+        intent.recovery_policy_version,
         intent.authorized_for_execution,
     )
 
@@ -389,7 +411,9 @@ def _copy_fill(fill: PaperExitMarketFill) -> PaperExitMarketFill:
     )
     entry_identity = EntryOrderIntentIdentity(copied_decision)
     return PaperExitMarketFill(
-        ExitOrderIntentIdentity(entry_identity, fill.trigger_observed_at),
+        ExitOrderIntentIdentity(
+            entry_identity, fill.trigger_observed_at, fill.exit_intent_identity.purpose
+        ),
         entry_identity,
         copied_decision,
         copied_decision.source_id,
@@ -410,4 +434,6 @@ def _copy_fill(fill: PaperExitMarketFill) -> PaperExitMarketFill:
         fill.fee_quote,
         fill.risk_policy_version,
         fill.safety_policy_version,
+        fill.originating_accounting_fill_id,
+        fill.recovery_policy_version,
     )

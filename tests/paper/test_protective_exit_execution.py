@@ -125,7 +125,7 @@ def test_exit_fill_uses_shared_pricing_and_accounting_to_close_exactly_flat(
     assert closed.originating_entry_intent_identity == opened.intent_identity
     assert closed.originating_decision_identity == opened.decision_identity
     assert closed.originating_paper_order_identity == opened.paper_order_identity
-    assert closed.protective_exit_intent_identity == intent.identity
+    assert closed.exit_intent_identity == intent.identity
     assert closed.entry_fill_at == opened.fill_at
     assert closed.entry_fill_price == opened.fill_price
     assert closed.entry_fee_quote == opened.fee_quote

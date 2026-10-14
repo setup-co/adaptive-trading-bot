@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.4
+**Document version:** 1.5
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -805,6 +805,25 @@ Equivalent supplied Paper entry observations may establish entry parity, but
 neither missing Paper observations nor real-exchange execution are inferred.
 Versioned replay/context/report provenance distinguishes this policy from
 frozen earlier studies; their artifacts and execution SHAs remain unchanged.
+
+## Offline Paper post-fill stop recovery (`POST_FILL_STOP_RECOVERY_V1`)
+
+An otherwise legitimate Paper entry fill at or beyond its sealed stop is an
+accounted position, not an unfilled order or a discarded research sample.
+LONG fills at/below the stop and SHORT fills at/above it require one distinct,
+coordinator-owned full-close recovery. The original fill, fee, signed exposure,
+approved-risk capacity floor, and at least the greater of approved and actual
+gross notional remain occupied until a later supplied, eligible observation
+closes the position through shared execution and accounting. New admissions
+are blocked while any such recovery remains unresolved; already-authorized
+pending entries and risk-reducing exits continue. Fill-time authorization is
+logically after entry accounting, but the same entry observation may not fill
+the recovery exit. The completed journal identifies recovery separately from
+an ordinary quote-triggered protective stop and preserves actual PnL and R.
+The read-only trade Dashboard retains that reason; the current Experience V1
+sample projector explicitly rejects recovery exits rather than relabeling them.
+This process-local, offline Paper rule does not model standing exchange stops,
+durable broker reconciliation, or recovery from Range midpoint/target geometry.
 
 Representative leveraged results must include fees, spread, slippage, funding, latency, stop behavior, margin usage and liquidation/account-survival effects. An unleveraged artifact remains useful research evidence but is not sufficient proof of leveraged Live readiness. Signal quality must be reported separately from leverage/margin effects, and leverage must not be tuned together with strategy thresholds after observing results.
 
@@ -1622,14 +1641,27 @@ Approved:
 - Target Version: V1 / Master Plan v1.4
 - Approved: Architect implementation instruction in Issue #165. No historical study, Paper/Shadow/Live activation or representative leveraged readiness is authorized by this decision.
 
+### 2026-10-14 — Accounted Paper recovery after stop-invalidating entry fill
+
+- Date: 2026-10-14
+- Change ID: Issue #167 / `POST_FILL_STOP_RECOVERY_V1` / Master Plan v1.5
+- Old Decision: Offline Paper rejected an actual simulated entry fill at or beyond its sealed stop before shared accounting committed, leaving no accounted recovery path.
+- New Decision: Preserve a valid filled entry and its fees/exposure; block new admissions while recovery is unresolved; authorize exactly one distinct, full-close recovery from coordinator-owned accounted state; execute it only on a genuinely later eligible supplied observation; journal actual outcome with a recovery-specific reason.
+- Reason: A legitimate fill cannot be retroactively treated as unfilled merely because its cost-adjusted price invalidates intended stop geometry.
+- Expected Benefit: Truthful process-local Paper accounting, capacity occupation, causal risk-reducing closure, and auditable recovery provenance.
+- Risk: Offline Paper still lacks durable exchange reconciliation and standing-stop realism; a missing later observation leaves the unprotected position open and new admissions blocked.
+- Affected Modules: Paper coordinator, exit intent and lifecycle, completed-trade journal, directly affected read-only projections, synthetic tests, Master Plan and project state. Research exclusions, Strategy, Risk/Safety limits, costs, datasets and frozen evidence remain unchanged.
+- Target Version: V1 / Master Plan v1.5
+- Approved: Architect implementation instruction in Issue #167; no Paper service activation, exchange order or historical study is authorized.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. #124 and the bounded #163 decision/execution audit are complete. Implement and review the versioned causal-entry chronology in Issue #165 without rerunning frozen studies.
-2. Separately define protective/account translation for actual filled-but-invalid research entries and the Range partial-history retention policy; neither is decided by #165.
+1. #165 is complete. Implement and review Issue #167's bounded offline Paper post-fill stop recovery without rerunning frozen studies or activating a trading service.
+2. Separately decide Range partial-evidence retention and remaining execution realism. Range midpoint/target recovery, standing venue stops and durable real-exchange fill reconciliation are not qualified by #167.
 3. Separately authorized, limited unleveraged/pre-funding signal research is distinguishable from **representative leveraged-perpetual validation**. Missing historical liquidation mechanics do not automatically forbid the former, but the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account-survival behavior. This paragraph authorizes no study.
 
 Issue #118 is permanently stopped and must never be resumed. The frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under the new timing policy. Any future study requires its own architect-approved, predeclared scope and locked code SHA. None of this relaxes the V1 BTC/ETH boundary; a target of at least ten assets remains a separate pending architecture decision.

@@ -8,12 +8,12 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after the accepted Issue #163 audit / PR #164 squash merge:
+Verified `main` after Issue #165 / PR #166 squash merge:
 
-`1156ba7de7a077011d57529eb4fb547a53661825`
+`603e14803e1e552fa37a57ef2a70feb11693f419`
 
-This is the exact base for Issue #165's chronology implementation, **not** a
-prediction of its future merge SHA. PR #164 records the old-baseline audit in
+This is the exact base for Issue #167's offline Paper recovery implementation,
+**not** a prediction of its future merge SHA. PR #164 records the old-baseline audit in
 `docs/research/v1_decision_execution_semantics_audit.md`. It preserves the
 locked LAST, MARK, funding, forward, calibration, reconciliation, Trend
 Pullback, and Breakout + Retest evidence. Both completed V1 signal-edge
@@ -35,10 +35,12 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#165 — versioned causal-entry chronology implementation is active.** The
-accepted #163 audit is complete; #165 implements `CAUSAL_ENTRY_CHRONOLOGY_V2`
-with synthetic cross-path and Paper-entry parity tests only. Architect review
-of its new HEAD and CI is the next gate. No new
+**#167 — offline Paper post-fill stop recovery implementation is active.**
+The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
+are complete. #167 adds `POST_FILL_STOP_RECOVERY_V1` for legitimate Paper
+fills at/beyond the sealed stop, preserving accounting and blocking new
+admissions until a distinct causal full close. Architect review of its PR and
+CI is the next gate. No new
 historical economic or scarcity execution is authorized. The prior #161
 one-time non-economic ETH-only scarcity continuation completed under
 the frozen #159 code SHA. A fresh B/C-only ledger recorded B=`COMPLETED`
@@ -267,10 +269,11 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Implement and review Issue #165's explicit entry/exit-context chronology
-   against synthetic Backtest/research/Paper observations. Do not reinterpret
-   prior reports under this new version. Protective/account translation and
-   Range partial-history retention require separate architect decisions.
+1. Implement and review Issue #167's offline Paper accounted post-fill stop
+   recovery with synthetic LONG/SHORT/mixed-batch evidence. #165's chronology
+   is merged. Do not reinterpret prior reports under these new versions.
+   Range partial-history retention and live-exchange protective reconciliation
+   require separate architect decisions.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161

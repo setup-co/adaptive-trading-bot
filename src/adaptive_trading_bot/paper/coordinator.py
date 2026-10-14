@@ -47,6 +47,7 @@ from adaptive_trading_bot.orders import (
     EntryOrderIntentAuthorizer,
     EntryOrderIntentIdentity,
     EntrySide,
+    ExitIntentPurpose,
     ExitOrderIntent,
     ExitOrderIntentIdentity,
     ExitSide,
@@ -54,6 +55,8 @@ from adaptive_trading_bot.orders import (
     exit_order_intent_is_authoritative,
 )
 from adaptive_trading_bot.orders.exit_intent import (
+    POST_FILL_STOP_RECOVERY_POLICY_VERSION,
+    _authorize_entry_stop_invalidation_full_close,
     _authorize_protective_stop_full_close,
     _copy_authoritative_exit_intent,
 )
@@ -106,6 +109,18 @@ class PaperPortfolioStartError(PaperPortfolioCoordinatorError):
     """Admitted Paper lifecycles could not all be staged consistently."""
 
 
+class PaperPortfolioStartBlockReason(StrEnum):
+    """Typed coordinator-level block before any admission reservation is staged."""
+
+    POST_FILL_STOP_RECOVERY_PENDING = "POST_FILL_STOP_RECOVERY_PENDING"
+
+
+class PaperPortfolioRecoveryPendingError(PaperPortfolioStartError):
+    """Fresh admission is blocked while a post-fill stop recovery remains open."""
+
+    reason = PaperPortfolioStartBlockReason.POST_FILL_STOP_RECOVERY_PENDING
+
+
 class PaperPortfolioObservationError(PaperPortfolioCoordinatorError):
     """A Paper observation batch could not be staged and committed exactly."""
 
@@ -124,6 +139,12 @@ class PaperPortfolioStartBatchStatus(StrEnum):
     STARTED = "STARTED"
     NO_START = "NO_START"
     REJECTED_INCONSISTENT = "REJECTED_INCONSISTENT"
+
+
+class PaperEntryInvalidationReason(StrEnum):
+    """Actual fill has invalidated the pre-trade protective-stop geometry."""
+
+    STOP_AT_OR_BEYOND_FILL = "STOP_AT_OR_BEYOND_FILL"
 
 
 class PaperProtectiveStopStatus(StrEnum):
@@ -181,6 +202,10 @@ class PaperOpenPositionSnapshot:
     risk_policy_version: str
     safety_policy_version: str
     accounting_fill_id: str
+    recovery_required: bool
+    recovery_policy_version: str | None
+    invalidation_reason: PaperEntryInvalidationReason | None
+    approved_risk_is_capacity_floor: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +232,7 @@ class PaperPortfolioObservationBatchResult:
     accounting_transitions: tuple[PositionAccountingTransition, ...]
     locked_open_risk_quote: Decimal
     locked_gross_exposure_quote: Decimal
+    active_exit_intents: tuple[ExitOrderIntent, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,12 +278,12 @@ class PaperPendingProtectiveExitSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PaperClosedTradeSnapshot:
-    """Detached exact audit of one completed protective-stop Paper trade."""
+    """Detached exact audit of one completed full-close Paper trade."""
 
     originating_entry_intent_identity: EntryOrderIntentIdentity
     originating_decision_identity: DecisionIdentity
     originating_paper_order_identity: PaperOrderIdentity
-    protective_exit_intent_identity: ExitOrderIntentIdentity
+    exit_intent_identity: ExitOrderIntentIdentity
     source_id: SourceIdentity
     symbol: TradingSymbol
     position_side: EntrySide
@@ -279,6 +305,7 @@ class PaperClosedTradeSnapshot:
     safety_policy_version: str
     accounting_exit_fill_id: str
     exit_fill: PaperExitMarketFill
+    exit_reason: TradeExitReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +437,10 @@ class PaperPortfolioCoordinator:
 
         observed_at = self._validate_submission(candidates)
         self._validate_internal_state()
+        if any(_stop_invalidated(item.lifecycle) for item in self._open_positions):
+            raise PaperPortfolioRecoveryPendingError(
+                "POST_FILL_STOP_RECOVERY_PENDING: fresh admission is blocked"
+            )
         self._validate_candidate_open_baseline(candidates)
         pending = self._pending_snapshot(observed_at)
         admission = PortfolioAdmissionGate().evaluate_batch(candidates, pending)
@@ -532,6 +563,7 @@ class PaperPortfolioCoordinator:
             staged_accounting = self._accounting.clone()
             accounting_transitions: tuple[PositionAccountingTransition, ...] = ()
             staged_new_open: list[_OpenPaperPosition] = []
+            staged_exits = list(self._active_exit_intents)
             if newly_filled:
                 for lifecycle, accounting_fill in newly_filled:
                     if staged_accounting.position(lifecycle.accepted_authorization.symbol).quantity:
@@ -551,6 +583,16 @@ class PaperPortfolioCoordinator:
                 )
                 accounting_transitions = accounting_batch.transitions
                 _require_entry_transitions(newly_filled, accounting_transitions, self._accounting)
+                for open_item in staged_new_open:
+                    if _stop_invalidated(open_item.lifecycle):
+                        intent = _authorize_recovery_for_open(open_item, staged_accounting)
+                        exit_lifecycle = PaperProtectiveExitSimulator().start(intent, self._costs)
+                        _require_exit_lifecycle_matches_open(
+                            exit_lifecycle, open_item, staged_accounting, self._costs
+                        )
+                        staged_exits.append(
+                            _PendingProtectiveExit(open_item.lifecycle.identity, exit_lifecycle)
+                        )
 
             filled_identities = {
                 lifecycle.identity.intent_identity for lifecycle, _ in newly_filled
@@ -568,7 +610,7 @@ class PaperPortfolioCoordinator:
             _validate_staged_state(
                 next_active,
                 next_open,
-                self._active_exit_intents,
+                _sort_pending_exits(tuple(staged_exits)),
                 staged_accounting,
                 self._costs,
             )
@@ -602,10 +644,15 @@ class PaperPortfolioCoordinator:
             accounting_transitions=accounting_transitions,
             locked_open_risk_quote=locked_risk,
             locked_gross_exposure_quote=locked_gross,
+            active_exit_intents=tuple(
+                _copy_authoritative_exit_intent(item.lifecycle.intent)
+                for item in _sort_pending_exits(tuple(staged_exits))
+            ),
         )
         self._active = next_active
         self._open_positions = next_open
         self._accounting = staged_accounting
+        self._active_exit_intents = _sort_pending_exits(tuple(staged_exits))
         self._account = staged_account
         self._last_observed_at = observed_at
         return result
@@ -1399,6 +1446,14 @@ def _open_snapshot(item: _OpenPaperPosition) -> PaperOpenPositionSnapshot:
         fill.risk_policy_version,
         fill.safety_policy_version,
         item.accounting_fill.fill_id,
+        _stop_invalidated(lifecycle),
+        POST_FILL_STOP_RECOVERY_POLICY_VERSION if _stop_invalidated(lifecycle) else None,
+        (
+            PaperEntryInvalidationReason.STOP_AT_OR_BEYOND_FILL
+            if _stop_invalidated(lifecycle)
+            else None
+        ),
+        _stop_invalidated(lifecycle),
     )
 
 
@@ -1453,9 +1508,23 @@ def _require_exit_matches_open(
     with localcontext(_DECIMAL_CONTEXT):
         expected_quantity = fill.quantity if fill.side is EntrySide.BUY else -fill.quantity
     expected_side = ExitSide.SELL if fill.side is EntrySide.BUY else ExitSide.BUY
-    triggered = (
+    protective_triggered = (
         fill.side is EntrySide.BUY and intent.trigger_reference_price <= authority.stop_basis
     ) or (fill.side is EntrySide.SELL and intent.trigger_reference_price >= authority.stop_basis)
+    recovery = intent.identity.purpose is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+    purpose_valid = (
+        recovery
+        and _stop_invalidated(lifecycle)
+        and intent.trigger_observed_at == fill.fill_at
+        and intent.trigger_reference_price == fill.fill_price
+        and intent.originating_accounting_fill_id == item.accounting_fill.fill_id
+        and intent.recovery_policy_version == POST_FILL_STOP_RECOVERY_POLICY_VERSION
+    ) or (
+        intent.identity.purpose is ExitIntentPurpose.PROTECTIVE_STOP_FULL_CLOSE
+        and not _stop_invalidated(lifecycle)
+        and intent.trigger_observed_at > fill.fill_at
+        and protective_triggered
+    )
     if (
         not exit_order_intent_is_authoritative(intent)
         or lifecycle.status is not PaperOrderStatus.FILLED
@@ -1465,7 +1534,6 @@ def _require_exit_matches_open(
         != lifecycle.identity.intent_identity.decision_identity
         or intent.source_id != fill.source_id
         or intent.symbol != fill.symbol
-        or intent.trigger_observed_at <= fill.fill_at
         or intent.authorized_at != intent.trigger_observed_at
         or intent.side is not expected_side
         or intent.quantity != fill.quantity
@@ -1474,7 +1542,7 @@ def _require_exit_matches_open(
         or intent.safety_policy_version != authority.safety_policy_version
         or state.quantity != expected_quantity
         or state.average_entry_price != fill.fill_price
-        or not triggered
+        or not purpose_valid
     ):
         raise PaperProtectiveExitAuthorizationError(
             "protective exit diverged from coordinator-owned open authority"
@@ -1635,7 +1703,9 @@ def _closed_trade_snapshot(
         entry_identity,
         decision,
         PaperOrderIdentity(entry_identity),
-        ExitOrderIntentIdentity(entry_identity, lifecycle.intent.trigger_observed_at),
+        ExitOrderIntentIdentity(
+            entry_identity, lifecycle.intent.trigger_observed_at, lifecycle.intent.identity.purpose
+        ),
         deepcopy(decision.source_id),
         TradingSymbol(decision.symbol.base, decision.symbol.quote),
         entry_fill.side,
@@ -1657,6 +1727,9 @@ def _closed_trade_snapshot(
         lifecycle.intent.safety_policy_version,
         transition.fill.fill_id,
         detached_exit_fill,
+        TradeExitReason.ENTRY_STOP_INVALIDATION
+        if lifecycle.intent.identity.purpose is ExitIntentPurpose.ENTRY_STOP_INVALIDATION_FULL_CLOSE
+        else TradeExitReason.PROTECTIVE_STOP,
     )
 
 
@@ -1686,7 +1759,7 @@ def _completed_trade_entry(
         closed.originating_decision_identity,
         closed.originating_entry_intent_identity,
         closed.originating_paper_order_identity,
-        closed.protective_exit_intent_identity,
+        closed.exit_intent_identity,
     )
     return CompletedTradeJournalEntry._from_authoritative_close(
         identity=identity,
@@ -1710,7 +1783,7 @@ def _completed_trade_entry(
         entry_slippage_bps=entry_fill.slippage_bps,
         entry_fee_bps=entry_fill.fee_bps,
         entry_fee_quote=closed.entry_fee_quote,
-        exit_reason=TradeExitReason.PROTECTIVE_STOP,
+        exit_reason=closed.exit_reason,
         trigger_observed_at=closed.trigger_observed_at,
         trigger_reference_price=closed.trigger_reference_price,
         exit_authorized_at=exit_fill.authorized_at,
@@ -1731,6 +1804,11 @@ def _completed_trade_entry(
         accounting_entry_fill_id=open_item.accounting_fill.fill_id,
         accounting_exit_fill_id=closed.accounting_exit_fill_id,
         outcome_classification=classification,
+        recovery_policy_version=(
+            POST_FILL_STOP_RECOVERY_POLICY_VERSION
+            if closed.exit_reason is TradeExitReason.ENTRY_STOP_INVALIDATION
+            else None
+        ),
     )
 
 
@@ -1773,7 +1851,8 @@ def _require_completed_trade_matches_authorities(
         entry.identity.originating_decision_identity != closed.originating_decision_identity
         or entry.identity.entry_intent_identity != closed.originating_entry_intent_identity
         or entry.identity.paper_order_identity != closed.originating_paper_order_identity
-        or entry.identity.exit_intent_identity != closed.protective_exit_intent_identity
+        or entry.identity.exit_intent_identity != closed.exit_intent_identity
+        or entry.exit_reason is not closed.exit_reason
         or entry.source_id != closed.source_id
         or entry.symbol != closed.symbol
         or entry.entry_side is not closed.position_side
@@ -2038,18 +2117,52 @@ def _locked_capacity(lifecycle: PaperOrderLifecycle) -> tuple[Decimal, Decimal]:
     if fill is None:
         raise PaperPortfolioObservationError("open position requires one Paper fill")
     authority = lifecycle.accepted_authorization
-    if (authority.side is EntrySide.BUY and authority.stop_basis >= fill.fill_price) or (
-        authority.side is EntrySide.SELL and authority.stop_basis <= fill.fill_price
-    ):
-        raise PaperPortfolioObservationError("entry fill crossed or reached its stop basis")
     with localcontext(_DECIMAL_CONTEXT):
         actual_notional = fill.quantity * fill.fill_price
-        actual_stop_risk = fill.quantity * abs(fill.fill_price - authority.stop_basis)
         locked_gross = max(authority.approved_notional_quote, actual_notional)
-        locked_risk = max(authority.approved_risk_quote, actual_stop_risk)
+        if _stop_invalidated(lifecycle):
+            locked_risk = authority.approved_risk_quote
+        else:
+            actual_stop_risk = fill.quantity * abs(fill.fill_price - authority.stop_basis)
+            locked_risk = max(authority.approved_risk_quote, actual_stop_risk)
     if not all(value.is_finite() and value > 0 for value in (locked_gross, locked_risk)):
         raise PaperPortfolioObservationError("locked Paper capacity is invalid")
     return locked_risk, locked_gross
+
+
+def _stop_invalidated(lifecycle: PaperOrderLifecycle) -> bool:
+    fill = lifecycle.fill
+    if fill is None:
+        raise PaperPortfolioCoordinatorError("stop geometry requires a Paper fill")
+    authority = lifecycle.accepted_authorization
+    return (authority.side is EntrySide.BUY and fill.fill_price <= authority.stop_basis) or (
+        authority.side is EntrySide.SELL and fill.fill_price >= authority.stop_basis
+    )
+
+
+def _authorize_recovery_for_open(
+    item: _OpenPaperPosition, accounting: PositionAccountingCore
+) -> ExitOrderIntent:
+    fill = item.lifecycle.fill
+    if fill is None or not _stop_invalidated(item.lifecycle):
+        raise PaperProtectiveExitAuthorizationError("recovery requires invalidated entry fill")
+    authority = item.lifecycle.accepted_authorization
+    intent = _authorize_entry_stop_invalidation_full_close(
+        originating_entry_intent_identity=item.lifecycle.identity.intent_identity,
+        originating_decision_identity=item.lifecycle.identity.intent_identity.decision_identity,
+        source_id=fill.source_id,
+        symbol=fill.symbol,
+        trigger_observed_at=fill.fill_at,
+        side=ExitSide.SELL if fill.side is EntrySide.BUY else ExitSide.BUY,
+        quantity=fill.quantity,
+        stop_basis=authority.stop_basis,
+        trigger_reference_price=fill.fill_price,
+        risk_policy_version=authority.risk_policy_version,
+        safety_policy_version=authority.safety_policy_version,
+        originating_accounting_fill_id=item.accounting_fill.fill_id,
+    )
+    _require_exit_matches_open(intent, item, accounting)
+    return intent
 
 
 def _locked_totals(open_positions: tuple[_OpenPaperPosition, ...]) -> tuple[Decimal, Decimal]:
@@ -2190,6 +2303,13 @@ def _validate_staged_state(
                 "active protective exit diverged from open authority"
             ) from error
         seen_exit_identities.add(pending_exit.open_identity)
+    if any(
+        _stop_invalidated(item.lifecycle) and item.lifecycle.identity not in seen_exit_identities
+        for item in open_positions
+    ):
+        raise PaperPortfolioCoordinatorError(
+            "invalidated Paper entry requires one pending full-close recovery"
+        )
 
 
 def _lifecycle_matches_reservation(
