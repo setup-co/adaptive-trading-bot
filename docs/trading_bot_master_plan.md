@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.6
+**Document version:** 1.7
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -108,17 +108,18 @@ A valid trade can lose. A poor trade can win by chance. Journal and learning sys
 
 ## Assets
 
-- BTC
-- ETH
+- Current runtime/execution allowlists and tested V1 trading instruments: BTC and ETH. This architecture decision does not change those allowlists.
+- The product target is support for at least ten assets. Before Live acceptance, a **separately qualified, versioned research universe** may contain at least ten assets; the first bounded research panel targets exactly ten, not a permanent product ceiling. BTC and ETH are anchor candidates, not automatic research qualifications.
+- Research membership does not confer Paper, Shadow or Live eligibility. Those gates remain per instrument and strategy, with Risk/Safety sovereignty and Live disabled. Ten research assets imply neither ten simultaneous trades nor ten independent risks.
 
-Do not add other assets until the V1 acceptance gate is passed.
+New research symbols require an explicit, separately reviewed research-only allowlist/configuration and qualified WEEX data. Existing BTC/ETH runtime symbol validation must not be removed or bypassed. Research selection and the initial reference model are specified in [`RESEARCH_V2_CHARTER_V1`](research/research_v2_charter.md); it authorizes no study or trading expansion.
 
 ## Timeframes
 
 - Entry timeframe: `15m`
 - Context: `1h`, `4h`
 
-Very short timeframes such as 1m/3m/5m are not part of the V1 trading core.
+Very short timeframes such as 1m/3m/5m are not part of the V1 entry strategy. Qualified WEEX perpetual `5m LAST` is the canonical historical input for deterministic derivation of 15m/1h/4h research candles; it is not a 5m decision rule.
 
 ## Leverage
 
@@ -222,6 +223,7 @@ Create a project-owned `ExchangeAdapter` interface. A CCXT-backed adapter may be
 - Other exchanges must not become implicit dependencies of the primary V1 signal path merely to simplify backfill.
 - Strategy, Risk, Safety, Feature, Replay, and accounting contracts remain exchange-neutral. WEEX-specific transport and mapping belong only in exchange/source adapters.
 - Cross-exchange data is deferred to a separately approved validation or redundancy feature; it is not part of the V1 authority chain.
+- A ten-asset research panel does not alter the current BTC/ETH runtime/execution boundary or establish historical contract, margin, MARK or Live authority for new assets. Each research instrument needs its own verified metadata, units, integrity and locked manifest before use.
 
 Using one primary data and execution venue reduces venue-basis, candle/timestamp, mark/index/funding, and operational mismatches. This policy permits bounded Risk-owned leverage as part of the V1 architecture; it does not approve private API integration or Live trading. A public endpoint must still pass its own qualification and integrity gates before it becomes an accepted data source.
 
@@ -846,6 +848,12 @@ sample projector explicitly rejects recovery exits rather than relabeling them.
 This process-local, offline Paper rule does not model standing exchange stops,
 durable broker reconciliation, or recovery from Range midpoint/target geometry.
 
+## Research V2 reference model and all-fill prerequisite (`RESEARCH_V2_CHARTER_V1`)
+
+The first prospective multi-asset signal question is bounded by the [Research V2 charter](research/research_v2_charter.md), **not yet executable**. It keeps the existing three versioned family policies and the completed-15m-candle trigger → market request → first eligible subsequent execution-open model; simultaneous stop/target touches select the protective stop. Trigger levels are not promised fills or standing intrabar venue protection. Under `CAUSAL_ENTRY_CHRONOLOGY_V2`, sealed decision/authorization precede the first eligible entry open. Base 2/2/10-bps spread/slippage/fee with zero latency and the one combined 4/4/20-bps plus one-second stress are fixed modeling assumptions, not verified historical WEEX charges or a post-result optimization grid.
+
+The current research runners record an actual `ENTRY_FILL_INVALIDATED` fill but return before opening an accounting branch. #167 corrected **offline Paper stop recovery only**. A new primary all-fill economic report requires a separate, versioned implementation: every legitimate admitted fill, fee and exposure remains accounted; a stop-invalidating fill or Range midpoint already reached/passed at fill requests one bounded opposite-side full close only after the fill is known/accounted, at a strictly later eligible execution open. If no exit open exists, the position and entry fee remain unresolved and visible, not erased or force-closed. Shared execution/accounting remains sole PnL authority. Existing frozen study populations are not retrospectively reinterpreted. An unleveraged/pre-funding study may answer a limited signal question, but cannot claim complete perpetual costs, representative leveraged liquidation/account survival, portfolio performance or Live readiness.
+
 Representative leveraged results must include fees, spread, slippage, funding, latency, stop behavior, margin usage and liquidation/account-survival effects. An unleveraged artifact remains useful research evidence but is not sufficient proof of leveraged Live readiness. Signal quality must be reported separately from leverage/margin effects, and leverage must not be tuned together with strategy thresholds after observing results.
 
 Prevent:
@@ -1331,7 +1339,7 @@ Every strategy follows the full research/validation ladder.
 
 ## V1.3 — Asset Expansion
 
-Add highly liquid assets gradually (e.g. SOL) only after liquidity/spread/history/regime tests.
+Trading/runtime asset eligibility expands gradually only after instrument-specific liquidity/spread/history/regime tests and the full acceptance gates; this maturity stage does not postpone the separately qualified ten-asset **research** target permitted in §4. No example ticker is a qualified member of that panel.
 
 ## V1.4 — Multi-Timeframe Intelligence
 
@@ -1688,17 +1696,30 @@ Approved:
 - Target Version: V1 / Master Plan v1.6
 - Approved: Architect implementation instruction in Issue #169; no historical study, trading activation or asset expansion is authorized.
 
+### 2026-10-14 — Separate ten-asset research scope and reference economics
+
+- Date: 2026-10-14
+- Change ID: Issue #171 / `RESEARCH_V2_CHARTER_V1` / Master Plan v1.7
+- Old Decision: The unconditional BTC/ETH V1 acceptance prerequisite also blocked qualification of a larger research-only asset panel; the next multi-asset reference/population contract was unspecified.
+- New Decision: Permit an independently qualified, versioned initial **exactly ten-asset research panel** toward the product's at-least-ten-asset target before Live acceptance. Retain current BTC/ETH runtime allowlists and all per-instrument/strategy trading gates. Predeclare as-of turnover-based selection, WEEX-only locked data and temporal segregation, one completed-bar-to-market-open reference/stress model, and a prospective all-fill economic population before any new study.
+- Reason: Separate scientific breadth from trading authority and ensure new evidence counts real fills, invalidations and unresolved exposure without repeating known censoring.
+- Expected Benefit: A bounded path to interpretable cross-market signal evidence while preserving historical provenance, Risk/Safety and Live-disabled controls.
+- Risk: Unqualified units/history, survivorship, correlated opportunities, bar-model limitations and unaccounted fill costs could mislead; the charter requires explicit blockers, new manifests, no post-result selection and a future activation annex.
+- Affected Modules: Master Plan, AGENTS.md, Research V2 charter, project-state/README documentation only. No runtime, strategy, Risk, Safety, execution, dataset, test or CI change.
+- Target Version: V1 research scope / Master Plan v1.7
+- Approved: Architect instruction in Issue #171; design only. Neither data/implementation qualification nor study execution or trading is authorized.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. #165 and #167 are complete. Review Issue #169's bounded prospective Range partial-evidence retention implementation without rerunning frozen studies or activating a trading service.
-2. After #169 review, separately decide the asset-universe scope and minimum execution assumptions for any fresh, explicitly predeclared research protocol. Range midpoint/target recovery, standing venue stops and durable real-exchange fill reconciliation remain unqualified.
-3. Separately authorized, limited unleveraged/pre-funding signal research is distinguishable from **representative leveraged-perpetual validation**. Missing historical liquidation mechanics do not automatically forbid the former, but the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account-survival behavior. This paragraph authorizes no study.
+1. Review Issue #171's documentation-only `RESEARCH_V2_CHARTER_V1`. Its design is specified, but research-universe implementation, data qualification and all-fill economics are pending. The charter is **not** an execution-ready protocol.
+2. Implement only separately approved prerequisites: (A) explicit research-only symbol scope and as-of universe/data qualification; (B) prospective all-fill replay/report accounting with synthetic compatibility evidence. Neither package may silently widen runtime allowlists or rewrite frozen reports.
+3. Before a new study, the architect must approve an activation annex with selected qualified instruments, locked source/manifest hashes, exact UTC folds/epochs/warm-ups/follow-ups, executable code SHA and pre-result sufficiency/dependence rules. No historical run is authorized now. Limited unleveraged/pre-funding signal evidence remains distinct from **representative leveraged-perpetual validation**; the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account survival.
 
-Issue #118 is permanently stopped and must never be resumed. The frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under the new chronology or Range policy. Any future study requires its own architect-approved, predeclared scope and locked code SHA. None of this relaxes the V1 BTC/ETH boundary; a target of at least ten assets remains a separate pending architecture decision.
+Issue #118 is permanently stopped. Frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under new chronology, Range or population policy. Current BTC/ETH runtime/execution validation, Risk/Safety and Live-disabled gates remain. Standing venue stops and durable real-exchange fill reconciliation remain unqualified.
 
 ---
 
