@@ -316,9 +316,16 @@ def test_offline_verifier_rederives_not_just_hashes(
         panel.verify(Path("."), tmp_path)
 
 
+def offline_subprocess_env(root: Path) -> dict[str, str]:
+    """Keep local exchange credentials out of verifier subprocesses and tracebacks."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("ATB_WEEX_DEMO_")}
+    env["PYTHONPATH"] = str(root)
+    return env
+
+
 def test_unmocked_original_verification_from_outside_repo(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
-    env = {**os.environ, "PYTHONPATH": str(root)}
+    env = offline_subprocess_env(root)
     completed = subprocess.run(
         [
             sys.executable,
@@ -419,7 +426,7 @@ def test_unmocked_original_verification_after_squash_in_shallow_checkout(
             str(shallow / panel.CAPTURE_BUNDLE),
         ],
         cwd=tmp_path,
-        env={**os.environ, "PYTHONPATH": str(shallow)},
+        env=offline_subprocess_env(shallow),
         capture_output=True,
         text=True,
         check=True,
@@ -437,7 +444,7 @@ def test_unmocked_original_verification_after_squash_in_shallow_checkout(
             str(shallow / panel.KAS_SUPPLEMENT),
         ],
         cwd=tmp_path,
-        env={**os.environ, "PYTHONPATH": str(shallow)},
+        env=offline_subprocess_env(shallow),
         capture_output=True,
         text=True,
         check=True,
@@ -448,7 +455,7 @@ def test_unmocked_original_verification_after_squash_in_shallow_checkout(
     rejected = subprocess.run(
         completed.args,
         cwd=tmp_path,
-        env={**os.environ, "PYTHONPATH": str(shallow)},
+        env=offline_subprocess_env(shallow),
         capture_output=True,
         text=True,
     )
