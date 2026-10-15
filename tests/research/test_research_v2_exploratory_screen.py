@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import io
 import json
+import sys
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from scripts.research.research_v2_exploratory_screen import (
     _bind_final_projection,
     _verify_authority_rows,
