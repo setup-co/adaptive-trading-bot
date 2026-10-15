@@ -16,6 +16,7 @@ from adaptive_trading_bot.storage import (
 )
 
 _LOCKED_WEEX_SOURCE_PREFIX = "weex-v3-last-"
+_ISOLATED_RESEARCH_V2_PREFIX = "weex-research-v2-last-"
 
 
 class HistoricalSourceSelectionError(ValueError):
@@ -45,6 +46,10 @@ def open_historical_store(
     unique_sources = tuple(dict.fromkeys(source_ids))
     if not unique_sources:
         raise HistoricalSourceSelectionError("at least one historical source is required")
+    if any(source.value.startswith(_ISOLATED_RESEARCH_V2_PREFIX) for source in unique_sources):
+        raise HistoricalSourceSelectionError(
+            "Research V2 history requires its separate accepted offline admission boundary"
+        )
 
     locked_sources = tuple(item for item in unique_sources if is_locked_weex_source(item))
     if locked_sources:

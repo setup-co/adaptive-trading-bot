@@ -53,13 +53,18 @@ class StrategyEvaluationContext:
     def validate(self) -> None:
         """Revalidate identity and causality after crossing an authority boundary."""
 
+        if self.symbol.base not in {"BTC", "ETH"}:
+            raise StrategyContextError("strategy symbol is outside V1")
+        self._validate_causal_facts()
+
+    def _validate_causal_facts(self) -> None:
+        """Shared identity/causality checks; symbol admission remains policy-specific."""
+
         observed_at = require_utc(self.observed_at, field="strategy context observed_at")
         candle = self.candle_15m
         feature = self.features_15m
         structure = self.structure_15m
         regime = self.multi_timeframe_regime
-        if self.symbol.base not in {"BTC", "ETH"}:
-            raise StrategyContextError("strategy symbol is outside V1")
         if (
             candle.symbol != self.symbol
             or candle.timeframe is not Timeframe.MINUTES_15

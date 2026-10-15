@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from adaptive_trading_bot.domain import Timeframe
 from adaptive_trading_bot.domain.clock import require_utc
@@ -22,6 +23,9 @@ from adaptive_trading_bot.regime import (
 )
 from adaptive_trading_bot.strategies.core import StrategyContextError, StrategyEvaluationContext
 
+if TYPE_CHECKING:
+    from adaptive_trading_bot.research.research_v2_admission import ResearchV2ContextAuthorization
+
 
 def _series_order(series: FeatureSeries) -> tuple[str, str]:
     return series.source_id.value, str(series.symbol)
@@ -32,6 +36,8 @@ def assemble_strategy_contexts(
     feature_batch: FeatureBatch,
     structure_batch: StructureBatch,
     regime_batch: MultiTimeframeRegimeBatch,
+    *,
+    research_authorization: ResearchV2ContextAuthorization | None = None,
 ) -> tuple[StrategyEvaluationContext, ...]:
     """Validate all inputs before emitting canonical stateless 15m contexts."""
 
@@ -44,7 +50,9 @@ def assemble_strategy_contexts(
         if require_utc(candidate, field=f"{label} batch observed_at") != observed_at:
             raise StrategyContextError("all strategy input batch timestamps must match")
 
-    candles = _entry_candles(candle_batch, observed_at)
+    if research_authorization is not None:
+        research_authorization.validate()
+    candles = _entry_candles(candle_batch, observed_at, research_authorization)
     features = _entry_features(feature_batch, observed_at)
     structures = _entry_structures(structure_batch, observed_at)
     regimes = _entry_regimes(regime_batch, observed_at)
@@ -75,22 +83,42 @@ def assemble_strategy_contexts(
         ):
             raise StrategyContextError(f"multi-timeframe anchor mismatch for {series}")
         _validate_pivots(structure, series, observed_at)
-        contexts.append(
-            StrategyEvaluationContext(
-                source_id=series.source_id,
-                symbol=series.symbol,
-                observed_at=observed_at,
-                candle_15m=candle,
-                features_15m=feature,
-                structure_15m=structure,
-                multi_timeframe_regime=regime,
+        if research_authorization is None:
+            contexts.append(
+                StrategyEvaluationContext(
+                    source_id=series.source_id,
+                    symbol=series.symbol,
+                    observed_at=observed_at,
+                    candle_15m=candle,
+                    features_15m=feature,
+                    structure_15m=structure,
+                    multi_timeframe_regime=regime,
+                )
             )
-        )
+        else:
+            from adaptive_trading_bot.research.research_v2_admission import (
+                ResearchV2StrategyContext,
+            )
+
+            contexts.append(
+                ResearchV2StrategyContext(
+                    source_id=series.source_id,
+                    symbol=series.symbol,
+                    observed_at=observed_at,
+                    candle_15m=candle,
+                    features_15m=feature,
+                    structure_15m=structure,
+                    multi_timeframe_regime=regime,
+                    research_authorization=research_authorization,
+                )
+            )
     return tuple(contexts)
 
 
 def _entry_candles(
-    batch: ObservedCandleBatch, observed_at: datetime
+    batch: ObservedCandleBatch,
+    observed_at: datetime,
+    research_authorization: ResearchV2ContextAuthorization | None = None,
 ) -> dict[FeatureSeries, ObservedCandle]:
     result: dict[FeatureSeries, ObservedCandle] = {}
     for event in batch.events:
@@ -104,8 +132,13 @@ def _entry_candles(
         if event.candle.close_time != observed_at:
             raise StrategyContextError("candle must close at the strategy observation time")
         if event.series.timeframe is Timeframe.MINUTES_15:
-            if event.series.symbol.base not in {"BTC", "ETH"}:
+            if research_authorization is None and event.series.symbol.base not in {"BTC", "ETH"}:
                 raise StrategyContextError("strategy symbol is outside V1")
+            if research_authorization is not None and (
+                event.series.source_id != research_authorization.source_id
+                or event.series.symbol != research_authorization.symbol
+            ):
+                raise StrategyContextError("research symbol/source outside authorization")
             result[event.series] = event
     return result
 
