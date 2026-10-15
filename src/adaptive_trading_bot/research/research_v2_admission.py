@@ -724,17 +724,22 @@ class ResearchV2DecisionPopulation:
         self._validate_facts()
 
     def _validate_facts(self) -> None:
+        self._validate_population_facts("SYNTHETIC_FIXTURE", "research-v2-decision-population-v2")
+
+    def _validate_population_facts(self, kind: str, schema: str) -> None:
         self.configuration.validate_seal()
         binding = self.configuration.input_binding
         bounds = self.configuration.bounds
-        if binding.kind != "SYNTHETIC_FIXTURE":
-            raise ResearchV2AdmissionError("accepted C2 binding remains data-only")
+        if binding.kind != kind:
+            raise ResearchV2AdmissionError(
+                "accepted C2 remains data-only in the synthetic population"
+            )
         if (
             self.source_id != binding.source_id
             or self.dataset_version != binding.dataset_version
             or self.manifest_sha256 != binding.manifest_sha256
             or self.profile != PROFILE
-            or self.schema_version != "research-v2-decision-population-v2"
+            or self.schema_version != schema
         ):
             raise ResearchV2AdmissionError("research V2 decision provenance is contradictory")
         strategy = {
@@ -789,18 +794,34 @@ class ResearchV2DecisionPopulation:
             raise ResearchV2AdmissionError("decision population contains extra observations")
 
 
-def _evaluate_synthetic_epoch(
+@dataclass(frozen=True, slots=True)
+class ResearchV2StudyDecisionPopulation(ResearchV2DecisionPopulation):
+    """Separate accepted-input envelope; never produced by the synthetic seam."""
+
+    protocol_sha256: str = ""
+    schema_version: str = "research-v2-study-decision-population-v1"
+
+    def _validate_facts(self) -> None:
+        if self.schema_version != "research-v2-study-decision-population-v1":
+            raise ResearchV2AdmissionError("unknown study population schema")
+        if len(self.protocol_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.protocol_sha256
+        ):
+            raise ResearchV2AdmissionError("study protocol digest is malformed")
+        self._validate_population_facts("ACCEPTED_C2", self.schema_version)
+
+
+def _evaluate_epoch_rows(
     store: ResearchV2EpochStore,
     configuration: ResearchV2AdmissionConfiguration,
-) -> ResearchV2DecisionPopulation:
-    """Synthetic integration seam; an accepted real-corpus study has no entry point yet."""
+) -> tuple[
+    tuple[DecisionJournalEntry[object, object], ...],
+    tuple[HistoricalStrategyContextObservation, ...],
+]:
+    """Shared strategy/Risk/Safety/Journal engine; caller owns input authorization."""
 
-    if isinstance(store, LockedResearchV2CandleStore):
-        raise ResearchV2AdmissionError("real corpus evaluation requires a later activation annex")
     configuration.validate(store)
     bounds = configuration.bounds
-    if configuration.input_binding != synthetic_input_binding(store, bounds):
-        raise ResearchV2AdmissionError("synthetic fixture differs from frozen input binding")
     specs = tuple(
         ReplaySeries(
             bounds.source_id, bounds.symbol, frame, bounds.context_start, bounds.follow_up_end
@@ -866,15 +887,91 @@ def _evaluate_synthetic_epoch(
             journal.append_batch(DecisionJournalBatch(batch.observed_at, tuple(entries)))
     if tuple(decisions) != journal.snapshot().entries:
         raise ResearchV2AdmissionError("research journal population mismatch")
+    return tuple(decisions), tuple(observations)
+
+
+def _evaluate_synthetic_epoch(
+    store: ResearchV2EpochStore,
+    configuration: ResearchV2AdmissionConfiguration,
+) -> ResearchV2DecisionPopulation:
+    """Synthetic-only integration seam; it never accepts the locked C2 store."""
+
+    if isinstance(store, LockedResearchV2CandleStore):
+        raise ResearchV2AdmissionError("real corpus evaluation requires a later activation grant")
+    configuration.validate(store)
+    if configuration.input_binding != synthetic_input_binding(store, configuration.bounds):
+        raise ResearchV2AdmissionError("synthetic fixture differs from frozen input binding")
+    decisions, observations = _evaluate_epoch_rows(store, configuration)
     result = ResearchV2DecisionPopulation(
         configuration,
-        tuple(decisions),
-        tuple(observations),
-        source_id=bounds.source_id,
+        decisions,
+        observations,
+        source_id=configuration.bounds.source_id,
         dataset_version=configuration.input_binding.dataset_version,
         manifest_sha256=configuration.input_binding.manifest_sha256,
     )
     result.validate()
+    return result
+
+
+def _validate_frozen_study_configuration(configuration: ResearchV2AdmissionConfiguration) -> None:
+    """Reject a changed calendar, Risk/Safety assumption, or accepted-input claim."""
+
+    from adaptive_trading_bot.research.research_v2_exploratory_screen import frozen_tasks
+
+    configuration.validate_seal()
+    expected = ResearchV2AdmissionConfiguration(
+        configuration.bounds,
+        configuration.family,
+        Decimal("10000"),
+        input_binding=ACCEPTED_C2_BINDING,
+    )
+    if configuration != expected or not any(
+        task.family == configuration.family
+        and task.context_start == configuration.bounds.context_start
+        and task.decision_start == configuration.bounds.decision_start
+        and task.decision_end == configuration.bounds.decision_end
+        and task.last_follow_up_end == configuration.bounds.follow_up_end
+        and TradingSymbol(task.wire_symbol.removesuffix("USDT"), "USDT")
+        == configuration.bounds.symbol
+        for task in frozen_tasks()
+    ):
+        raise ResearchV2AdmissionError("study configuration differs from frozen task and defaults")
+
+
+def _evaluate_granted_study_epoch(
+    store: LockedResearchV2CandleStore,
+    configuration: ResearchV2AdmissionConfiguration,
+    *,
+    protocol_sha256: str,
+    grant: object,
+    actual_code_sha: str,
+) -> ResearchV2StudyDecisionPopulation:
+    """Only the guarded study runner may call this after its external grant check."""
+
+    from adaptive_trading_bot.research.research_v2_exploratory_screen import StudyExecutionGrant
+
+    if type(grant) is not StudyExecutionGrant:
+        raise ResearchV2AdmissionError("accepted C2 evaluation requires a concrete external grant")
+    grant.validate(actual_sha=actual_code_sha)
+    if grant.protocol_sha256 != protocol_sha256:
+        raise ResearchV2AdmissionError("study population protocol differs from external grant")
+    if (
+        type(store) is not LockedResearchV2CandleStore
+        or configuration.input_binding != ACCEPTED_C2_BINDING
+    ):
+        raise ResearchV2AdmissionError("real study requires the exact locked C2 authority")
+    _validate_frozen_study_configuration(configuration)
+    decisions, observations = _evaluate_epoch_rows(store, configuration)
+    result = ResearchV2StudyDecisionPopulation(
+        configuration,
+        decisions,
+        observations,
+        source_id=SOURCE_ID,
+        dataset_version=DATASET_VERSION,
+        manifest_sha256=MANIFEST_SHA256,
+        protocol_sha256=protocol_sha256,
+    )
     return result
 
 

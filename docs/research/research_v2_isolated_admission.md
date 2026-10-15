@@ -5,7 +5,10 @@
 research integration boundary, **not** authorization to evaluate the actual
 90-day price history or activate trading. A separate architect-approved study
 annex must specify executable SHA, bounded epochs, folds, costs, and outcome
-rules before real strategy evaluation.
+rules before real strategy evaluation. Issue #185 adds the prospective
+[exploratory-screen annex](research_v2_exploratory_screen.md) and a separate
+externally granted runner; this synthetic seam remains guarded, and no real
+execution grant exists in the implementation PR.
 
 The accepted C2 source is
 `weex-research-v2-last-18912cf7e7f97d518a74551f`, dataset

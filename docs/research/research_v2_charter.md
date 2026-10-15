@@ -4,6 +4,15 @@
 
 **Status:** design specified; implementation and data qualification pending; execution **NOT AUTHORIZED**.
 
+**Dated implementation pointer (2026-10-15):** The original charter text below
+records its 2026-10-14 design state. The current-snapshot panel was selected
+under #175; C2 data-only evidence and the separate normalized-base admission
+and all-fill packages were accepted under #181/#183/#177. Their historical
+contract-mechanics limits remain. Issue #185's
+[exploratory-screen annex](research_v2_exploratory_screen.md) predeclares a
+bounded implementation, calendar and screen, but **does not grant historical
+execution**. The older “pending” table remains the original charter finding.
+
 **Authority:** Issue [#171](https://github.com/setup-co/adaptive-trading-bot/issues/171) and Master Plan v1.7. This is not an activated or fully locked study. A later architect-approved activation annex must lock the executable SHA, qualified data manifests, selected instruments, UTC calendar and acceptance rules before any run.
 
 Master Plan v1.8 / Issue #175 separately permits a **current-snapshot exploratory** selection-only route; see [its annex](research_v2_current_snapshot_panel.md). This does not satisfy the historical-as-of requirement below or authorize any retrospective confirmatory claim, data import, strategy study or trading.

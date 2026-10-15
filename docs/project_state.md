@@ -8,11 +8,15 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified pre-Issue-#183 `main` after Issue #181 / PR #182:
+Verified pre-Issue-#185 `main` after Issue #183 / PR #184:
 
-`c3f34985dccfd840055e38c4e1a9f2ab829b887f`
+`d7f7b2f88429a9e41611ca0a000eeb7ac2085cf5`
 
-This is the exact base for Issue #183's isolated research-admission work.
+This is the exact base for Issue #185's prospective exploratory-screen work.
+Issue #183's accepted isolated admission was squash-integrated with reviewed
+tree `a4e74abfbc2f25484364a9d138a122e24afdc45b`; its synthetic-only
+integration guard remains. Issue #185 preparation has no real execution grant
+or historical strategy result.
 PR #180 was closed after metadata reconciliation because its accepted content
 was already integrated on `main`; Issue #179 is closed for its bounded tooling
 and partial evidence, not for a completed ten-member Package A. Issue #177's
@@ -47,7 +51,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#181 — bounded Research V2 C2 tail acquired, verified and merged; #183 isolates prospective admission, with no real historical study authorized.**
+**#181 — bounded Research V2 C2 tail acquired, verified and merged; #183 isolates prospective admission; #185 predeclares the exploratory screen, with no real historical study authorized yet.**
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -350,14 +354,15 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    remains ten-member `PARTIAL_OR_BLOCKED`. Issue #181's separate C2 tail
    completed 785 never-attempted shapes, preserving both predecessor gaps.
    The verified data-only projection has eight complete member grids and a
-   bounded ten-member post-warm-up overlap, but remains `PARTIAL_OR_BLOCKED`
-   and adds no real-study authorization. Issue #183 adds an isolated
-   normalized-base research admission interface: the accepted C2 binding is
-   data-only, while synthetic integration tests carry a distinct source and
-   a digest of their complete candle input through decisions and all-fill
-   observations. No actual-history strategy entry point exists. Any later
-   qualification or activation needs its own
-   architect decision and frozen identities/folds/code/sufficiency rules.
+   bounded ten-member post-warm-up overlap, but remains `PARTIAL_OR_BLOCKED`.
+   Issue #183 adds an isolated normalized-base research admission interface:
+   the accepted C2 binding is data-only in its synthetic integration seam.
+   Issue #185's [versioned annex](research/research_v2_exploratory_screen.md)
+   and guarded runner predeclare the ten-member calendar, 30 tasks, fixed
+   scenarios and screen. The implementation PR permits synthetic validation
+   and actual **data-only** preflight, not historical strategy execution. A
+   separate architect-reviewed exact executable SHA/protocol/input grant is
+   still required; no such grant is committed or implied by coverage.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
