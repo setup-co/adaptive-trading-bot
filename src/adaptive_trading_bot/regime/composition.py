@@ -424,8 +424,7 @@ class MultiTimeframeRegimeComposer:
                 Timeframe.HOURS_4,
             }:
                 raise CompositionSeriesError("snapshot timeframe is outside V1")
-            if snapshot.symbol.base not in {"BTC", "ETH"}:
-                raise CompositionSeriesError("snapshot symbol is outside V1")
+            self._validate_symbol(snapshot)
             self._validate_snapshot(snapshot)
             history = self._histories.get(key, ())
             if history:
@@ -438,6 +437,11 @@ class MultiTimeframeRegimeComposer:
                     raise CompositionSeriesError(f"bars_seen must advance by one for {key}")
             incoming[key] = snapshot
         return observed_at, incoming
+
+    def _validate_symbol(self, snapshot: TechnicalRegimeSnapshot) -> None:
+        """The default, runtime-facing composer retains the BTC/ETH boundary."""
+        if snapshot.symbol.base not in {"BTC", "ETH"}:
+            raise CompositionSeriesError("snapshot symbol is outside V1")
 
     @staticmethod
     def _validate_snapshot(snapshot: TechnicalRegimeSnapshot) -> None:

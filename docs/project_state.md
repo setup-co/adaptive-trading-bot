@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after Issue #179 / PR #180 accepted-content reconciliation:
+Verified pre-Issue-#183 `main` after Issue #181 / PR #182:
 
-`5e34486664a37641c3ff0b5b3827087bd91d83f5`
+`c3f34985dccfd840055e38c4e1a9f2ab829b887f`
 
-This is the exact base for Issue #181's bounded never-attempted C2 tail.
+This is the exact base for Issue #183's isolated research-admission work.
 PR #180 was closed after metadata reconciliation because its accepted content
 was already integrated on `main`; Issue #179 is closed for its bounded tooling
 and partial evidence, not for a completed ten-member Package A. Issue #177's
@@ -47,7 +47,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#181 — bounded Research V2 C2 tail acquired and verified; evidence awaits PR review, with no real historical study authorized.**
+**#181 — bounded Research V2 C2 tail acquired, verified and merged; #183 isolates prospective admission, with no real historical study authorized.**
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -70,7 +70,7 @@ raw-to-Parquet projection has eight complete 90-day member grids. The BTC
 ten-member **data-only** post-warm-up overlap now exists from
 `2026-08-02T20:00:00Z` to the fixed end, but the combined status is still
 `PARTIAL_OR_BLOCKED`. Historical contract/quantity identity and executable
-research admission remain unresolved. See
+research study activation remain unresolved. See
 `docs/research/research_v2_corpus_issue_181_tail.md` and its locked manifest.
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
@@ -82,7 +82,7 @@ hard-blocker clearing, freshness, breakout and no-trade eligibility remain.
 The merged #171 charter specifies a separately qualified ten-asset research target, not
 a runtime/Live allowlist expansion. Issue #175 selected a current-snapshot
 exploratory panel for data qualification only. Package A's selected-instrument
-history/identity and research-only admission remain pending. Issue #177
+historical-as-of identity and real study activation remain pending. Issue #177
 completed Package B's prospective all-fill replay/report accounting with
 synthetic evidence; neither package activates a study.
 Issue #173's original and supplementary public captures are complete and immutable.
@@ -351,7 +351,11 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    completed 785 never-attempted shapes, preserving both predecessor gaps.
    The verified data-only projection has eight complete member grids and a
    bounded ten-member post-warm-up overlap, but remains `PARTIAL_OR_BLOCKED`
-   and adds no executable research admission. Any later
+   and adds no real-study authorization. Issue #183 adds an isolated
+   normalized-base research admission interface: the accepted C2 binding is
+   data-only, while synthetic integration tests carry a distinct source and
+   a digest of their complete candle input through decisions and all-fill
+   observations. No actual-history strategy entry point exists. Any later
    qualification or activation needs its own
    architect decision and frozen identities/folds/code/sufficiency rules.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
@@ -364,5 +368,5 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    Live readiness.
 4. Keep the current BTC/ETH runtime and execution allowlists intact. A target
    of at least ten research assets does not qualify any new instrument for
-   Paper, Shadow or Live. No strategy study, new symbol admission or trading
+   Paper, Shadow or Live. No strategy study, new runtime symbol admission or trading
    activation is authorized by this feasibility gate.
