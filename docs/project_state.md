@@ -351,9 +351,11 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    completed 785 never-attempted shapes, preserving both predecessor gaps.
    The verified data-only projection has eight complete member grids and a
    bounded ten-member post-warm-up overlap, but remains `PARTIAL_OR_BLOCKED`
-   and adds no real-study authorization. Issue #183 adds an isolated,
-   synthetic-validated normalized-base research admission interface over the
-   exact C2 source, but no actual-history strategy entry point. Any later
+   and adds no real-study authorization. Issue #183 adds an isolated
+   normalized-base research admission interface: the accepted C2 binding is
+   data-only, while synthetic integration tests carry a distinct source and
+   a digest of their complete candle input through decisions and all-fill
+   observations. No actual-history strategy entry point exists. Any later
    qualification or activation needs its own
    architect decision and frozen identities/folds/code/sufficiency rules.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149

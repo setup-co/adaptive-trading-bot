@@ -19,9 +19,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from adaptive_trading_bot.backtest import (
-    ExecutionCandleSource,
     ExecutionCostConfiguration,
     ExecutionSeries,
+    HistoricalExecutionSource,
 )
 from adaptive_trading_bot.domain import (
     Candle,
@@ -31,12 +31,14 @@ from adaptive_trading_bot.domain import (
     align_timestamp,
 )
 from adaptive_trading_bot.domain.clock import require_utc
+from adaptive_trading_bot.domain.entry_chronology import entry_source_start
 from adaptive_trading_bot.features import (
     FeatureEngine,
     MarketStructureEngine,
     observed_candles_from_replay,
 )
 from adaptive_trading_bot.journal import (
+    DecisionIdentity,
     DecisionJournalBatch,
     DecisionJournalEntry,
     InMemoryDecisionJournal,
@@ -51,6 +53,7 @@ from adaptive_trading_bot.replay import HistoricalReplaySource, ReplayEngine, Re
 from adaptive_trading_bot.research import research_v2_corpus as corpus
 from adaptive_trading_bot.research import research_v2_corpus_tail as tail
 from adaptive_trading_bot.research.all_fill_replay import (
+    AllFillFamily,
     AllFillReplayResult,
     ResearchAllFillReplayRunner,
 )
@@ -109,6 +112,44 @@ SELECTION_ROOT = Path("data/research_evidence/issue-175-weex-kas-completion-v1")
 SOURCE_NOTE = Path("docs/research/research_v2_corpus_qualification.md")
 FRAMES = (Timeframe.MINUTES_15, Timeframe.HOUR_1, Timeframe.HOURS_4)
 PANEL = tuple(corpus.PANEL)
+SYNTHETIC_SOURCE_ID = SourceId("synthetic-research-v2-fixture")
+SYNTHETIC_DATASET_VERSION = "synthetic-research-v2-fixture-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchV2InputBinding:
+    """A fixture digest can never masquerade as the accepted C2 manifest."""
+
+    kind: str
+    source_id: SourceId
+    dataset_version: str
+    manifest_sha256: str
+    schema_version: str = "research-v2-input-binding-v1"
+
+    def validate(self) -> None:
+        if self.schema_version != "research-v2-input-binding-v1":
+            raise ResearchV2AdmissionError("unknown research input binding schema")
+        accepted = (
+            self.kind == "ACCEPTED_C2"
+            and self.source_id == SOURCE_ID
+            and self.dataset_version == DATASET_VERSION
+            and self.manifest_sha256 == MANIFEST_SHA256
+        )
+        synthetic = (
+            self.kind == "SYNTHETIC_FIXTURE"
+            and self.source_id == SYNTHETIC_SOURCE_ID
+            and self.dataset_version == SYNTHETIC_DATASET_VERSION
+            and len(self.manifest_sha256) == 64
+            and all(character in "0123456789abcdef" for character in self.manifest_sha256)
+            and self.manifest_sha256 != MANIFEST_SHA256
+        )
+        if not accepted and not synthetic:
+            raise ResearchV2AdmissionError("unknown or contradictory research input binding")
+
+
+ACCEPTED_C2_BINDING = ResearchV2InputBinding(
+    "ACCEPTED_C2", SOURCE_ID, DATASET_VERSION, MANIFEST_SHA256
+)
 
 
 class ResearchV2AdmissionError(HistoricalCandleStoreError):
@@ -136,14 +177,16 @@ class ResearchV2ContextAuthorization:
     manifest_sha256: str = MANIFEST_SHA256
     profile: str = PROFILE
     admission_version: str = ADMISSION_VERSION
+    input_binding: ResearchV2InputBinding = ACCEPTED_C2_BINDING
 
     def validate(self) -> None:
+        self.input_binding.validate()
         if (
-            self.source_id != SOURCE_ID
+            self.source_id != self.input_binding.source_id
             or f"{self.symbol.base}{self.symbol.quote}" not in PANEL
             or self.symbol.quote != "USDT"
-            or self.dataset_version != DATASET_VERSION
-            or self.manifest_sha256 != MANIFEST_SHA256
+            or self.dataset_version != self.input_binding.dataset_version
+            or self.manifest_sha256 != self.input_binding.manifest_sha256
             or self.profile != PROFILE
             or self.admission_version != ADMISSION_VERSION
         ):
@@ -495,8 +538,7 @@ class ResearchV2EpochBounds:
             )
         )
         if (
-            store.source_id != SOURCE_ID
-            or self.source_id != SOURCE_ID
+            store.source_id != self.source_id
             or self.profile != PROFILE
             or self.admission_version != ADMISSION_VERSION
             or not stamps[0] < stamps[1] < stamps[2] <= stamps[3]
@@ -528,6 +570,7 @@ class ResearchV2AdmissionConfiguration:
     bounds: ResearchV2EpochBounds
     family: str
     research_equity_quote: Decimal
+    input_binding: ResearchV2InputBinding = ACCEPTED_C2_BINDING
     risk_configuration: RiskManagerConfiguration = field(default_factory=RiskManagerConfiguration)
     safety_configuration: OperationalSafetyConfiguration = field(
         default_factory=OperationalSafetyConfiguration
@@ -535,11 +578,17 @@ class ResearchV2AdmissionConfiguration:
     safety_assumptions: ResearchSafetyAssumptionProfile = field(
         default_factory=ResearchSafetyAssumptionProfile
     )
-    schema_version: str = field(init=False, default="research-v2-admission-configuration-v1")
+    schema_version: str = field(init=False, default="research-v2-admission-configuration-v2")
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        for name in ("bounds", "risk_configuration", "safety_configuration", "safety_assumptions"):
+        for name in (
+            "bounds",
+            "input_binding",
+            "risk_configuration",
+            "safety_configuration",
+            "safety_assumptions",
+        ):
             object.__setattr__(self, name, deepcopy(getattr(self, name)))
         self._validate_facts()
         object.__setattr__(
@@ -553,12 +602,14 @@ class ResearchV2AdmissionConfiguration:
         )
 
     def _validate_facts(self) -> None:
+        self.input_binding.validate()
         if (
-            self.schema_version != "research-v2-admission-configuration-v1"
+            self.schema_version != "research-v2-admission-configuration-v2"
             or self.family not in {"trend_pullback", "breakout_retest", "range_mean_reversion"}
             or not isinstance(self.research_equity_quote, Decimal)
             or not self.research_equity_quote.is_finite()
             or self.research_equity_quote <= 0
+            or self.bounds.source_id != self.input_binding.source_id
         ):
             raise ResearchV2AdmissionError("unknown research V2 admission configuration")
         _revalidate_risk_configuration(self.risk_configuration)
@@ -579,7 +630,59 @@ class ResearchV2AdmissionConfiguration:
 
     def validate(self, store: ResearchV2EpochStore) -> None:
         self.validate_seal()
+        if store.source_id != self.input_binding.source_id:
+            raise ResearchV2AdmissionError("research store differs from input binding")
         self.bounds.validate(store)
+
+
+def synthetic_input_binding(
+    store: ResearchV2EpochStore, bounds: ResearchV2EpochBounds
+) -> ResearchV2InputBinding:
+    """Bind the complete finite fixture used by both replay and execution."""
+
+    if isinstance(store, LockedResearchV2CandleStore) or store.source_id != SYNTHETIC_SOURCE_ID:
+        raise ResearchV2AdmissionError("only a distinct synthetic fixture may be evaluated")
+    bounds.validate(store)
+    rows: list[tuple[Timeframe, tuple[Candle, ...]]] = []
+    for frame in FRAMES:
+        candles = store.read(
+            store.source_id,
+            bounds.symbol,
+            frame,
+            start=bounds.context_start,
+            end=bounds.follow_up_end,
+        )
+        expected = bounds.context_start
+        for candle in candles:
+            Candle(
+                candle.symbol,
+                candle.timeframe,
+                candle.open_time,
+                candle.close_time,
+                candle.open,
+                candle.high,
+                candle.low,
+                candle.close,
+                candle.volume,
+            )
+            if (
+                candle.symbol != bounds.symbol
+                or candle.timeframe is not frame
+                or candle.open_time != expected
+            ):
+                raise ResearchV2AdmissionError("synthetic input is incomplete or inconsistent")
+            expected = candle.close_time
+        if expected != bounds.follow_up_end:
+            raise ResearchV2AdmissionError("synthetic input has incomplete coverage")
+        rows.append((frame, candles))
+    digest = _integrity_seal(
+        "research-v2-synthetic-input-v1",
+        (bounds.symbol, bounds.context_start, bounds.follow_up_end, tuple(rows)),
+        excluded_names=frozenset(),
+    )
+    return ResearchV2InputBinding(
+        "SYNTHETIC_FIXTURE", SYNTHETIC_SOURCE_ID, SYNTHETIC_DATASET_VERSION, digest
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,7 +696,7 @@ class ResearchV2DecisionPopulation:
     dataset_version: str = DATASET_VERSION
     manifest_sha256: str = MANIFEST_SHA256
     profile: str = PROFILE
-    schema_version: str = "research-v2-decision-population-v1"
+    schema_version: str = "research-v2-decision-population-v2"
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -622,39 +725,68 @@ class ResearchV2DecisionPopulation:
 
     def _validate_facts(self) -> None:
         self.configuration.validate_seal()
+        binding = self.configuration.input_binding
+        bounds = self.configuration.bounds
+        if binding.kind != "SYNTHETIC_FIXTURE":
+            raise ResearchV2AdmissionError("accepted C2 binding remains data-only")
         if (
-            self.source_id != SOURCE_ID
-            or self.dataset_version != DATASET_VERSION
-            or self.manifest_sha256 != MANIFEST_SHA256
+            self.source_id != binding.source_id
+            or self.dataset_version != binding.dataset_version
+            or self.manifest_sha256 != binding.manifest_sha256
             or self.profile != PROFILE
-            or self.schema_version != "research-v2-decision-population-v1"
+            or self.schema_version != "research-v2-decision-population-v2"
         ):
             raise ResearchV2AdmissionError("research V2 decision provenance is contradictory")
-        for item in self.decisions:
-            item.validate()
-            if (
-                item.identity.source_id != SOURCE_ID
-                or item.identity.symbol != self.configuration.bounds.symbol
-                or not self.configuration.bounds.decision_start
-                < item.identity.observed_at
-                <= self.configuration.bounds.decision_end
-            ):
-                raise ResearchV2AdmissionError("decision is outside its bounded research authority")
+        strategy = {
+            "trend_pullback": TrendPullbackStrategy,
+            "breakout_retest": BreakoutRetestStrategy,
+            "range_mean_reversion": RangeMeanReversionStrategy,
+        }[self.configuration.family]()
+        risk = RiskManager(self.configuration.risk_configuration)
+        safety = OperationalSafetyGate(self.configuration.safety_configuration)
+        decision_index = 0
+        expected_close = bounds.context_start + Timeframe.MINUTES_15.duration
         for observation in self.contexts:
             observation.validate()
+            context = observation.context
+            if not isinstance(context, ResearchV2StrategyContext):
+                raise ResearchV2AdmissionError("research context lacks isolated authorization")
             if (
-                observation.context.source_id != SOURCE_ID
-                or observation.context.symbol != self.configuration.bounds.symbol
+                context.source_id != binding.source_id
+                or context.symbol != bounds.symbol
+                or context.research_authorization.input_binding != binding
+                or context.observed_at != expected_close
             ):
                 raise ResearchV2AdmissionError("context is outside its research identity")
-        context_by_time = {item.context.observed_at: item.context for item in self.contexts}
-        if len(context_by_time) != len(self.contexts):
-            raise ResearchV2AdmissionError("duplicate research context observation")
-        if any(
-            context_by_time.get(item.identity.observed_at) != item.context
-            for item in self.decisions
-        ):
-            raise ResearchV2AdmissionError("decision context differs from sealed observations")
+            expected_close += Timeframe.MINUTES_15.duration
+            evaluation = strategy.evaluate(context)
+            if not bounds.decision_start < context.observed_at <= bounds.decision_end:
+                continue
+            if decision_index >= len(self.decisions):
+                raise ResearchV2AdmissionError("decision population omits an observation")
+            decision = self.decisions[decision_index]
+            decision.validate()
+            equity = self.configuration.research_equity_quote
+            portfolio = RiskPortfolioSnapshot(
+                context.observed_at, "USDT", equity, equity, equity, ()
+            )
+            expected_risk = risk.evaluate(evaluation, portfolio)
+            expected_safety = safety.evaluate(
+                expected_risk,
+                _research_health(context, self.configuration.safety_assumptions),
+            )
+            if (
+                decision.context != context
+                or decision.strategy_evaluation != evaluation
+                or decision.risk_decision != expected_risk
+                or decision.safety_decision != expected_safety
+            ):
+                raise ResearchV2AdmissionError("decision differs from declared strategy/admission")
+            decision_index += 1
+        if expected_close != bounds.follow_up_end + Timeframe.MINUTES_15.duration:
+            raise ResearchV2AdmissionError("research context coverage is incomplete")
+        if decision_index != len(self.decisions):
+            raise ResearchV2AdmissionError("decision population contains extra observations")
 
 
 def _evaluate_synthetic_epoch(
@@ -667,8 +799,12 @@ def _evaluate_synthetic_epoch(
         raise ResearchV2AdmissionError("real corpus evaluation requires a later activation annex")
     configuration.validate(store)
     bounds = configuration.bounds
+    if configuration.input_binding != synthetic_input_binding(store, bounds):
+        raise ResearchV2AdmissionError("synthetic fixture differs from frozen input binding")
     specs = tuple(
-        ReplaySeries(SOURCE_ID, bounds.symbol, frame, bounds.context_start, bounds.follow_up_end)
+        ReplaySeries(
+            bounds.source_id, bounds.symbol, frame, bounds.context_start, bounds.follow_up_end
+        )
         for frame in FRAMES
     )
     replay = ReplayEngine(HistoricalReplaySource(store)).prepare(
@@ -677,7 +813,13 @@ def _evaluate_synthetic_epoch(
     features = FeatureEngine()
     structures = MarketStructureEngine()
     regimes = TechnicalRegimeEngine()
-    authority = ResearchV2ContextAuthorization(SOURCE_ID, bounds.symbol)
+    authority = ResearchV2ContextAuthorization(
+        bounds.source_id,
+        bounds.symbol,
+        configuration.input_binding.dataset_version,
+        configuration.input_binding.manifest_sha256,
+        input_binding=configuration.input_binding,
+    )
     composer = ResearchV2RegimeComposer(authority)
     strategy = {
         "trend_pullback": TrendPullbackStrategy,
@@ -724,7 +866,14 @@ def _evaluate_synthetic_epoch(
             journal.append_batch(DecisionJournalBatch(batch.observed_at, tuple(entries)))
     if tuple(decisions) != journal.snapshot().entries:
         raise ResearchV2AdmissionError("research journal population mismatch")
-    result = ResearchV2DecisionPopulation(configuration, tuple(decisions), tuple(observations))
+    result = ResearchV2DecisionPopulation(
+        configuration,
+        tuple(decisions),
+        tuple(observations),
+        source_id=bounds.source_id,
+        dataset_version=configuration.input_binding.dataset_version,
+        manifest_sha256=configuration.input_binding.manifest_sha256,
+    )
     result.validate()
     return result
 
@@ -733,12 +882,16 @@ def _evaluate_synthetic_epoch(
 class ResearchV2AllFillObservation:
     """Envelope retaining normalized source/epoch meaning around Package B output."""
 
+    population: ResearchV2DecisionPopulation
     configuration: ResearchV2AdmissionConfiguration
     result: AllFillReplayResult
+    costs: ExecutionCostConfiguration
+    decision_identity: DecisionIdentity
     source_id: SourceId = SOURCE_ID
     dataset_version: str = DATASET_VERSION
     profile: str = PROFILE
     admission_version: str = ADMISSION_VERSION
+    schema_version: str = "research-v2-all-fill-observation-v2"
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -766,28 +919,69 @@ class ResearchV2AllFillObservation:
         self._validate_facts()
 
     def _validate_facts(self) -> None:
+        self.population.validate()
         self.configuration.validate_seal()
         self.result.validate()
+        binding = self.configuration.input_binding
+        bounds = self.configuration.bounds
+        expected_family = {
+            "trend_pullback": AllFillFamily.TREND_PULLBACK,
+            "breakout_retest": AllFillFamily.BREAKOUT_RETEST,
+            "range_mean_reversion": AllFillFamily.RANGE_MEAN_REVERSION,
+        }[self.configuration.family]
+        expected_start = (
+            bounds.context_start
+            if self.configuration.family == "trend_pullback"
+            else self.result.decision.identity.observed_at
+        )
         if (
-            self.source_id != SOURCE_ID
-            or self.dataset_version != DATASET_VERSION
+            self.population.configuration != self.configuration
+            or self.source_id != binding.source_id
+            or self.dataset_version != binding.dataset_version
             or self.profile != PROFILE
             or self.admission_version != ADMISSION_VERSION
-            or self.result.decision.identity.source_id != SOURCE_ID
-            or self.result.decision.identity.symbol != self.configuration.bounds.symbol
+            or self.schema_version != "research-v2-all-fill-observation-v2"
+            or self.result.decision not in self.population.decisions
+            or self.result.decision.identity != self.decision_identity
+            or self.result.decision.identity.source_id != binding.source_id
+            or self.result.decision.identity.symbol != bounds.symbol
+            or self.result.family is not expected_family
+            or self.result.series
+            != ExecutionSeries(binding.source_id, bounds.symbol, Timeframe.MINUTES_15)
+            or self.result.costs != self.costs
+            or self.result.start != expected_start
+            or self.result.end != bounds.follow_up_end
         ):
             raise ResearchV2AdmissionError("all-fill result is not bound to normalized research")
+        if self.result.entry_intent is not None:
+            source_start = entry_source_start(
+                decision_at=self.result.decision.identity.observed_at,
+                authorized_at=self.result.entry_intent.authorized_at,
+                requested_start=expected_start,
+                end=bounds.follow_up_end,
+            )
+            expected_snapshot = tuple(
+                item.context.candle_15m
+                for item in self.population.contexts
+                if source_start <= item.context.candle_15m.open_time < bounds.follow_up_end
+            )
+            if self.result.execution_snapshot != expected_snapshot:
+                raise ResearchV2AdmissionError("execution snapshot differs from bound input")
 
 
 def _replay_synthetic_all_fill(
     population: ResearchV2DecisionPopulation,
     decision: DecisionJournalEntry[object, object],
-    source: ExecutionCandleSource,
+    store: ResearchV2EpochStore,
     costs: ExecutionCostConfiguration,
 ) -> ResearchV2AllFillObservation:
     """Use unchanged entry-authorizer, family replay, simulator and accounting."""
 
     population.validate()
+    if population.configuration.input_binding != synthetic_input_binding(
+        store, population.configuration.bounds
+    ):
+        raise ResearchV2AdmissionError("execution source differs from frozen fixture")
     if decision not in population.decisions:
         raise ResearchV2AdmissionError("foreign decision")
     bounds = population.configuration.bounds
@@ -796,10 +990,10 @@ def _replay_synthetic_all_fill(
         for item in population.contexts
         if decision.identity.observed_at < item.context.observed_at < bounds.follow_up_end
     )
-    result = ResearchAllFillReplayRunner(source).run(
+    result = ResearchAllFillReplayRunner(HistoricalExecutionSource(store)).run(
         decision,
         contexts,
-        ExecutionSeries(SOURCE_ID, bounds.symbol, Timeframe.MINUTES_15),
+        ExecutionSeries(bounds.source_id, bounds.symbol, Timeframe.MINUTES_15),
         costs,
         start=(
             bounds.context_start
@@ -808,7 +1002,15 @@ def _replay_synthetic_all_fill(
         ),
         end=bounds.follow_up_end,
     )
-    wrapped = ResearchV2AllFillObservation(population.configuration, result)
+    wrapped = ResearchV2AllFillObservation(
+        population,
+        population.configuration,
+        result,
+        costs,
+        decision.identity,
+        source_id=bounds.source_id,
+        dataset_version=population.dataset_version,
+    )
     wrapped.validate()
     return wrapped
 

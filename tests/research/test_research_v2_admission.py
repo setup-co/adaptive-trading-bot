@@ -13,7 +13,6 @@ import pytest
 from adaptive_trading_bot.backtest import (
     ExecutionCostConfiguration,
     ExecutionSeries,
-    HistoricalExecutionSource,
 )
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.features import (
@@ -33,10 +32,12 @@ from adaptive_trading_bot.regime import (
     DirectionEvidence,
     EventRiskState,
     LiquidityState,
+    MultiTimeframeRegimeComposer,
     TechnicalRegimeSnapshot,
     VolatilityState,
     VolumeState,
 )
+from adaptive_trading_bot.regime.composition import CompositionSeriesError
 from adaptive_trading_bot.regime.technical import (
     TechnicalRegimeBatch,
     _direction,
@@ -46,30 +47,41 @@ from adaptive_trading_bot.regime.technical import (
 from adaptive_trading_bot.research.all_fill_replay import ResearchAllFillReplayRunner
 from adaptive_trading_bot.research.paired_exit_replay import HistoricalStrategyContextObservation
 from adaptive_trading_bot.research.research_v2_admission import (
+    ACCEPTED_C2_BINDING,
     ADMISSION_VERSION,
     DATASET_VERSION,
+    FRAMES,
     MANIFEST_SHA256,
     PANEL,
     PROFILE,
     SOURCE_ID,
+    SYNTHETIC_DATASET_VERSION,
+    SYNTHETIC_SOURCE_ID,
     LockedResearchV2CandleStore,
     ResearchV2AdmissionConfiguration,
     ResearchV2AdmissionError,
+    ResearchV2AllFillObservation,
     ResearchV2ContextAuthorization,
+    ResearchV2DecisionPopulation,
     ResearchV2EpochBounds,
+    ResearchV2InputBinding,
     ResearchV2RegimeComposer,
     ResearchV2StrategyContext,
     _evaluate_synthetic_epoch,
     _replay_synthetic_all_fill,
+    synthetic_input_binding,
 )
 from adaptive_trading_bot.research.trend_pullback_corpus import (
+    ResearchAdmissionConfiguration,
     ResearchSafetyAssumptionProfile,
+    TrendPullbackResearchCorpusError,
     _research_health,
 )
 from adaptive_trading_bot.risk import (
     ExchangeApiHealthState,
     OperationalSafetyGate,
     RiskManager,
+    RiskManagerConfiguration,
     RiskPortfolioSnapshot,
 )
 from adaptive_trading_bot.storage import IntegrityReport, MergeResult, SourceId
@@ -83,6 +95,19 @@ from adaptive_trading_bot.strategies.core import StrategyContextError
 START = datetime(2026, 9, 1, tzinfo=UTC)
 END = START + timedelta(hours=208)
 SYMBOL = TradingSymbol("SOL", "USDT")
+MANUAL_SYNTHETIC_BINDING = ResearchV2InputBinding(
+    "SYNTHETIC_FIXTURE", SYNTHETIC_SOURCE_ID, SYNTHETIC_DATASET_VERSION, "a" * 64
+)
+
+
+def _manual_authorization() -> ResearchV2ContextAuthorization:
+    return ResearchV2ContextAuthorization(
+        SYNTHETIC_SOURCE_ID,
+        SYMBOL,
+        SYNTHETIC_DATASET_VERSION,
+        MANUAL_SYNTHETIC_BINDING.manifest_sha256,
+        input_binding=MANUAL_SYNTHETIC_BINDING,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -93,11 +118,14 @@ def locked_store() -> LockedResearchV2CandleStore:
 class SyntheticEpochStore:
     """A test-only complete epoch, never an accepted production binding."""
 
-    source_id = SOURCE_ID
+    source_id = SYNTHETIC_SOURCE_ID
 
-    def __init__(self, symbol: TradingSymbol, *, pattern: str = "breakout") -> None:
+    def __init__(
+        self, symbol: TradingSymbol, *, pattern: str = "breakout", start: datetime = START
+    ) -> None:
         self.symbol = symbol
         self.pattern = pattern
+        self.start = start
         self.candles = {
             frame: tuple(
                 self._candle(frame, index)
@@ -107,7 +135,46 @@ class SyntheticEpochStore:
         }
 
     def _candle(self, frame: Timeframe, index: int) -> Candle:
-        opened = START + index * frame.duration
+        opened = self.start + index * frame.duration
+        if self.pattern == "range":
+            counts = {
+                Timeframe.MINUTES_15: 820,
+                Timeframe.HOUR_1: 205,
+                Timeframe.HOURS_4: 52,
+            }
+            amplitude = Decimal(2) if index < counts[frame] - 41 else Decimal("0.1")
+            close = Decimal(100) + Decimal(index % 4) * amplitude
+            opening, high, low = close, Decimal(108), Decimal(92)
+            if frame is Timeframe.MINUTES_15:
+                if 740 <= index < 760:
+                    close = Decimal(50) if index % 2 == 0 else Decimal(150)
+                    opening, high, low = close, Decimal(151), Decimal(49)
+                if index == 801:
+                    opening = close = Decimal(90)
+                    low = Decimal(89)
+                if index in {802, 810}:
+                    low = Decimal(80)
+                if index in {806, 814}:
+                    high = Decimal(120)
+                if index == 817:
+                    opening, close, low = Decimal(90), Decimal(95), Decimal(80)
+                if index == 818:
+                    opening = close = Decimal(90)
+                    high, low = Decimal(91), Decimal(89)
+                if index == 819:
+                    opening, close = Decimal(90), Decimal(95)
+                    high, low = Decimal(101), Decimal(89)
+            return Candle(
+                self.symbol,
+                frame,
+                opened,
+                opened + frame.duration,
+                opening,
+                high,
+                low,
+                close,
+                Decimal(10 + index % 5),
+            )
         if self.pattern == "trend":
             close = Decimal(100 + index)
             low = close - Decimal(2)
@@ -190,7 +257,7 @@ class SyntheticEpochStore:
         start: datetime | None = None,
         end: datetime | None = None,
     ) -> tuple[Candle, ...]:
-        assert source_id == SOURCE_ID and symbol == self.symbol
+        assert source_id == SYNTHETIC_SOURCE_ID and symbol == self.symbol
         assert start is not None and end is not None
         return tuple(c for c in self.candles[timeframe] if start <= c.open_time < end)
 
@@ -215,11 +282,16 @@ class SyntheticEpochStore:
 
     def data_only_epochs(self, symbol: TradingSymbol) -> tuple[tuple[datetime, datetime], ...]:
         assert symbol == self.symbol
-        return ((START, END),)
+        return ((self.start, self.start + timedelta(hours=208)),)
 
     def usable_intervals(self, symbol: TradingSymbol) -> tuple[tuple[datetime, datetime], ...]:
         assert symbol == self.symbol
-        return ((START + timedelta(hours=200), END),)
+        return (
+            (
+                self.start + timedelta(hours=200),
+                self.start + timedelta(hours=208),
+            ),
+        )
 
 
 def _range_technical(
@@ -236,7 +308,7 @@ def _range_technical(
     score = sum(item.contribution for item in evidence)
     direction = _direction(score, True)
     return TechnicalRegimeSnapshot(
-        SOURCE_ID,
+        SYNTHETIC_SOURCE_ID,
         SYMBOL,
         frame,
         observed_at,
@@ -287,7 +359,7 @@ def _range_context(
             Decimal(100),
         )
     feature = FeatureSnapshot(
-        SOURCE_ID,
+        SYNTHETIC_SOURCE_ID,
         SYMBOL,
         Timeframe.MINUTES_15,
         observed_at,
@@ -312,7 +384,7 @@ def _range_context(
         pivot_open = observed_at - timedelta(hours=4)
         confirmed = (
             ConfirmedPivot(
-                SOURCE_ID,
+                SYNTHETIC_SOURCE_ID,
                 SYMBOL,
                 Timeframe.MINUTES_15,
                 kind,
@@ -327,7 +399,7 @@ def _range_context(
             ),
         )
     structure = StructureSnapshot(
-        SOURCE_ID,
+        SYNTHETIC_SOURCE_ID,
         SYMBOL,
         Timeframe.MINUTES_15,
         observed_at,
@@ -338,7 +410,7 @@ def _range_context(
         None,
         None,
     )
-    composer = ResearchV2RegimeComposer(ResearchV2ContextAuthorization(SOURCE_ID, SYMBOL))
+    composer = ResearchV2RegimeComposer(_manual_authorization())
     mtf = composer.process(
         TechnicalRegimeBatch(
             observed_at,
@@ -350,14 +422,14 @@ def _range_context(
         )
     ).snapshots[0]
     return ResearchV2StrategyContext(
-        SOURCE_ID,
+        SYNTHETIC_SOURCE_ID,
         SYMBOL,
         observed_at,
         candle,
         feature,
         structure,
         mtf,
-        ResearchV2ContextAuthorization(SOURCE_ID, SYMBOL),
+        _manual_authorization(),
     )
 
 
@@ -368,23 +440,31 @@ class _RangeExecutionSource:
     def load(
         self, series: ExecutionSeries, *, start: datetime, end: datetime
     ) -> tuple[Candle, ...]:
-        assert series.source_id == SOURCE_ID and series.symbol == SYMBOL
+        assert series.source_id == SYNTHETIC_SOURCE_ID and series.symbol == SYMBOL
         return tuple(c for c in self.candles if start <= c.open_time < end)
 
 
 def _config(
-    symbol: TradingSymbol = SYMBOL, family: str = "trend_pullback"
+    symbol: TradingSymbol = SYMBOL,
+    family: str = "trend_pullback",
+    store: SyntheticEpochStore | None = None,
+    decision_end_hours: int = 204,
 ) -> ResearchV2AdmissionConfiguration:
+    actual_store = store or SyntheticEpochStore(symbol)
+    base = actual_store.start
+    bounds = ResearchV2EpochBounds(
+        symbol,
+        base,
+        base + timedelta(hours=200),
+        base + timedelta(hours=decision_end_hours),
+        base + timedelta(hours=208),
+        source_id=SYNTHETIC_SOURCE_ID,
+    )
     return ResearchV2AdmissionConfiguration(
-        ResearchV2EpochBounds(
-            symbol,
-            START,
-            START + timedelta(hours=200),
-            START + timedelta(hours=204),
-            END,
-        ),
+        bounds,
         family,
         Decimal("10000"),
+        input_binding=synthetic_input_binding(actual_store, bounds),
     )
 
 
@@ -412,9 +492,8 @@ def test_all_ten_real_panel_identities_are_versioned_and_distinct() -> None:
 @pytest.mark.parametrize("wire", PANEL)
 def test_each_exact_panel_symbol_traverses_replay_to_cleared_non_anchor_entry(wire: str) -> None:
     symbol = TradingSymbol(wire[:-4], "USDT")
-    population = _evaluate_synthetic_epoch(
-        SyntheticEpochStore(symbol), _config(symbol, "breakout_retest")
-    )
+    store = SyntheticEpochStore(symbol)
+    population = _evaluate_synthetic_epoch(store, _config(symbol, "breakout_retest", store))
     assert any(
         decision.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
         and decision.risk_decision.status.value == "APPROVED"
@@ -438,10 +517,24 @@ def test_normal_v1_context_still_rejects_non_anchor() -> None:
         )
 
 
+def test_legacy_research_and_runtime_composer_reject_v2_non_anchor() -> None:
+    with pytest.raises(TrendPullbackResearchCorpusError, match="BTC/USDT or ETH/USDT"):
+        ResearchAdmissionConfiguration(
+            (SYNTHETIC_SOURCE_ID,), (SYMBOL,), START, END, Decimal(10000)
+        )
+    observed_at = START + timedelta(hours=200)
+    batch = TechnicalRegimeBatch(
+        observed_at,
+        tuple(_range_technical(frame, observed_at) for frame in FRAMES),
+    )
+    with pytest.raises(CompositionSeriesError, match="outside V1"):
+        MultiTimeframeRegimeComposer().process(batch)
+
+
 @pytest.mark.parametrize("family", ["trend_pullback", "breakout_retest", "range_mean_reversion"])
 def test_synthetic_replay_uses_real_authority_chain_for_non_anchor(family: str) -> None:
     store = SyntheticEpochStore(SYMBOL)
-    population = _evaluate_synthetic_epoch(store, _config(family=family))
+    population = _evaluate_synthetic_epoch(store, _config(family=family, store=store))
     population.validate()
     assert len(population.decisions) == 16
     assert population.decisions[0].identity.symbol == SYMBOL
@@ -452,7 +545,7 @@ def test_synthetic_replay_uses_real_authority_chain_for_non_anchor(family: str) 
     assert all(
         decision.strategy_evaluation.action in CandidateAction for decision in population.decisions
     )
-    assert population.source_id == SOURCE_ID
+    assert population.source_id == SYNTHETIC_SOURCE_ID
     assert population.profile == PROFILE
     if family == "breakout_retest":
         assert any(
@@ -486,8 +579,8 @@ def test_unknown_profile_source_and_epoch_are_rejected_before_replay() -> None:
 
 def test_warmup_first_close_and_epoch_reset_boundaries() -> None:
     store = SyntheticEpochStore(SYMBOL, pattern="breakout")
-    first = _evaluate_synthetic_epoch(store, _config(family="breakout_retest"))
-    second = _evaluate_synthetic_epoch(store, _config(family="breakout_retest"))
+    first = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
+    second = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
     assert first.decisions == second.decisions
     assert first.decisions[0].identity.observed_at == START + timedelta(hours=200, minutes=15)
     assert first.decisions[0].context.candle_15m.open_time == START + timedelta(hours=200)
@@ -506,7 +599,7 @@ def test_warmup_first_close_and_epoch_reset_boundaries() -> None:
 
 def test_non_anchor_breakout_entry_uses_existing_all_fill_authorities() -> None:
     store = SyntheticEpochStore(SYMBOL)
-    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest"))
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
     decision = next(
         decision
         for decision in population.decisions
@@ -516,7 +609,7 @@ def test_non_anchor_breakout_entry_uses_existing_all_fill_authorities() -> None:
     wrapped = _replay_synthetic_all_fill(
         population,
         decision,
-        HistoricalExecutionSource(store),
+        store,
         ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
     )
     wrapped.validate()
@@ -529,21 +622,36 @@ def test_non_anchor_breakout_entry_uses_existing_all_fill_authorities() -> None:
     assert branch.entry_fill.symbol == SYMBOL
     assert branch.entry_fill.quantity > 0
     assert branch.entry_fill.fee_quote > 0
+    risk = decision.risk_decision
+    assert risk.reference_price == Decimal(902)
+    assert risk.approved_risk_stop_basis == Decimal(901)
+    assert risk.stop_distance == Decimal(1)
+    assert risk.per_trade_risk_budget_quote == Decimal(25)
+    assert risk.gross_exposure_cap_quote == Decimal(10000)
     with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+        expected_base_quantity = Decimal(10000) / Decimal(902)
+        assert risk.approved_quantity == expected_base_quantity
+        assert risk.approved_notional_quote == expected_base_quantity * Decimal(902)
+        assert risk.approved_notional_quote == Decimal(10000)
+        assert branch.entry_fill.quantity == expected_base_quantity
+        assert branch.entry_fill.fill_price == Decimal("901.2703")
         assert branch.entry_fill.fee_quote == (
             branch.entry_fill.quantity * branch.entry_fill.fill_price * Decimal("0.001")
+        )
+        assert branch.entry_fill.fee_quote == Decimal("9.991910199556541019955654101995569")
+        # This is the authoritative accounted output, not a second PnL implementation.
+        assert branch.final_position.cumulative_net_realized_pnl == Decimal(
+            "-3.82704434589800443458980044345898"
         )
         assert branch.closed_net_r == (
             branch.final_position.cumulative_net_realized_pnl / branch.approved_risk_quote
         )
-    assert branch.entry_fill.quantity * branch.entry_fill.fill_price != (
-        branch.entry_fill.quantity * branch.entry_fill.fill_price * Decimal("0.1")
-    )
+    assert branch.closed_net_r == Decimal("-0.3451993999999999999999999999999999")
 
 
 def test_non_anchor_trend_admission_reuses_paired_all_fill_branches() -> None:
     store = SyntheticEpochStore(SYMBOL, pattern="trend")
-    population = _evaluate_synthetic_epoch(store, _config())
+    population = _evaluate_synthetic_epoch(store, _config(store=store))
     decision = next(
         decision
         for decision in population.decisions
@@ -553,7 +661,7 @@ def test_non_anchor_trend_admission_reuses_paired_all_fill_branches() -> None:
     wrapped = _replay_synthetic_all_fill(
         population,
         decision,
-        HistoricalExecutionSource(store),
+        store,
         ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
     )
     wrapped.validate()
@@ -566,7 +674,7 @@ def test_non_anchor_trend_admission_reuses_paired_all_fill_branches() -> None:
 
 def test_non_anchor_short_breakout_passes_risk_safety_and_accounting() -> None:
     store = SyntheticEpochStore(SYMBOL, pattern="short")
-    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest"))
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
     decision = next(
         decision
         for decision in population.decisions
@@ -576,7 +684,7 @@ def test_non_anchor_short_breakout_passes_risk_safety_and_accounting() -> None:
     wrapped = _replay_synthetic_all_fill(
         population,
         decision,
-        HistoricalExecutionSource(store),
+        store,
         ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
     )
     wrapped.validate()
@@ -586,7 +694,7 @@ def test_non_anchor_short_breakout_passes_risk_safety_and_accounting() -> None:
 
 def test_non_anchor_invalidated_fill_remains_accounted_and_recovers_causally() -> None:
     store = SyntheticEpochStore(SYMBOL, pattern="breakout_invalid")
-    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest"))
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
     decision = next(
         decision
         for decision in population.decisions
@@ -596,7 +704,7 @@ def test_non_anchor_invalidated_fill_remains_accounted_and_recovers_causally() -
     wrapped = _replay_synthetic_all_fill(
         population,
         decision,
-        HistoricalExecutionSource(store),
+        store,
         ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
     )
     wrapped.validate()
@@ -611,12 +719,12 @@ def test_non_anchor_invalidated_fill_remains_accounted_and_recovers_causally() -
 
 def test_non_anchor_no_trade_risk_and_safety_gates_remain_separate() -> None:
     store = SyntheticEpochStore(SYMBOL)
-    no_trade = _evaluate_synthetic_epoch(store, _config(family="range_mean_reversion"))
+    no_trade = _evaluate_synthetic_epoch(store, _config(family="range_mean_reversion", store=store))
     assert all(
         decision.strategy_evaluation.action is CandidateAction.NO_TRADE
         for decision in no_trade.decisions
     )
-    admitted = _evaluate_synthetic_epoch(store, _config(family="breakout_retest"))
+    admitted = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
     candidate = next(
         decision
         for decision in admitted.decisions
@@ -647,7 +755,7 @@ def test_non_anchor_no_trade_risk_and_safety_gates_remain_separate() -> None:
     blocked_safety = _evaluate_synthetic_epoch(
         store,
         replace(
-            _config(family="breakout_retest"),
+            _config(family="breakout_retest", store=store),
             safety_assumptions=ResearchSafetyAssumptionProfile(
                 exchange_api_health_state=ExchangeApiHealthState.DEGRADED
             ),
@@ -659,6 +767,199 @@ def test_non_anchor_no_trade_risk_and_safety_gates_remain_separate() -> None:
         and decision.safety_decision.status.value == "SAFE_MODE"
         for decision in blocked_safety.decisions
     )
+
+
+def test_non_anchor_range_from_raw_candles_through_all_fill_and_epoch_reset() -> None:
+    store = SyntheticEpochStore(SYMBOL, pattern="range")
+    configuration = replace(
+        _config(family="range_mean_reversion", store=store, decision_end_hours=206),
+        research_equity_quote=Decimal(9500),
+    )
+    population = _evaluate_synthetic_epoch(store, configuration)
+    candidate = next(
+        item
+        for item in population.decisions
+        if item.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+    )
+    assert candidate.safety_decision.status.value == "CLEARED"
+    assert candidate.identity.observed_at == START + timedelta(minutes=818 * 15)
+    assert EntryOrderIntentAuthorizer().authorize(candidate).status is (
+        OrderIntentAuthorizationStatus.AUTHORIZED
+    )
+    wrapped = _replay_synthetic_all_fill(
+        population,
+        candidate,
+        store,
+        ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+    )
+    wrapped.validate()
+    assert wrapped.result.branches
+    assert wrapped.result.branches[0].entry_fill.quantity > 0
+    assert wrapped.result.branches[0].entry_fill.fee_quote > 0
+    repeated = _evaluate_synthetic_epoch(store, configuration)
+    assert repeated.decisions == population.decisions
+    fresh_store = SyntheticEpochStore(SYMBOL, start=START + timedelta(days=20))
+    reset = _evaluate_synthetic_epoch(
+        fresh_store, _config(family="range_mean_reversion", store=fresh_store)
+    )
+    assert all(
+        item.strategy_evaluation.action is CandidateAction.NO_TRADE for item in reset.decisions
+    )
+
+
+def test_population_constructor_rechecks_family_admission_order_and_bounds() -> None:
+    store = SyntheticEpochStore(SYMBOL)
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(
+            population, configuration=replace(population.configuration, family="trend_pullback")
+        )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(
+            population,
+            configuration=replace(population.configuration, research_equity_quote=Decimal(12000)),
+        )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(
+            population,
+            configuration=replace(
+                population.configuration,
+                risk_configuration=RiskManagerConfiguration(
+                    risk_per_trade_fraction=Decimal("0.001")
+                ),
+            ),
+        )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(
+            population,
+            configuration=replace(
+                population.configuration,
+                safety_assumptions=ResearchSafetyAssumptionProfile(
+                    exchange_api_health_state=ExchangeApiHealthState.DEGRADED
+                ),
+            ),
+        )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, decisions=population.decisions[1:])
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, decisions=population.decisions + population.decisions[:1])
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, decisions=tuple(reversed(population.decisions)))
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, contexts=population.contexts[1:])
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, contexts=tuple(reversed(population.contexts)))
+    shifted = replace(
+        population.configuration,
+        bounds=replace(population.configuration.bounds, decision_end=START + timedelta(hours=203)),
+    )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, configuration=shifted)
+    moved_context_start = replace(
+        population.configuration,
+        bounds=replace(population.configuration.bounds, context_start=START + timedelta(hours=4)),
+    )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, configuration=moved_context_start)
+
+
+def test_synthetic_binding_rejects_c2_relabel_and_changed_execution_source() -> None:
+    store = SyntheticEpochStore(SYMBOL)
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
+    assert population.dataset_version != DATASET_VERSION
+    assert population.manifest_sha256 != MANIFEST_SHA256
+    assert population.configuration.input_binding.kind == "SYNTHETIC_FIXTURE"
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, source_id=SOURCE_ID)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, dataset_version=DATASET_VERSION)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(population, manifest_sha256=MANIFEST_SHA256)
+
+    class RelabeledStore(SyntheticEpochStore):
+        source_id = SOURCE_ID
+
+    with pytest.raises(ResearchV2AdmissionError, match="input binding"):
+        _evaluate_synthetic_epoch(RelabeledStore(SYMBOL), population.configuration)
+    decision = next(
+        item
+        for item in population.decisions
+        if item.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+    )
+    with pytest.raises(ResearchV2AdmissionError, match="execution source differs"):
+        _replay_synthetic_all_fill(
+            population,
+            decision,
+            SyntheticEpochStore(SYMBOL, pattern="trend"),
+            ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+        )
+
+
+def test_all_fill_constructor_binds_population_decision_costs_series_and_range() -> None:
+    store = SyntheticEpochStore(SYMBOL)
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
+    decision = next(
+        item
+        for item in population.decisions
+        if item.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+    )
+    costs = ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10))
+    wrapped = _replay_synthetic_all_fill(population, decision, store, costs)
+    assert isinstance(wrapped, ResearchV2AllFillObservation)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, costs=ExecutionCostConfiguration(Decimal(4), Decimal(4), Decimal(20)))
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, decision_identity=population.decisions[-1].identity)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, configuration=replace(wrapped.configuration, family="trend_pullback"))
+    moved_follow_up = replace(
+        wrapped.configuration,
+        bounds=replace(wrapped.configuration.bounds, follow_up_end=END - timedelta(hours=4)),
+    )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, configuration=moved_follow_up)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, source_id=SOURCE_ID)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, dataset_version=DATASET_VERSION)
+    other_decision = population.decisions[-1]
+    other_wrapped = _replay_synthetic_all_fill(population, other_decision, store, costs)
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, result=other_wrapped.result)
+    other_population = _evaluate_synthetic_epoch(
+        store,
+        replace(population.configuration, research_equity_quote=Decimal(12000)),
+    )
+    with pytest.raises(ResearchV2AdmissionError):
+        replace(wrapped, population=other_population)
+
+
+def test_population_constructor_type_is_not_accepted_c2_from_synthetic_facts() -> None:
+    store = SyntheticEpochStore(SYMBOL)
+    population = _evaluate_synthetic_epoch(store, _config(store=store))
+    with pytest.raises(ResearchV2AdmissionError):
+        ResearchV2DecisionPopulation(
+            population.configuration,
+            population.decisions,
+            population.contexts,
+            source_id=SOURCE_ID,
+            dataset_version=DATASET_VERSION,
+            manifest_sha256=MANIFEST_SHA256,
+        )
+    accepted_configuration = replace(
+        population.configuration,
+        bounds=replace(population.configuration.bounds, source_id=SOURCE_ID),
+        input_binding=ACCEPTED_C2_BINDING,
+    )
+    with pytest.raises(ResearchV2AdmissionError, match="data-only"):
+        ResearchV2DecisionPopulation(
+            accepted_configuration,
+            population.decisions,
+            population.contexts,
+            source_id=SOURCE_ID,
+            dataset_version=DATASET_VERSION,
+            manifest_sha256=MANIFEST_SHA256,
+        )
 
 
 @pytest.mark.parametrize("side", ["LONG", "SHORT"])
@@ -720,7 +1021,7 @@ def test_non_anchor_real_range_detector_to_risk_safety_journal_and_all_fill(side
     result = ResearchAllFillReplayRunner(_RangeExecutionSource(tuple(candles))).run(
         decision,
         tuple(contexts),
-        ExecutionSeries(SOURCE_ID, SYMBOL, Timeframe.MINUTES_15),
+        ExecutionSeries(SYNTHETIC_SOURCE_ID, SYMBOL, Timeframe.MINUTES_15),
         ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
         start=decision.identity.observed_at,
         end=START + timedelta(hours=200) + timedelta(minutes=10 * 15),
