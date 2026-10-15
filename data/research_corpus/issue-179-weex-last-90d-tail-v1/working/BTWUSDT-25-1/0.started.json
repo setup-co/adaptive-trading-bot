@@ -1,0 +1,1 @@
+{"attempt":0,"plan_sha256":"345c797e4eb740dc9e43a23847f67be15411164d4d4888103c86f64091d1ab16","query":{"endTime":"1786379999999","interval":"5m","limit":"100","priceType":"LAST","startTime":"1786350000000","symbol":"BTWUSDT"},"request_id":"BTWUSDT-25-1","started_at":"2026-10-15T00:34:23.967408Z"}

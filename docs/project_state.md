@@ -8,12 +8,15 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after Issue #177 / PR #178 squash merge:
+Verified `main` after Issue #179 / PR #180 accepted-content reconciliation:
 
-`8b7d7c19697c6fc1eafcdce7666653861f8dcde3`
+`5e34486664a37641c3ff0b5b3827087bd91d83f5`
 
-This is the exact base for Issue #179's bounded ten-member LAST data/corpus
-qualification. Issue #177's prospective all-fill research implementation is
+This is the exact base for Issue #181's bounded never-attempted C2 tail.
+PR #180 was closed after metadata reconciliation because its accepted content
+was already integrated on `main`; Issue #179 is closed for its bounded tooling
+and partial evidence, not for a completed ten-member Package A. Issue #177's
+prospective all-fill research implementation is
 merged as Package B. The merged Issue #175 exploratory selection is evidence
 for data qualification only, not historical-study activation.
 PR #164 records the old-baseline audit in
@@ -34,7 +37,7 @@ mechanics before Live readiness. None is evidence for or against EMA50 performan
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175 and #177 are closed;
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177 and #179 are closed;
 Master Plan v1.8 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
@@ -44,7 +47,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#179 — bounded Research V2 selected-panel LAST corpus qualification; no real historical study authorized.**
+**#181 — bounded Research V2 C2 tail acquired and verified; evidence awaits PR review, with no real historical study authorized.**
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -60,6 +63,15 @@ projection has six complete individual 90-day 5m grids but no ten-member
 usable overlap and is still `PARTIAL_OR_BLOCKED`. See
 `docs/research/research_v2_corpus_issue_179_continuation.md`; this is data-only
 evidence, not Package A study activation or executable research admission.
+Issue #181's separate source-frozen C2 generation sent exactly 785
+never-attempted GETs, all HTTP 200 with zero retries. Its verified combined
+raw-to-Parquet projection has eight complete 90-day member grids. The BTC
+88-open and BTW 100-open predecessor failures remain explicit gaps. A
+ten-member **data-only** post-warm-up overlap now exists from
+`2026-08-02T20:00:00Z` to the fixed end, but the combined status is still
+`PARTIAL_OR_BLOCKED`. Historical contract/quantity identity and executable
+research admission remain unresolved. See
+`docs/research/research_v2_corpus_issue_181_tail.md` and its locked manifest.
 The accepted #163 audit and #165 `CAUSAL_ENTRY_CHRONOLOGY_V2` implementation
 are complete. #167 `POST_FILL_STOP_RECOVERY_V1` is merged for offline Paper
 fills at/beyond the sealed stop, preserving accounting and blocking new
@@ -335,8 +347,11 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    is merged. Issue #179's bounded Package A data/corpus attempt stopped at
    a non-timeout transport failure and locked a partial, non-admissible
    artifact. Its separate bounded C1 continuation also stopped on DNS and
-   remains ten-member `PARTIAL_OR_BLOCKED`; neither generation added
-   executable research admission. Any later
+   remains ten-member `PARTIAL_OR_BLOCKED`. Issue #181's separate C2 tail
+   completed 785 never-attempted shapes, preserving both predecessor gaps.
+   The verified data-only projection has eight complete member grids and a
+   bounded ten-member post-warm-up overlap, but remains `PARTIAL_OR_BLOCKED`
+   and adds no executable research admission. Any later
    qualification or activation needs its own
    architect decision and frozen identities/folds/code/sufficiency rules.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
