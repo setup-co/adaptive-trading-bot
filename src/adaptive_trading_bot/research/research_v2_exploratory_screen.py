@@ -12,12 +12,13 @@ import json
 import re
 import uuid
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from adaptive_trading_bot.backtest import ExecutionCostConfiguration, ExecutionSeries
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
@@ -50,13 +51,25 @@ from adaptive_trading_bot.research.research_v2_admission import (
     SOURCE_NOTE_SHA256,
     LockedResearchV2CandleStore,
     ResearchV2AdmissionConfiguration,
+    ResearchV2DecisionPopulation,
     ResearchV2EpochBounds,
     ResearchV2StudyDecisionPopulation,
     _evaluate_granted_study_epoch,
+    _validate_frozen_study_configuration,
+)
+from adaptive_trading_bot.research.research_v2_screen_evidence import (
+    EVIDENCE_SCHEMA,
+    ScreenEvidenceError,
+)
+from adaptive_trading_bot.research.research_v2_screen_evidence import (
+    decode as decode_authority,
+)
+from adaptive_trading_bot.research.research_v2_screen_evidence import (
+    encode as encode_authority,
 )
 
 PROTOCOL_VERSION = "RESEARCH_V2_EXPLORATORY_SCREEN_V1"
-SCHEMA_VERSION = "research-v2-exploratory-screen-v2"
+SCHEMA_VERSION = "research-v2-exploratory-screen-v4"
 FOLLOW_UP = timedelta(hours=168)
 RESEARCH_EQUITY = Decimal("10000")
 FAMILIES = ("trend_pullback", "breakout_retest", "range_mean_reversion")
@@ -106,6 +119,7 @@ def protocol_facts() -> dict[str, object]:
     return {
         "version": PROTOCOL_VERSION,
         "schema": SCHEMA_VERSION,
+        "authority_evidence_schema": EVIDENCE_SCHEMA,
         "input": {
             "source_id": SOURCE_ID.value,
             "dataset_version": DATASET_VERSION,
@@ -141,10 +155,19 @@ def protocol_facts() -> dict[str, object]:
         "carried_exposure": "ZERO_PER_INDEPENDENT_CANDIDATE",
         "costs": (("BASE", "2", "2", "10", "0"), ("COMBINED_STRESS", "4", "4", "20", "1")),
         "scenario_population": "IDENTICAL_DECISIONS_AND_ADMISSIONS",
+        "evidence": (
+            "ONE_VALIDATED_POPULATION_PER_TASK",
+            "ONE_RESULT_PER_DECISION_AND_SCENARIO",
+            "DECISION_AND_CANDLE_SLICE_REFERENCES",
+            "OFFLINE_RECONSTRUCTION_AGAINST_COMPACT_ROWS",
+            "SYNTHETIC_INPUT_NEVER_ACCEPTED_AS_C2",
+        ),
         "week_count": 9,
         "slots_per_asset_family_block": 2016,
         "cooldown_hours": 168,
         "sufficiency": (60, 30, 5, 3, 6, 3, "NO_PRIMARY_UNRESOLVED"),
+        "initial_asset_week_sufficiency": "EACH_SCENARIO_SEPARATELY",
+        "residual_base_quantity": "PER_ASSET_ONLY",
         "interpretation": "EXPLORATORY_SELECTION_INFORMED_UNLEVERAGED_PRE_FUNDING_NOT_PORTFOLIO",
     }
 
@@ -376,6 +399,10 @@ class ScreenObservation:
     hold_only_fee_quote: Decimal | None = None
     hold_only_open_quantity: Decimal | None = None
     hold_only_branch_sha256: str | None = None
+    input_kind: str = ACCEPTED_C2_BINDING.kind
+    source_id: str = SOURCE_ID.value
+    dataset_version: str = DATASET_VERSION
+    manifest_sha256: str = MANIFEST_SHA256
 
     def validate(self) -> None:
         observation_bin(self.observed_at)
@@ -392,6 +419,19 @@ class ScreenObservation:
             or self.side not in {"NONE", "LONG", "SHORT"}
             or (self.regime is not None and self.regime not in {item.value for item in RegimeLabel})
             or not _HEX64.fullmatch(self.result_sha256)
+            or self.input_kind not in {"ACCEPTED_C2", "SYNTHETIC_FIXTURE"}
+            or not self.source_id
+            or not self.dataset_version
+            or not _HEX64.fullmatch(self.manifest_sha256)
+            or (
+                self.input_kind == "ACCEPTED_C2"
+                and (self.source_id, self.dataset_version, self.manifest_sha256)
+                != (SOURCE_ID.value, DATASET_VERSION, MANIFEST_SHA256)
+            )
+            or (
+                self.input_kind == "SYNTHETIC_FIXTURE"
+                and (self.source_id == SOURCE_ID.value or self.manifest_sha256 == MANIFEST_SHA256)
+            )
             or not self.primary_fee_quote.is_finite()
             or self.primary_fee_quote < 0
             or not self.primary_open_quantity.is_finite()
@@ -549,27 +589,33 @@ def classify_family(
         for rows in full
         for row in rows
     )
-    assets = tuple(
-        wire
-        for wire in PANEL
-        if all(
-            sum(row.wire_symbol == wire and row.primary_closed_net_r is not None for row in rows)
+    assets_by_scenario = tuple(
+        tuple(
+            wire
+            for wire in PANEL
+            if sum(row.wire_symbol == wire and row.primary_closed_net_r is not None for row in rows)
             >= 3
-            for rows in masks
         )
+        for rows in masks
     )
-    weeks = tuple(
-        f"W{week}"
-        for week in range(1, 10)
-        if all(
-            sum(
+    weeks_by_scenario = tuple(
+        tuple(
+            f"W{week}"
+            for week in range(1, 10)
+            if sum(
                 observation_bin(row.observed_at)[1] == f"W{week}"
                 and row.primary_closed_net_r is not None
                 for row in rows
             )
             >= 3
-            for rows in masks
         )
+        for rows in masks
+    )
+    assets = tuple(wire for wire in PANEL if all(wire in group for group in assets_by_scenario))
+    weeks = tuple(
+        f"W{week}"
+        for week in range(1, 10)
+        if all(f"W{week}" in group for group in weeks_by_scenario)
     )
     leave_one_out = tuple(
         (
@@ -597,8 +643,8 @@ def classify_family(
             len(values) < minimum
             for values, minimum in zip((*closed, *selected_closed), (60, 60, 30, 30), strict=True)
         )
-        or len(assets) < 5
-        or len(weeks) < 6
+        or any(len(group) < 5 for group in assets_by_scenario)
+        or any(len(group) < 6 for group in weeks_by_scenario)
     ):
         classification = ScreenClassification.INSUFFICIENT_EVIDENCE
     elif all(value is not None and value <= 0 for value in means):
@@ -664,6 +710,8 @@ def classify_family(
         ),
         "mask_assets_with_three_closures_both": assets,
         "mask_weeks_with_three_closures_both": weeks,
+        "mask_assets_with_three_closures_by_scenario": assets_by_scenario,
+        "mask_weeks_with_three_closures_by_scenario": weeks_by_scenario,
         "means": tuple(None if value is None else str(value) for value in means),
         "stress_leave_one_asset_out_means": tuple(
             (wire, None if a is None else str(a), None if b is None else str(b))
@@ -676,8 +724,10 @@ def classify_family(
 
 def _screen_row(
     result: AllFillReplayResult,
-    population: ResearchV2StudyDecisionPopulation,
+    population: ResearchV2DecisionPopulation,
     decision: Any,
+    *,
+    synthetic: bool = False,
 ) -> ScreenObservation:
     """Copy accounting facts only after authoritative all-fill validation."""
 
@@ -690,7 +740,7 @@ def _screen_row(
         else decision.identity.observed_at
     )
     if (
-        binding != ACCEPTED_C2_BINDING
+        (binding.kind != "SYNTHETIC_FIXTURE" if synthetic else binding != ACCEPTED_C2_BINDING)
         or expected_costs is None
         or result.costs != expected_costs
         or result.start != expected_start
@@ -735,6 +785,10 @@ def _screen_row(
         hold_only_fee_quote=(hold_only.final_position.cumulative_fees if hold_only else None),
         hold_only_open_quantity=(abs(hold_only.final_position.quantity) if hold_only else None),
         hold_only_branch_sha256=hold_only.integrity_seal if hold_only else None,
+        input_kind=binding.kind,
+        source_id=binding.source_id.value,
+        dataset_version=binding.dataset_version,
+        manifest_sha256=binding.manifest_sha256,
     )
     row.validate()
     return row
@@ -743,7 +797,7 @@ def _screen_row(
 class _BoundTaskExecutionSource:
     """One checked task's 15m context candles; never an arbitrary named store."""
 
-    def __init__(self, population: ResearchV2StudyDecisionPopulation) -> None:
+    def __init__(self, population: ResearchV2DecisionPopulation) -> None:
         self._series = ExecutionSeries(
             population.source_id,
             population.configuration.bounds.symbol,
@@ -781,6 +835,10 @@ def execute_granted_task(
     grant: StudyExecutionGrant,
     *,
     actual_code_sha: str,
+    result_sink: Callable[
+        [ResearchV2DecisionPopulation, int, AllFillScenario, AllFillReplayResult], None
+    ]
+    | None = None,
 ) -> tuple[
     ResearchV2StudyDecisionPopulation, tuple[ScreenObservation, ...], tuple[ScreenObservation, ...]
 ]:
@@ -809,14 +867,66 @@ def execute_granted_task(
     )
     if len(population.decisions) != 6048:
         raise ExploratoryScreenError("task omits one or more declared decisions")
+    return cast(
+        tuple[
+            ResearchV2StudyDecisionPopulation,
+            tuple[ScreenObservation, ...],
+            tuple[ScreenObservation, ...],
+        ],
+        _execute_population(population, result_sink=result_sink),
+    )
+
+
+def execute_synthetic_task(
+    population: ResearchV2DecisionPopulation,
+    grant: StudyExecutionGrant,
+    *,
+    actual_code_sha: str,
+    result_sink: Callable[
+        [ResearchV2DecisionPopulation, int, AllFillScenario, AllFillReplayResult], None
+    ]
+    | None = None,
+) -> tuple[
+    ResearchV2DecisionPopulation, tuple[ScreenObservation, ...], tuple[ScreenObservation, ...]
+]:
+    """Small fixture path through the same replay loop; never accepts C2 authority."""
+
+    grant.validate(actual_sha=actual_code_sha, synthetic=True)
+    population.validate()
+    binding = population.configuration.input_binding
+    if (
+        type(population) is not ResearchV2DecisionPopulation
+        or binding.kind != "SYNTHETIC_FIXTURE"
+        or binding.source_id.value != grant.source_id
+        or binding.dataset_version != grant.dataset_version
+        or binding.manifest_sha256 != grant.manifest_sha256
+        or not population.decisions
+    ):
+        raise ExploratoryScreenError("synthetic task cannot claim accepted C2 input")
+    return _execute_population(population, result_sink=result_sink, synthetic=True)
+
+
+def _execute_population(
+    population: ResearchV2DecisionPopulation,
+    *,
+    result_sink: Callable[
+        [ResearchV2DecisionPopulation, int, AllFillScenario, AllFillReplayResult], None
+    ]
+    | None = None,
+    synthetic: bool = False,
+) -> tuple[
+    ResearchV2DecisionPopulation, tuple[ScreenObservation, ...], tuple[ScreenObservation, ...]
+]:
     source = _BoundTaskExecutionSource(population)
     runner = ResearchAllFillReplayRunner(source)
     observed_times = tuple(item.context.observed_at for item in population.contexts)
-    series = ExecutionSeries(SOURCE_ID, symbol, Timeframe.MINUTES_15)
+    series = ExecutionSeries(
+        population.source_id, population.configuration.bounds.symbol, Timeframe.MINUTES_15
+    )
     output: list[tuple[ScreenObservation, ...]] = []
     for scenario, costs in SCENARIOS:
         rows: list[ScreenObservation] = []
-        for decision in population.decisions:
+        for index, decision in enumerate(population.decisions):
             cutoff = decision_cutoff(decision.identity.observed_at)
             contexts = population.contexts[
                 causal_follow_up_slice(observed_times, decision.identity.observed_at)
@@ -827,8 +937,8 @@ def execute_granted_task(
                 series,
                 costs,
                 start=(
-                    task.context_start
-                    if task.family == "trend_pullback"
+                    population.configuration.bounds.context_start
+                    if population.configuration.family == "trend_pullback"
                     else decision.identity.observed_at
                 ),
                 end=cutoff,
@@ -837,11 +947,94 @@ def execute_granted_task(
                 raise ExploratoryScreenError(
                     "all-fill result has wrong scenario or decision horizon"
                 )
-            rows.append(_screen_row(result, population, decision))
+            rows.append(_screen_row(result, population, decision, synthetic=synthetic))
+            if result_sink is not None:
+                result_sink(population, index, scenario, result)
         output.append(tuple(rows))
     if tuple(row.identity for row in output[0]) != tuple(row.identity for row in output[1]):
         raise ExploratoryScreenError("execution scenario changed the decision population")
     return population, output[0], output[1]
+
+
+def authority_result_record(
+    population: ResearchV2DecisionPopulation,
+    index: int,
+    scenario: AllFillScenario,
+    result: AllFillReplayResult,
+    *,
+    candles: tuple[Candle, ...] | None = None,
+    candle_opens: tuple[datetime, ...] | None = None,
+) -> dict[str, object]:
+    """Store exact replay facts with one decision and candle-window reference."""
+
+    if not 0 <= index < len(population.decisions) or result.decision != population.decisions[index]:
+        raise ExploratoryScreenError("result decision reference differs from population")
+    if result.scenario is not scenario:
+        raise ExploratoryScreenError("result scenario differs from evidence slot")
+    if candles is None:
+        candles = tuple(item.context.candle_15m for item in population.contexts)
+    if candle_opens is None:
+        candle_opens = tuple(candle.open_time for candle in candles)
+    snapshot = result.execution_snapshot
+    if snapshot:
+        first = bisect_left(candle_opens, snapshot[0].open_time)
+        last = first + len(snapshot)
+        if candles[first:last] != snapshot:
+            raise ExploratoryScreenError("execution snapshot differs from stored population")
+    else:
+        first = last = 0
+    named = tuple(
+        (
+            item.name,
+            ("decision_ref",)
+            if item.name == "decision"
+            else ("candle_slice", first, last)
+            if item.name == "execution_snapshot"
+            else encode_authority(getattr(result, item.name)),
+        )
+        for item in fields(result)
+    )
+    return {
+        "schema_version": EVIDENCE_SCHEMA,
+        "decision_index": index,
+        "scenario": scenario.value,
+        "result": ("dataclass", f"{type(result).__module__}.{type(result).__qualname__}", named),
+    }
+
+
+def recover_authority_result(
+    record: object,
+    population: ResearchV2DecisionPopulation,
+    index: int,
+    scenario: AllFillScenario,
+    *,
+    candles: tuple[Candle, ...] | None = None,
+) -> AllFillReplayResult:
+    """Reconstruct and validate replay/accounting from stored causal authority."""
+
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"schema_version", "decision_index", "scenario", "result"}
+        or record.get("schema_version") != EVIDENCE_SCHEMA
+        or record.get("decision_index") != index
+        or record.get("scenario") != scenario.value
+        or not 0 <= index < len(population.decisions)
+    ):
+        raise ExploratoryScreenError("replay evidence slot is missing or relabeled")
+    try:
+        if candles is None:
+            candles = tuple(item.context.candle_15m for item in population.contexts)
+        result = decode_authority(
+            record["result"],
+            decision=population.decisions[index],
+            candles=candles,
+        )
+    except ScreenEvidenceError as exc:
+        raise ExploratoryScreenError("stored replay evidence failed construction") from exc
+    if not isinstance(result, AllFillReplayResult):
+        raise ExploratoryScreenError("stored replay evidence is not a result")
+    result.validate()
+    return result
 
 
 def _row_record(row: ScreenObservation) -> dict[str, object]:
@@ -882,6 +1075,10 @@ def _row_record(row: ScreenObservation) -> dict[str, object]:
             None if row.hold_only_open_quantity is None else str(row.hold_only_open_quantity)
         ),
         "hold_only_branch_sha256": row.hold_only_branch_sha256,
+        "input_kind": row.input_kind,
+        "source_id": row.source_id,
+        "dataset_version": row.dataset_version,
+        "manifest_sha256": row.manifest_sha256,
     }
 
 
@@ -894,7 +1091,6 @@ def _cell_summary(rows: tuple[ScreenObservation, ...]) -> dict[str, object]:
     hold_mean, hold_median, hold_factor = _closed_distribution(hold_values)
     with localcontext(_DECIMAL_CONTEXT):
         fees = sum((row.primary_fee_quote for row in rows), Decimal(0))
-        exposure = sum((row.primary_open_quantity for row in rows), Decimal(0))
         gross = sum(
             (
                 row.primary_gross_pnl_quote
@@ -912,14 +1108,14 @@ def _cell_summary(rows: tuple[ScreenObservation, ...]) -> dict[str, object]:
             (row.hold_only_fee_quote for row in rows if row.hold_only_fee_quote is not None),
             Decimal(0),
         )
-        hold_open = sum(
-            (
-                row.hold_only_open_quantity
-                for row in rows
-                if row.hold_only_open_quantity is not None
-            ),
-            Decimal(0),
-        )
+        exposure_totals = dict.fromkeys(PANEL, Decimal(0))
+        hold_open_totals = dict.fromkeys(PANEL, Decimal(0))
+        for row in rows:
+            exposure_totals[row.wire_symbol] += row.primary_open_quantity
+            if row.hold_only_open_quantity is not None:
+                hold_open_totals[row.wire_symbol] += row.hold_only_open_quantity
+        exposure_by_asset = {wire: str(value) for wire, value in exposure_totals.items()}
+        hold_open_by_asset = {wire: str(value) for wire, value in hold_open_totals.items()}
     statuses = {status.value: sum(row.status is status for row in rows) for status in AllFillStatus}
     return {
         "observations": len(rows),
@@ -943,7 +1139,7 @@ def _cell_summary(rows: tuple[ScreenObservation, ...]) -> dict[str, object]:
         + statuses[AllFillStatus.RECOVERY_OPEN.value],
         "status_counts": statuses,
         "incurred_fees_quote": str(fees),
-        "remaining_absolute_base_quantity": str(exposure),
+        "remaining_absolute_base_quantity_by_asset": exposure_by_asset,
         "impact_inclusive_gross_realized_quote": str(gross),
         "accounted_net_realized_quote": str(net),
         "closed_net_r_total": str(total_r),
@@ -958,7 +1154,7 @@ def _cell_summary(rows: tuple[ScreenObservation, ...]) -> dict[str, object]:
                 for row in rows
             ),
             "incurred_fees_quote": str(hold_fees),
-            "remaining_absolute_base_quantity": str(hold_open),
+            "remaining_absolute_base_quantity_by_asset": hold_open_by_asset,
             "mean_closed_net_r": None if hold_mean is None else str(hold_mean),
             "median_closed_net_r": None if hold_median is None else str(hold_median),
             "r_profit_factor": None if hold_factor is None else str(hold_factor),
@@ -990,17 +1186,8 @@ def project_task_partition(
     """Lossless compact per-task result referencing one validated population."""
 
     population.validate()
-    if (
-        not 0 <= task.index < 30
-        or task != frozen_tasks()[task.index]
-        or population.configuration.family != task.family
-        or population.configuration.bounds.symbol
-        != TradingSymbol(task.wire_symbol.removesuffix("USDT"), "USDT")
-        or population.protocol_sha256 != PROTOCOL_SHA256
-        or len(population.decisions) != 6048
-        or len(base) != 6048
-        or len(stress) != 6048
-    ):
+    _validate_task_population_facts(population, task)
+    if len(population.decisions) != 6048 or len(base) != 6048 or len(stress) != 6048:
         raise ExploratoryScreenError("task partition differs from frozen population")
     decision_ids = tuple(_digest(str(decision.identity)) for decision in population.decisions)
     if (
@@ -1014,6 +1201,9 @@ def project_task_partition(
             or row.wire_symbol != task.wire_symbol
             or row.scenario is not scenario
             or row.observed_at != decision.identity.observed_at
+            or row.input_kind != "ACCEPTED_C2"
+            or (row.source_id, row.dataset_version, row.manifest_sha256)
+            != (SOURCE_ID.value, DATASET_VERSION, MANIFEST_SHA256)
             for row, decision in zip(rows, population.decisions, strict=True)
         ):
             raise ExploratoryScreenError("task partition family, scenario or chronology changed")
@@ -1074,6 +1264,32 @@ def project_task_partition(
     return partition
 
 
+def _validate_task_population_facts(
+    population: ResearchV2StudyDecisionPopulation, task: StudyTask
+) -> None:
+    """Bind a constructor-validated population to exact task/configuration facts."""
+
+    bounds = ResearchV2EpochBounds(
+        TradingSymbol(task.wire_symbol.removesuffix("USDT"), "USDT"),
+        task.context_start,
+        task.decision_start,
+        task.decision_end,
+        task.last_follow_up_end,
+    )
+    if (
+        not 0 <= task.index < 30
+        or task != frozen_tasks()[task.index]
+        or population.configuration.bounds != bounds
+        or population.configuration.family != task.family
+        or population.configuration.research_equity_quote != RESEARCH_EQUITY
+        or population.configuration.input_binding != ACCEPTED_C2_BINDING
+        or population.protocol_sha256 != PROTOCOL_SHA256
+        or len(population.decisions) != 6048
+    ):
+        raise ExploratoryScreenError("population differs from frozen task or accepted input")
+    _validate_frozen_study_configuration(population.configuration)
+
+
 def _parse_row(raw: object) -> ScreenObservation:
     if not isinstance(raw, dict):
         raise ExploratoryScreenError("compact screen row is not an object")
@@ -1123,6 +1339,10 @@ def _parse_row(raw: object) -> ScreenObservation:
                 else Decimal(raw["hold_only_open_quantity"])
             ),
             hold_only_branch_sha256=raw["hold_only_branch_sha256"],
+            input_kind=str(raw["input_kind"]),
+            source_id=str(raw["source_id"]),
+            dataset_version=str(raw["dataset_version"]),
+            manifest_sha256=str(raw["manifest_sha256"]),
         )
         row.validate()
         if _row_record(row) != raw:
@@ -1165,6 +1385,9 @@ def verify_task_partition(
                 or row.scenario is not scenario
                 or row.wire_symbol != task.wire_symbol
                 or row.family.value != task.family.upper()
+                or row.input_kind != "ACCEPTED_C2"
+                or (row.source_id, row.dataset_version, row.manifest_sha256)
+                != (SOURCE_ID.value, DATASET_VERSION, MANIFEST_SHA256)
                 for index, row in enumerate(rows)
             ):
                 raise ExploratoryScreenError("task partition has missing or foreign observations")
@@ -1221,6 +1444,35 @@ def project_frozen_screen(
 
     if tuple(task for task, _, _ in task_rows) != frozen_tasks():
         raise ExploratoryScreenError("partial or reordered task inventory has no final screen")
+    for task, base_rows, stress_rows in task_rows:
+        if len(base_rows) != 6048 or len(stress_rows) != 6048:
+            raise ExploratoryScreenError("final screen has an incomplete task population")
+        for rows, scenario in (
+            (base_rows, AllFillScenario.BASE),
+            (stress_rows, AllFillScenario.COMBINED_STRESS),
+        ):
+            if any(
+                row.observed_at != task.decision_start + (index + 1) * Timeframe.MINUTES_15.duration
+                or row.wire_symbol != task.wire_symbol
+                or row.family.value != task.family.upper()
+                or row.scenario is not scenario
+                or row.input_kind != "ACCEPTED_C2"
+                or (row.source_id, row.dataset_version, row.manifest_sha256)
+                != (SOURCE_ID.value, DATASET_VERSION, MANIFEST_SHA256)
+                for index, row in enumerate(rows)
+            ):
+                raise ExploratoryScreenError("final screen has a foreign or misordered row")
+        if tuple(row.identity for row in base_rows) != tuple(row.identity for row in stress_rows):
+            raise ExploratoryScreenError("final screen scenarios contain different decisions")
+        if tuple(row.research_admissible for row in base_rows) != tuple(
+            row.research_admissible for row in stress_rows
+        ):
+            raise ExploratoryScreenError("final screen scenarios contain different admissions")
+        for rows in (base_rows, stress_rows):
+            for row in rows:
+                row.validate()
+            if len({row.identity for row in rows}) != len(rows):
+                raise ExploratoryScreenError("final screen duplicates a decision")
     families: dict[str, object] = {}
     for family_name in FAMILIES:
         family = AllFillFamily(family_name.upper())

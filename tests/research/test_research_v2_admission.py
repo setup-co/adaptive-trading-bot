@@ -121,15 +121,21 @@ class SyntheticEpochStore:
     source_id = SYNTHETIC_SOURCE_ID
 
     def __init__(
-        self, symbol: TradingSymbol, *, pattern: str = "breakout", start: datetime = START
+        self,
+        symbol: TradingSymbol,
+        *,
+        pattern: str = "breakout",
+        start: datetime = START,
+        hours: int = 208,
     ) -> None:
         self.symbol = symbol
         self.pattern = pattern
         self.start = start
+        self.hours = hours
         self.candles = {
             frame: tuple(
                 self._candle(frame, index)
-                for index in range(208 * 3600 // int(frame.duration.total_seconds()))
+                for index in range(hours * 3600 // int(frame.duration.total_seconds()))
             )
             for frame in (Timeframe.MINUTES_15, Timeframe.HOUR_1, Timeframe.HOURS_4)
         }
@@ -282,14 +288,14 @@ class SyntheticEpochStore:
 
     def data_only_epochs(self, symbol: TradingSymbol) -> tuple[tuple[datetime, datetime], ...]:
         assert symbol == self.symbol
-        return ((self.start, self.start + timedelta(hours=208)),)
+        return ((self.start, self.start + timedelta(hours=self.hours)),)
 
     def usable_intervals(self, symbol: TradingSymbol) -> tuple[tuple[datetime, datetime], ...]:
         assert symbol == self.symbol
         return (
             (
                 self.start + timedelta(hours=200),
-                self.start + timedelta(hours=208),
+                self.start + timedelta(hours=self.hours),
             ),
         )
 
@@ -449,15 +455,17 @@ def _config(
     family: str = "trend_pullback",
     store: SyntheticEpochStore | None = None,
     decision_end_hours: int = 204,
+    decision_start_hours: int = 200,
+    follow_up_hours: int = 208,
 ) -> ResearchV2AdmissionConfiguration:
     actual_store = store or SyntheticEpochStore(symbol)
     base = actual_store.start
     bounds = ResearchV2EpochBounds(
         symbol,
         base,
-        base + timedelta(hours=200),
+        base + timedelta(hours=decision_start_hours),
         base + timedelta(hours=decision_end_hours),
-        base + timedelta(hours=208),
+        base + timedelta(hours=follow_up_hours),
         source_id=SYNTHETIC_SOURCE_ID,
     )
     return ResearchV2AdmissionConfiguration(

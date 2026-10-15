@@ -1,7 +1,9 @@
 # Research V2 exploratory screen — predeclared implementation annex
 
 **Protocol:** `RESEARCH_V2_EXPLORATORY_SCREEN_V1`
-**Protocol SHA-256:** `525d5f975ca4b58d9e8d1ca78fec2dc90d6de6f3dc1067ef77ca5f26c2ecf319`
+**Report/ledger schema:** `research-v2-exploratory-screen-v4`
+**Authority-evidence codec:** `research-v2-screen-authority-evidence-v1`
+**Protocol SHA-256:** `ab78c022616bcffdb7af8b835064a14409e1d47bdc3e31649192de9cf0c63e1c`
 **Thirty-task plan SHA-256:** `03376c954ca51ca50754d925189cad7be55f14249cfec29e6cbbe710a1fcfca1`
 **Status (2026-10-15):** implementation, synthetic tests and real **data-only** preflight; no real execution grant and no historical strategy evaluation.
 
@@ -96,7 +98,7 @@ not extra decision-population members.
 | DOGEUSDT | Jul 16 00:00 | 8,448 / 2,112 / 528 | 6,048 |
 
 The preflight's canonical data-only plan digest is
-`20277cd37f4e0c42a74bf4515b84cd93e1ad086069565341d537bc762fd4dc43`.
+`ae5e7ea532e39902f571d897237f2f57bce154f64c2c638c73c2f88bf660e2b4`.
 It binds the protocol/task hashes, all 30 ordered task records, three blocks
 and verified per-member epoch/usable intervals. The compact task-plan hash
 above is the future grant's exact inventory identity. No preflight field is a
@@ -121,6 +123,12 @@ impact-inclusive gross and net PnL, mean/median closed approved-risk R, and
 R-space profit factor. Undefined factor stays unavailable. Asset, P1–P3,
 W1–W9, side and regime zero cells remain explicit. Independent candidate
 outcomes are not a funded account/equity curve.
+Residual base quantity is keyed by asset in both primary and hold-only
+diagnostic summaries; unlike quote-currency fees and PnL, different base
+units are never added into a scalar. Initial five-asset and six-week
+sufficiency is evaluated for BASE and STRESS separately. The later
+positive-asset gate still requires the same five assets to be positive in
+both scenarios.
 
 The diagnostic mask, fixed *before outcome inspection*, selects the earliest
 research-admissible decision for each asset/family, then the next one at or
@@ -166,9 +174,29 @@ self-referential commit. A missing/wrong grant fails before strategy
 evaluation. The synthetic namespace cannot impersonate accepted C2.
 
 The future run creates one new append-only UUID ledger, commits each task's
-STARTED event before work, stores one immutable compressed population per
-task and compact scenario partitions referencing its digest, then records
-COMPLETED with checksums. An ambiguous STARTED task or any failure must not be
+STARTED event before work, stores one immutable compressed, reconstructible
+decision/context population per task, an immutable compressed stream of every
+validated `AllFillReplayResult`, and compact scenario partitions. The stream
+references the population's decision index and exact context-candle slice;
+it does not duplicate the population or each execution window. Each result
+retains entry authorization, actual fills, accounting events, recovery,
+position snapshots, paired branches and its creation seal. Offline
+verification reconstructs the population, decisions and results with a
+versioned project-type-only JSON decoder, runs their existing validators,
+checks the same source, 168-hour cutoff, scenario, fees, gross/net PnL,
+approved-risk R, side and admission against every compact row, and rejects
+missing/extra evidence. The ledger binds all three artifact hashes and its
+input kind; synthetic fixture evidence cannot be relabeled as accepted C2.
+The published final projection also carries the run UUID, reviewed executable
+SHA, input kind and ordered population/partition/authority artifact hashes;
+offline verification reproduces these fields from the append-only ledger.
+No pickle or arbitrary object loader is used. The final projection rejects
+incomplete, reordered, duplicate or mixed-decision task populations before
+applying the frozen screen rules. A compact synthetic end-to-end test covers
+the same task replay, per-decision cutoff, serialization, ledger completion
+and offline verification without granting real-history execution.
+
+An ambiguous STARTED task or any failure must not be
 rerun, replaced or followed by a new task automatically; a separate architect
 review is required. Final projection requires exactly thirty completed
 tasks and offline verification. This preparation does **not** create a real

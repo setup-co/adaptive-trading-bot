@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import uuid
 from dataclasses import replace
@@ -13,11 +14,19 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from scripts.research.research_v2_exploratory_screen import (
+    _bind_final_projection,
+    _verify_authority_rows,
+    _verify_synthetic_complete,
+)
+from test_all_fill_replay import _run as _run_all_fill_fixture
 from test_research_v2_admission import SYMBOL, SyntheticEpochStore, _config
 
+from adaptive_trading_bot.backtest import ExecutionCostConfiguration
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.research.all_fill_replay import (
     AllFillFamily,
+    AllFillReplayResult,
     AllFillScenario,
     AllFillStatus,
 )
@@ -28,8 +37,10 @@ from adaptive_trading_bot.research.research_v2_admission import (
     LockedResearchV2CandleStore,
     ResearchV2AdmissionConfiguration,
     ResearchV2AdmissionError,
+    ResearchV2DecisionPopulation,
     ResearchV2EpochBounds,
     _evaluate_synthetic_epoch,
+    _replay_synthetic_all_fill,
     _validate_frozen_study_configuration,
 )
 from adaptive_trading_bot.research.research_v2_exploratory_screen import (
@@ -47,15 +58,28 @@ from adaptive_trading_bot.research.research_v2_exploratory_screen import (
     _cell_summary,
     _parse_row,
     _row_record,
+    authority_result_record,
     causal_follow_up_slice,
     classify_family,
     decision_cutoff,
     execute_granted_task,
+    execute_synthetic_task,
     frozen_tasks,
     horizon_mask,
     observation_bin,
     project_frozen_screen,
     protocol_facts,
+    recover_authority_result,
+)
+from adaptive_trading_bot.research.research_v2_screen_evidence import (
+    EVIDENCE_SCHEMA,
+    ScreenEvidenceError,
+)
+from adaptive_trading_bot.research.research_v2_screen_evidence import (
+    decode as decode_authority,
+)
+from adaptive_trading_bot.research.research_v2_screen_evidence import (
+    encode as encode_authority,
 )
 from adaptive_trading_bot.research.research_v2_screen_ledger import StudyLedgerStore
 from adaptive_trading_bot.research.trend_pullback_corpus import (
@@ -63,6 +87,7 @@ from adaptive_trading_bot.research.trend_pullback_corpus import (
     _canonical_integrity_value,
 )
 from adaptive_trading_bot.risk import OperationalSafetyConfiguration, RiskManagerConfiguration
+from adaptive_trading_bot.strategies import CandidateAction
 
 
 def _row(
@@ -234,6 +259,88 @@ def test_exact_sufficiency_and_economic_classification_boundaries() -> None:
     )
 
 
+def test_initial_asset_and_week_sufficiency_is_per_scenario() -> None:
+    base, stress = _population(asset_count=6, week_count=7)
+    base = tuple(
+        replace(row, status=AllFillStatus.ENTRY_UNFILLED, primary_closed_net_r=None)
+        if row.wire_symbol == PANEL[5] and row.identity.endswith("-0")
+        else row
+        for row in base
+    )
+    stress = tuple(
+        replace(row, status=AllFillStatus.ENTRY_UNFILLED, primary_closed_net_r=None)
+        if row.wire_symbol == PANEL[0] and row.identity.endswith("-0")
+        else row
+        for row in stress
+    )
+    classification, facts = classify_family(base, stress, AllFillFamily.BREAKOUT_RETEST)
+    assert classification is not ScreenClassification.INSUFFICIENT_EVIDENCE
+    by_scenario = cast(
+        tuple[tuple[str, ...], tuple[str, ...]],
+        facts["mask_assets_with_three_closures_by_scenario"],
+    )
+    assert tuple(len(group) for group in by_scenario) == (5, 5)
+    assert len(cast(tuple[str, ...], facts["mask_assets_with_three_closures_both"])) == 4
+
+    base_weeks = tuple(
+        replace(row, status=AllFillStatus.ENTRY_UNFILLED, primary_closed_net_r=None)
+        if observation_bin(row.observed_at)[1] == "W7" and row.identity.endswith("-0")
+        else row
+        for row in base
+    )
+    stress_weeks = tuple(
+        replace(row, status=AllFillStatus.ENTRY_UNFILLED, primary_closed_net_r=None)
+        if observation_bin(row.observed_at)[1] == "W1" and row.identity.endswith("-0")
+        else row
+        for row in stress
+    )
+    classification, facts = classify_family(base_weeks, stress_weeks, AllFillFamily.BREAKOUT_RETEST)
+    assert classification is not ScreenClassification.INSUFFICIENT_EVIDENCE
+    by_scenario = cast(
+        tuple[tuple[str, ...], tuple[str, ...]], facts["mask_weeks_with_three_closures_by_scenario"]
+    )
+    assert tuple(len(group) for group in by_scenario) == (6, 6)
+    assert len(cast(tuple[str, ...], facts["mask_weeks_with_three_closures_both"])) == 5
+
+
+def test_residual_base_quantity_never_sums_different_assets() -> None:
+    btc = replace(
+        _row("BTCUSDT", 0, 0, status=AllFillStatus.ORDINARY_OPEN, net_r=None),
+        primary_open_quantity=Decimal("0.2"),
+    )
+    doge = replace(
+        _row("DOGEUSDT", 0, 0, status=AllFillStatus.ORDINARY_OPEN, net_r=None),
+        primary_open_quantity=Decimal("900"),
+    )
+    cell = _cell_summary((btc, doge))
+    assert "remaining_absolute_base_quantity" not in cell
+    residual = cast(dict[str, str], cell["remaining_absolute_base_quantity_by_asset"])
+    assert residual["BTCUSDT"] == "0.2"
+    assert residual["DOGEUSDT"] == "900"
+    paired_btc = replace(
+        btc,
+        family=AllFillFamily.TREND_PULLBACK,
+        hold_only_status=AllFillStatus.ORDINARY_OPEN,
+        hold_only_fee_quote=Decimal("0.1"),
+        hold_only_open_quantity=Decimal("0.3"),
+        hold_only_branch_sha256="b" * 64,
+    )
+    paired_doge = replace(
+        doge,
+        family=AllFillFamily.TREND_PULLBACK,
+        hold_only_status=AllFillStatus.ORDINARY_OPEN,
+        hold_only_fee_quote=Decimal("0.2"),
+        hold_only_open_quantity=Decimal("800"),
+        hold_only_branch_sha256="c" * 64,
+    )
+    diagnostic = cast(
+        dict[str, object], _cell_summary((paired_btc, paired_doge))["hold_only_diagnostic"]
+    )
+    hold_residual = cast(dict[str, str], diagnostic["remaining_absolute_base_quantity_by_asset"])
+    assert hold_residual["BTCUSDT"] == "0.3"
+    assert hold_residual["DOGEUSDT"] == "800"
+
+
 def test_mask_29_and_five_asset_six_week_gates() -> None:
     base, _ = _population()
     # Keep 60 full closures but remove one mask week by replacing its two
@@ -320,6 +427,45 @@ def test_grant_fails_closed_before_any_real_study_and_separates_synthetic() -> N
             synthetic,
             actual_code_sha="a" * 40,
         )
+
+
+def test_grant_mismatch_precedes_every_strategy_population_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaptive_trading_bot.research import research_v2_exploratory_screen as screen
+
+    calls = 0
+
+    def counted(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("strategy population must not run")
+
+    monkeypatch.setattr(screen, "_evaluate_granted_study_epoch", counted)
+    real = StudyExecutionGrant(
+        "EXTERNAL_REVIEWED_EXECUTION_GRANT",
+        str(uuid.uuid4()),
+        "a" * 40,
+        PROTOCOL_SHA256,
+        TASK_PLAN_SHA256,
+        SOURCE_ID.value,
+        "weex-research-v2-last-90d-issue-179-combined-v2",
+        MANIFEST_SHA256,
+    )
+    for wrong in (
+        replace(real, executable_sha="b" * 40),
+        replace(real, protocol_sha256="0" * 64),
+        replace(real, manifest_sha256="0" * 64),
+        replace(real, kind="SYNTHETIC_TEST_GRANT"),
+    ):
+        with pytest.raises(ExploratoryScreenError, match="grant"):
+            execute_granted_task(
+                cast(LockedResearchV2CandleStore, object()),
+                frozen_tasks()[0],
+                wrong,
+                actual_code_sha="a" * 40,
+            )
+    assert calls == 0
     with pytest.raises(ExploratoryScreenError, match="partial"):
         project_frozen_screen(())
 
@@ -404,18 +550,25 @@ def test_completed_task_artifacts_are_hash_bound_and_cannot_rerun(tmp_path: Path
     ledger = StudyLedgerStore.create(tmp_path, grant, actual_sha="b" * 40, synthetic=True)
     ledger.start(0)
     population_bytes, partition_bytes = b"sealed fixture population", b"sealed fixture partition"
+    authority_bytes = b"sealed fixture replay authority"
     (ledger.directory / "00.population.json.gz").write_bytes(population_bytes)
     (ledger.directory / "00.partition.json").write_bytes(partition_bytes)
+    (ledger.directory / "00.authority.jsonl.gz").write_bytes(authority_bytes)
     ledger.complete(
         0,
         population_sha256=hashlib.sha256(population_bytes).hexdigest(),
         partition_sha256=hashlib.sha256(partition_bytes).hexdigest(),
+        authority_sha256=hashlib.sha256(authority_bytes).hexdigest(),
     )
     assert StudyLedgerStore(ledger.directory).load().task_states[0] == "COMPLETED"
     with pytest.raises(ExploratoryScreenError):
         ledger.start(0)
     with pytest.raises(ExploratoryScreenError):
         ledger.finalize("d" * 64)
+    (ledger.directory / "00.authority.jsonl.gz").unlink()
+    with pytest.raises(ExploratoryScreenError, match="missing or changed"):
+        ledger.load()
+    (ledger.directory / "00.authority.jsonl.gz").write_bytes(authority_bytes)
     (ledger.directory / "00.partition.json").write_bytes(b"mutated")
     with pytest.raises(ExploratoryScreenError, match="changed"):
         ledger.load()
@@ -460,6 +613,423 @@ def test_synthetic_population_roundtrip_uses_one_canonical_authority_seal() -> N
         == restored["population_integrity_seal"]
         == population.integrity_seal
     )
+    reconstructed = decode_authority(json.loads(_canonical(encode_authority(population))))
+    assert reconstructed == population
+    reconstructed.validate()
+
+
+def test_authority_codec_never_imports_artifact_selected_classes() -> None:
+    with pytest.raises(ScreenEvidenceError, match="versioned schema"):
+        decode_authority(["dataclass", "os.system", []])
+
+
+def test_result_authority_roundtrip_reconstructs_accounted_synthetic_fill() -> None:
+    store = SyntheticEpochStore(SYMBOL)
+    population = _evaluate_synthetic_epoch(store, _config(family="breakout_retest", store=store))
+    index = next(
+        index
+        for index, decision in enumerate(population.decisions)
+        if decision.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+        and decision.safety_decision.status.value == "CLEARED"
+    )
+    wrapped = _replay_synthetic_all_fill(
+        population,
+        population.decisions[index],
+        store,
+        ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+    )
+    record = authority_result_record(population, index, wrapped.result.scenario, wrapped.result)
+    encoded_result = cast(tuple[str, str, tuple[tuple[str, object], ...]], record["result"])
+    stored_fields = dict(encoded_result[2])
+    assert stored_fields["decision"] == ("decision_ref",)
+    assert cast(tuple[object, ...], stored_fields["execution_snapshot"])[0] == "candle_slice"
+    rebuilt = recover_authority_result(
+        json.loads(_canonical(record)), population, index, wrapped.result.scenario
+    )
+    assert rebuilt == wrapped.result
+    assert rebuilt.branches[0].final_position == wrapped.result.branches[0].final_position
+
+
+def test_codec_roundtrips_all_terminal_all_fill_evidence_without_market_calls() -> None:
+    cases = (
+        _run_all_fill_fixture(outcome="no_action"),
+        _run_all_fill_fixture(outcome="risk_blocked"),
+        _run_all_fill_fixture(outcome="safe_mode"),
+        _run_all_fill_fixture(opens=(100,), stress=True, end_count=1),
+        _run_all_fill_fixture(opens=(100,), end_count=1),
+        _run_all_fill_fixture(opens=(70,), end_count=1),
+        _run_all_fill_fixture(opens=(70, 110, 120)),
+    )
+    statuses: set[AllFillStatus] = set()
+    for result, source in cases:
+        loads_before = len(source.loads)
+        restored = decode_authority(json.loads(_canonical(encode_authority(result))))
+        assert restored == result
+        assert isinstance(restored, AllFillReplayResult)
+        restored.validate()
+        assert len(source.loads) == loads_before
+        statuses.add(restored.status)
+    assert statuses >= {
+        AllFillStatus.NO_SIGNAL,
+        AllFillStatus.RISK_BLOCKED,
+        AllFillStatus.SAFETY_BLOCKED,
+        AllFillStatus.ENTRY_UNFILLED,
+        AllFillStatus.ORDINARY_OPEN,
+        AllFillStatus.RECOVERY_OPEN,
+        AllFillStatus.RECOVERY_CLOSED,
+    }
+
+
+@pytest.mark.parametrize(
+    ("family", "pattern", "decision_end_hours"),
+    [
+        ("trend_pullback", "trend", 204),
+        ("breakout_retest", "short", 204),
+        ("range_mean_reversion", "range", 206),
+    ],
+)
+def test_replay_codec_retains_paired_short_and_range_accounting(
+    family: str, pattern: str, decision_end_hours: int
+) -> None:
+    store = SyntheticEpochStore(SYMBOL, pattern=pattern)
+    configuration = _config(family=family, store=store, decision_end_hours=decision_end_hours)
+    if family == "range_mean_reversion":
+        configuration = replace(configuration, research_equity_quote=Decimal(9500))
+    population = _evaluate_synthetic_epoch(store, configuration)
+    index = next(
+        index
+        for index, decision in enumerate(population.decisions)
+        if decision.strategy_evaluation.action is not CandidateAction.NO_TRADE
+        and decision.safety_decision.status.value == "CLEARED"
+    )
+    wrapped = _replay_synthetic_all_fill(
+        population,
+        population.decisions[index],
+        store,
+        ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+    )
+    record = authority_result_record(population, index, wrapped.result.scenario, wrapped.result)
+    rebuilt = recover_authority_result(
+        json.loads(_canonical(record)), population, index, wrapped.result.scenario
+    )
+    assert rebuilt == wrapped.result
+    assert tuple(branch.final_position for branch in rebuilt.branches) == tuple(
+        branch.final_position for branch in wrapped.result.branches
+    )
+
+
+@pytest.mark.parametrize(
+    ("family", "pattern", "decision_start_hours", "decision_end_hours", "expected_side"),
+    [
+        ("trend_pullback", "trend", 200, 201, "LONG"),
+        ("breakout_retest", "short", 200, 201, "SHORT"),
+        ("range_mean_reversion", "range", 204, 205, "LONG"),
+    ],
+)
+def test_shared_synthetic_task_loop_replays_each_family_from_raw_candles(
+    family: str,
+    pattern: str,
+    decision_start_hours: int,
+    decision_end_hours: int,
+    expected_side: str,
+) -> None:
+    store = SyntheticEpochStore(SYMBOL, pattern=pattern, hours=376)
+    configuration = _config(
+        family=family,
+        store=store,
+        decision_start_hours=decision_start_hours,
+        decision_end_hours=decision_end_hours,
+        follow_up_hours=376,
+    )
+    if family == "range_mean_reversion":
+        configuration = replace(configuration, research_equity_quote=Decimal(9500))
+    population = _evaluate_synthetic_epoch(store, configuration)
+    binding = population.configuration.input_binding
+    grant = StudyExecutionGrant(
+        "SYNTHETIC_TEST_GRANT",
+        str(uuid.uuid4()),
+        "a" * 40,
+        PROTOCOL_SHA256,
+        TASK_PLAN_SHA256,
+        binding.source_id.value,
+        binding.dataset_version,
+        binding.manifest_sha256,
+    )
+    records: list[dict[str, object]] = []
+
+    def retain(
+        population: ResearchV2DecisionPopulation,
+        index: int,
+        scenario: AllFillScenario,
+        result: AllFillReplayResult,
+    ) -> None:
+        assert result.end == population.decisions[index].identity.observed_at + FOLLOW_UP
+        records.append(authority_result_record(population, index, scenario, result))
+
+    _, base, stress = execute_synthetic_task(
+        population, grant, actual_code_sha="a" * 40, result_sink=retain
+    )
+    assert any(row.side == expected_side and row.research_admissible for row in base)
+    assert tuple(row.identity for row in base) == tuple(row.identity for row in stress)
+    assert tuple(row.research_admissible for row in base) == tuple(
+        row.research_admissible for row in stress
+    )
+    assert len(records) == 2 * len(population.decisions)
+    _verify_authority_rows(
+        io.BytesIO(b"".join(_canonical(record) + b"\n" for record in records)),
+        population,
+        base,
+        stress,
+        synthetic=True,
+    )
+
+
+@pytest.fixture(scope="module")
+def compact_synthetic_execution() -> tuple[
+    ResearchV2DecisionPopulation,
+    StudyExecutionGrant,
+    tuple[ScreenObservation, ...],
+    tuple[ScreenObservation, ...],
+    bytes,
+]:
+    store = SyntheticEpochStore(SYMBOL, hours=372)
+    population = _evaluate_synthetic_epoch(
+        store,
+        _config(family="breakout_retest", store=store, decision_end_hours=201, follow_up_hours=372),
+    )
+    binding = population.configuration.input_binding
+    grant = StudyExecutionGrant(
+        "SYNTHETIC_TEST_GRANT",
+        str(uuid.uuid4()),
+        "a" * 40,
+        PROTOCOL_SHA256,
+        TASK_PLAN_SHA256,
+        binding.source_id.value,
+        binding.dataset_version,
+        binding.manifest_sha256,
+    )
+    records: list[dict[str, object]] = []
+
+    def retain(
+        population: ResearchV2DecisionPopulation,
+        index: int,
+        scenario: AllFillScenario,
+        result: AllFillReplayResult,
+    ) -> None:
+        assert result.end == population.decisions[index].identity.observed_at + FOLLOW_UP
+        records.append(authority_result_record(population, index, scenario, result))
+
+    _, base, stress = execute_synthetic_task(
+        population, grant, actual_code_sha="a" * 40, result_sink=retain
+    )
+    assert len(base) == len(stress) == len(population.decisions) == 4
+    assert len(records) == 8
+    authority = gzip.compress(b"".join(_canonical(record) + b"\n" for record in records), mtime=0)
+    return population, grant, base, stress, authority
+
+
+def test_compact_synthetic_task_replays_horizons_and_verifies_completed_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compact_synthetic_execution: tuple[
+        ResearchV2DecisionPopulation,
+        StudyExecutionGrant,
+        tuple[ScreenObservation, ...],
+        tuple[ScreenObservation, ...],
+        bytes,
+    ],
+) -> None:
+    population, grant, base, stress, authority = compact_synthetic_execution
+    _verify_authority_rows(
+        io.BytesIO(gzip.decompress(authority)), population, base, stress, synthetic=True
+    )
+    ledger = StudyLedgerStore.create(
+        tmp_path, grant, actual_sha="a" * 40, synthetic=True, synthetic_single_task=True
+    )
+    ledger.start(0)
+    population_bytes = gzip.compress(
+        _canonical({"schema_version": EVIDENCE_SCHEMA, "population": encode_authority(population)}),
+        mtime=0,
+    )
+    partition_bytes = _canonical(
+        {
+            "schema_version": EVIDENCE_SCHEMA,
+            "population_seal": population.integrity_seal,
+            "base": tuple(_row_record(row) for row in base),
+            "stress": tuple(_row_record(row) for row in stress),
+        }
+    )
+    (ledger.directory / "00.population.json.gz").write_bytes(population_bytes)
+    (ledger.directory / "00.partition.json").write_bytes(partition_bytes)
+    (ledger.directory / "00.authority.jsonl.gz").write_bytes(authority)
+    ledger.complete(
+        0,
+        population_sha256=hashlib.sha256(population_bytes).hexdigest(),
+        partition_sha256=hashlib.sha256(partition_bytes).hexdigest(),
+        authority_sha256=hashlib.sha256(authority).hexdigest(),
+    )
+    projection = _bind_final_projection(
+        {"base": _cell_summary(base), "stress": _cell_summary(stress)}, ledger.load()
+    )
+    projection_bytes = _canonical(projection)
+    (ledger.directory / "projection.json").write_bytes(projection_bytes)
+    ledger.finalize(hashlib.sha256(projection_bytes).hexdigest())
+    original_validation = ResearchV2DecisionPopulation._validate_population_facts
+    validation_calls = 0
+
+    def counted_validation(self: ResearchV2DecisionPopulation, kind: str, schema: str) -> None:
+        nonlocal validation_calls
+        validation_calls += 1
+        original_validation(self, kind, schema)
+
+    monkeypatch.setattr(
+        ResearchV2DecisionPopulation, "_validate_population_facts", counted_validation
+    )
+    assert _verify_synthetic_complete(ledger.directory) == projection
+    assert validation_calls == 1
+    with pytest.raises(ExploratoryScreenError, match="synthetic ledger"):
+        from scripts.research.research_v2_exploratory_screen import _verify_complete
+
+        _verify_complete(ledger)
+
+
+def test_offline_replay_evidence_rejects_forged_compact_facts_and_missing_result(
+    compact_synthetic_execution: tuple[
+        ResearchV2DecisionPopulation,
+        StudyExecutionGrant,
+        tuple[ScreenObservation, ...],
+        tuple[ScreenObservation, ...],
+        bytes,
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    population, _, base, stress, authority = compact_synthetic_execution
+    raw = gzip.decompress(authority)
+    closed_index = next(
+        index for index, row in enumerate(base) if row.primary_closed_net_r is not None
+    )
+    closed = base[closed_index]
+    assert closed.primary_closed_net_r is not None
+    for changed in (
+        replace(closed, primary_closed_net_r=closed.primary_closed_net_r + Decimal("0.01")),
+        replace(closed, primary_fee_quote=closed.primary_fee_quote + Decimal("0.01")),
+        replace(closed, side="SHORT"),
+        replace(closed, identity="0" * 64),
+        replace(
+            closed,
+            status=AllFillStatus.NO_SIGNAL,
+            research_admissible=False,
+            primary_closed_net_r=None,
+            primary_fee_quote=Decimal(0),
+            primary_gross_pnl_quote=None,
+            primary_net_pnl_quote=None,
+            side="NONE",
+        ),
+    ):
+        forged = (*base[:closed_index], changed, *base[closed_index + 1 :])
+        recomputed_container = {
+            "rows": tuple(_row_record(row) for row in forged),
+            "summary": _cell_summary(forged),
+        }
+        assert hashlib.sha256(_canonical(recomputed_container)).hexdigest()
+        with pytest.raises(ExploratoryScreenError, match="differs from replay authority"):
+            _verify_authority_rows(io.BytesIO(raw), population, forged, stress, synthetic=True)
+    with pytest.raises(ExploratoryScreenError, match="incomplete"):
+        _verify_authority_rows(
+            io.BytesIO(b"".join(raw.splitlines(keepends=True)[:-1])),
+            population,
+            base,
+            stress,
+            synthetic=True,
+        )
+    shifted_lines = raw.splitlines(keepends=True)
+    shifted_record = json.loads(shifted_lines[closed_index])
+    for name, value in shifted_record["result"][2]:
+        if name == "execution_snapshot":
+            assert value[0] == "candle_slice" and value[2] > value[1]
+            value[1] += 1
+            value[2] += 1
+    shifted_lines[closed_index] = _canonical(shifted_record) + b"\n"
+    with pytest.raises(ExploratoryScreenError, match="stored replay evidence"):
+        _verify_authority_rows(
+            io.BytesIO(b"".join(shifted_lines)), population, base, stress, synthetic=True
+        )
+
+    def forbidden_population_revalidation(self: ResearchV2DecisionPopulation) -> None:
+        raise AssertionError("per-result population revalidation is unbounded")
+
+    monkeypatch.setattr(ResearchV2DecisionPopulation, "validate", forbidden_population_revalidation)
+    _verify_authority_rows(io.BytesIO(raw), population, base, stress, synthetic=True)
+
+
+def test_final_projection_rejects_thirty_empty_task_labels() -> None:
+    with pytest.raises(ExploratoryScreenError, match="incomplete task population"):
+        project_frozen_screen(tuple((task, (), ()) for task in frozen_tasks()))
+
+
+def test_complete_zero_opportunity_inventory_is_insufficient_not_missing() -> None:
+    inventory = []
+    for task in frozen_tasks():
+        base = tuple(
+            ScreenObservation(
+                identity=f"{task.task_id}:{index}",
+                observed_at=DECISION_START + (index + 1) * timedelta(minutes=15),
+                wire_symbol=task.wire_symbol,
+                family=AllFillFamily(task.family.upper()),
+                scenario=AllFillScenario.BASE,
+                status=AllFillStatus.NO_SIGNAL,
+                research_admissible=False,
+                primary_closed_net_r=None,
+                primary_fee_quote=Decimal(0),
+                primary_open_quantity=Decimal(0),
+                primary_gross_pnl_quote=None,
+                primary_net_pnl_quote=None,
+                side="NONE",
+                regime="NEUTRAL",
+                result_sha256="a" * 64,
+            )
+            for index in range(6048)
+        )
+        stress = tuple(replace(row, scenario=AllFillScenario.COMBINED_STRESS) for row in base)
+        inventory.append((task, base, stress))
+    final = project_frozen_screen(tuple(inventory))
+    assert final["complete_task_count"] == 30
+    families = cast(dict[str, dict[str, object]], final["families"])
+    assert all(
+        family["classification"] == ScreenClassification.INSUFFICIENT_EVIDENCE.value
+        for family in families.values()
+    )
+    task, base, stress = inventory[0]
+    with pytest.raises(ExploratoryScreenError, match="incomplete task population"):
+        project_frozen_screen(((task, base[:-1], stress[:-1]), *inventory[1:]))
+    with pytest.raises(ExploratoryScreenError, match="incomplete task population"):
+        project_frozen_screen(((task, (*base, base[-1]), stress), *inventory[1:]))
+    with pytest.raises(ExploratoryScreenError, match="foreign or misordered"):
+        project_frozen_screen(((task, (base[0], base[0], *base[2:]), stress), *inventory[1:]))
+    with pytest.raises(ExploratoryScreenError, match="foreign or misordered"):
+        project_frozen_screen(
+            ((task, (replace(base[0], wire_symbol="DOGEUSDT"), *base[1:]), stress), *inventory[1:])
+        )
+    with pytest.raises(ExploratoryScreenError, match="foreign or misordered"):
+        project_frozen_screen(
+            (
+                (
+                    task,
+                    (
+                        replace(
+                            base[0],
+                            input_kind="SYNTHETIC_FIXTURE",
+                            source_id="synthetic-fixture",
+                            dataset_version="fixture-v1",
+                            manifest_sha256="b" * 64,
+                        ),
+                        *base[1:],
+                    ),
+                    stress,
+                ),
+                *inventory[1:],
+            )
+        )
 
 
 def test_hold_only_pair_is_a_separate_diagnostic_not_a_second_primary_trade() -> None:

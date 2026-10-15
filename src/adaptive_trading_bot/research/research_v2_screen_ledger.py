@@ -34,14 +34,22 @@ def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _file_sha(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class StudyLedgerState:
     run_uuid: str
     executable_sha: str
+    input_kind: str
+    task_ids: tuple[str, ...]
     revision: int
     task_states: tuple[str, ...]
     population_sha256: tuple[str | None, ...]
     partition_sha256: tuple[str | None, ...]
+    authority_sha256: tuple[str | None, ...]
     finalized_sha256: str | None
 
 
@@ -53,9 +61,17 @@ class StudyLedgerStore:
 
     @classmethod
     def create(
-        cls, root: Path, grant: StudyExecutionGrant, *, actual_sha: str, synthetic: bool = False
+        cls,
+        root: Path,
+        grant: StudyExecutionGrant,
+        *,
+        actual_sha: str,
+        synthetic: bool = False,
+        synthetic_single_task: bool = False,
     ) -> Self:
         grant.validate(actual_sha=actual_sha, synthetic=synthetic)
+        if synthetic_single_task and not synthetic:
+            raise ExploratoryScreenError("compact fixture ledger requires synthetic grant")
         directory = root / grant.run_uuid
         try:
             directory.mkdir(parents=True, exist_ok=False)
@@ -76,7 +92,11 @@ class StudyLedgerStore:
                 "source_id": grant.source_id,
                 "dataset_version": grant.dataset_version,
                 "manifest_sha256": grant.manifest_sha256,
-                "task_ids": tuple(task.task_id for task in frozen_tasks()),
+                "task_ids": (
+                    ("SYNTHETIC_ONE_TASK",)
+                    if synthetic_single_task
+                    else tuple(task.task_id for task in frozen_tasks())
+                ),
             }
         )
         return store
@@ -115,6 +135,7 @@ class StudyLedgerStore:
             not (
                 path.name.endswith(".population.json.gz")
                 or path.name.endswith(".partition.json")
+                or path.name.endswith(".authority.jsonl.gz")
                 or path.name == "projection.json"
             )
             for path in extras
@@ -122,12 +143,15 @@ class StudyLedgerStore:
             raise ExploratoryScreenError("study ledger has an unrecognized file")
         if not files or any(path.name != f"{index:04d}.json" for index, path in enumerate(files)):
             raise ExploratoryScreenError("study ledger event sequence is incomplete")
-        states = ["NOT_STARTED"] * 30
-        population_hashes: list[str | None] = [None] * 30
-        partition_hashes: list[str | None] = [None] * 30
+        states: list[str] = []
+        population_hashes: list[str | None] = []
+        partition_hashes: list[str | None] = []
+        authority_hashes: list[str | None] = []
         previous: str | None = None
         run_uuid = ""
         executable_sha = ""
+        input_kind = ""
+        task_ids: tuple[str, ...] = ()
         final: str | None = None
         for index, path in enumerate(files):
             raw = path.read_bytes()
@@ -166,13 +190,22 @@ class StudyLedgerStore:
                     )
                     or event.get("input_kind")
                     not in {"EXTERNAL_REVIEWED_EXECUTION_GRANT", "SYNTHETIC_TEST_GRANT"}
-                    or tuple(event.get("task_ids", ()))
-                    != tuple(task.task_id for task in frozen_tasks())
                     or event.get("run_uuid") != self.directory.name
                 ):
                     raise ExploratoryScreenError("study ledger creation differs from frozen plan")
                 run_uuid = str(event["run_uuid"])
                 executable_sha = str(event["executable_sha"])
+                input_kind = str(event["input_kind"])
+                task_ids = tuple(event.get("task_ids", ()))
+                if task_ids not in (
+                    tuple(task.task_id for task in frozen_tasks()),
+                    ("SYNTHETIC_ONE_TASK",),
+                ) or (task_ids == ("SYNTHETIC_ONE_TASK",) and input_kind != "SYNTHETIC_TEST_GRANT"):
+                    raise ExploratoryScreenError("study ledger task inventory is invalid")
+                states = ["NOT_STARTED"] * len(task_ids)
+                population_hashes = [None] * len(task_ids)
+                partition_hashes = [None] * len(task_ids)
+                authority_hashes = [None] * len(task_ids)
                 try:
                     if str(uuid.UUID(run_uuid)) != run_uuid:
                         raise ValueError("noncanonical UUID")
@@ -191,7 +224,7 @@ class StudyLedgerStore:
                     final = str(event.get("projection_sha256"))
                     if not _HEX64.fullmatch(final):
                         raise ExploratoryScreenError("final projection digest is malformed")
-                elif type(task_index) is not int or not 0 <= task_index < 30:
+                elif type(task_index) is not int or not 0 <= task_index < len(task_ids):
                     raise ExploratoryScreenError("study ledger task index is invalid")
                 elif name == "STARTED":
                     if states[task_index] != "NOT_STARTED" or any(
@@ -204,17 +237,23 @@ class StudyLedgerStore:
                         raise ExploratoryScreenError("study completion lacks one start")
                     population_hashes[task_index] = str(event.get("population_sha256"))
                     partition_hashes[task_index] = str(event.get("partition_sha256"))
+                    authority_hashes[task_index] = str(event.get("authority_sha256"))
                     if not all(
                         digest is not None and _HEX64.fullmatch(digest)
-                        for digest in (population_hashes[task_index], partition_hashes[task_index])
+                        for digest in (
+                            population_hashes[task_index],
+                            partition_hashes[task_index],
+                            authority_hashes[task_index],
+                        )
                     ):
                         raise ExploratoryScreenError("task artifact digest is malformed")
                     for suffix, digest in (
                         ("population.json.gz", population_hashes[task_index]),
                         ("partition.json", partition_hashes[task_index]),
+                        ("authority.jsonl.gz", authority_hashes[task_index]),
                     ):
                         artifact = self.directory / f"{task_index:02d}.{suffix}"
-                        if not artifact.is_file() or _sha(artifact.read_bytes()) != digest:
+                        if not artifact.is_file() or _file_sha(artifact) != digest:
                             raise ExploratoryScreenError(
                                 "completed task artifact is missing or changed"
                             )
@@ -229,10 +268,13 @@ class StudyLedgerStore:
         return StudyLedgerState(
             run_uuid,
             executable_sha,
+            input_kind,
+            task_ids,
             len(files) - 1,
             tuple(states),
             tuple(population_hashes),
             tuple(partition_hashes),
+            tuple(authority_hashes),
             final,
         )
 
@@ -273,14 +315,21 @@ class StudyLedgerStore:
     def start(self, task_index: int) -> None:
         state = self.load()
         if (
-            not 0 <= task_index < 30
+            not 0 <= task_index < len(state.task_ids)
             or state.task_states[task_index] != "NOT_STARTED"
             or any(value != "COMPLETED" for value in state.task_states[:task_index])
         ):
             raise ExploratoryScreenError("study task cannot be started or retried")
         self._append("STARTED", task_index=task_index)
 
-    def complete(self, task_index: int, *, population_sha256: str, partition_sha256: str) -> None:
+    def complete(
+        self,
+        task_index: int,
+        *,
+        population_sha256: str,
+        partition_sha256: str,
+        authority_sha256: str,
+    ) -> None:
         state = self.load()
         if state.task_states[task_index] != "STARTED":
             raise ExploratoryScreenError("study task is not exclusively started")
@@ -289,12 +338,13 @@ class StudyLedgerStore:
             task_index=task_index,
             population_sha256=population_sha256,
             partition_sha256=partition_sha256,
+            authority_sha256=authority_sha256,
         )
 
     def fail(self, task_index: int, *, reason_code: str) -> None:
         state = self.load()
         if (
-            not 0 <= task_index < 30
+            not 0 <= task_index < len(state.task_ids)
             or state.task_states[task_index] != "STARTED"
             or reason_code not in {"TASK_FAILURE", "SERIALIZATION_FAILURE"}
         ):
