@@ -8,12 +8,15 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified `main` after Issue #177 / PR #178 squash merge:
+Verified `main` after Issue #179 / PR #180 accepted-content reconciliation:
 
-`8b7d7c19697c6fc1eafcdce7666653861f8dcde3`
+`5e34486664a37641c3ff0b5b3827087bd91d83f5`
 
-This is the exact base for Issue #179's bounded ten-member LAST data/corpus
-qualification. Issue #177's prospective all-fill research implementation is
+This is the exact base for Issue #181's bounded never-attempted C2 tail.
+PR #180 was closed after metadata reconciliation because its accepted content
+was already integrated on `main`; Issue #179 is closed for its bounded tooling
+and partial evidence, not for a completed ten-member Package A. Issue #177's
+prospective all-fill research implementation is
 merged as Package B. The merged Issue #175 exploratory selection is evidence
 for data qualification only, not historical-study activation.
 PR #164 records the old-baseline audit in
@@ -44,7 +47,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#179 — bounded Research V2 selected-panel LAST corpus qualification; no real historical study authorized.**
+**#181 — bounded Research V2 C2 tail of 785 never-attempted shapes; no real historical study authorized.**
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -335,7 +338,10 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    is merged. Issue #179's bounded Package A data/corpus attempt stopped at
    a non-timeout transport failure and locked a partial, non-admissible
    artifact. Its separate bounded C1 continuation also stopped on DNS and
-   remains ten-member `PARTIAL_OR_BLOCKED`; neither generation added
+   remains ten-member `PARTIAL_OR_BLOCKED`. Issue #181 authorizes only the
+   separately versioned C2 tail: 243 BTWUSDT, 271 AVAXUSDT and 271 DOGEUSDT
+   never-attempted shapes, preserving both failed predecessor shapes as gaps.
+   No C2 result is pre-claimed here. Neither predecessor generation added
    executable research admission. Any later
    qualification or activation needs its own
    architect decision and frozen identities/folds/code/sufficiency rules.
