@@ -6,12 +6,14 @@ filled entry is accounted here before one causal recovery is authorized.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from hmac import compare_digest
+from typing import Any
 
 from adaptive_trading_bot.backtest import (
     AccountingFillBatch,
@@ -636,12 +638,40 @@ class ResearchAllFillReplayRunner:
         start: datetime,
         end: datetime,
     ) -> AllFillReplayResult:
+        result = self._run_with_result_factory(
+            decision,
+            contexts,
+            series,
+            costs,
+            start=start,
+            end=end,
+            result_label=None,
+            result_factory=AllFillReplayResult,
+        )
+        if not isinstance(result, AllFillReplayResult):  # pragma: no cover - fixed factory
+            raise AllFillReplayError("legacy all-fill factory returned the wrong result")
+        return result
+
+    def _run_with_result_factory(
+        self,
+        decision: DecisionJournalEntry[object, object],
+        contexts: tuple[HistoricalStrategyContextObservation, ...],
+        series: ExecutionSeries,
+        costs: ExecutionCostConfiguration,
+        *,
+        start: datetime,
+        end: datetime,
+        result_label: object | None,
+        result_factory: Callable[..., Any],
+    ) -> Any:
+        """Private shared orchestration seam for separately versioned research results."""
+
         owned = deepcopy(decision)
         owned.validate()
         start = require_utc(start, field="all-fill start")
         end = require_utc(end, field="all-fill end")
         costs.validate()
-        scenario = _scenario(costs)
+        scenario = _scenario(costs) if result_label is None else result_label
         family = _family(owned)
         if (
             start >= end
@@ -672,7 +702,7 @@ class ResearchAllFillReplayRunner:
         if authorization.status is OrderIntentAuthorizationStatus.REJECTED_INCONSISTENT:
             raise AllFillReplayError("decision chain fails entry authorization")
         if authorization.status is OrderIntentAuthorizationStatus.NO_INTENT:
-            return AllFillReplayResult(
+            return result_factory(
                 owned,
                 family,
                 deepcopy(series),
@@ -732,7 +762,7 @@ class ResearchAllFillReplayRunner:
         legacy.validate()
         provenance = EntryIntentProvenance.from_authorized_intent(intent)
         if legacy.entry_unfilled is not None:
-            return AllFillReplayResult(
+            return result_factory(
                 owned,
                 family,
                 deepcopy(series),
@@ -839,7 +869,7 @@ class ResearchAllFillReplayRunner:
                     end,
                 )
             )
-        return AllFillReplayResult(
+        return result_factory(
             owned,
             family,
             deepcopy(series),

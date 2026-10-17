@@ -34,6 +34,7 @@ _SCHEMA_MODULES = frozenset(
         "adaptive_trading_bot.research.paired_exit_replay",
         "adaptive_trading_bot.research.range_mean_reversion_replay",
         "adaptive_trading_bot.research.research_v2_admission",
+        "adaptive_trading_bot.research.research_v2_factorial",
         "adaptive_trading_bot.research.trend_pullback_corpus",
         "adaptive_trading_bot.risk.core",
         "adaptive_trading_bot.risk.safety",

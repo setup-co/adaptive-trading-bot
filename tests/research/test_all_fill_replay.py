@@ -39,6 +39,10 @@ from adaptive_trading_bot.research.paired_exit_replay import (
 from adaptive_trading_bot.research.range_mean_reversion_replay import (
     RangeMeanReversionReplayResult,
 )
+from adaptive_trading_bot.research.research_v2_factorial import (
+    FactorialCell,
+    execute_factorial_cell,
+)
 from adaptive_trading_bot.strategies import CandidateAction, StrategyEvaluationContext
 
 _HELPERS = runpy.run_path(str(Path(__file__).with_name("test_paired_exit_replay.py")))
@@ -905,6 +909,19 @@ def test_range_ordinary_closed_open_and_entry_unfilled_match_legacy(side: str) -
     assert unfilled.status is AllFillStatus.ENTRY_UNFILLED
     assert isinstance(unfilled.legacy_replay, RangeMeanReversionReplayResult)
     assert unfilled.entry_unfilled == unfilled.legacy_replay.entry_unfilled
+    for cell in (FactorialCell.C1L0, FactorialCell.C0L1):
+        factorial = execute_factorial_cell(
+            ResearchAllFillReplayRunner(RecordingExecutionSource(candles)),
+            decision,
+            contexts,
+            series,
+            cell,
+            start=decision.identity.observed_at,
+            end=candles[-1].close_time,
+        )
+        assert isinstance(factorial.legacy_replay, RangeMeanReversionReplayResult)
+        assert factorial.cell is cell
+        factorial.validate()
 
 
 @pytest.mark.parametrize("side", ("LONG", "SHORT"))
@@ -989,6 +1006,19 @@ def test_breakout_ordinary_closed_open_and_entry_unfilled_match_legacy(
     assert unfilled.status is AllFillStatus.ENTRY_UNFILLED
     assert isinstance(unfilled.legacy_replay, BreakoutRetestReplayResult)
     assert unfilled.entry_unfilled == unfilled.legacy_replay.entry_unfilled
+    for cell in (FactorialCell.C1L0, FactorialCell.C0L1):
+        factorial = execute_factorial_cell(
+            ResearchAllFillReplayRunner(RecordingExecutionSource((entry, trigger, exit_candle))),
+            decision,
+            (sealed_entry, sealed_trigger),
+            series,
+            cell,
+            start=decision.identity.observed_at,
+            end=exit_candle.close_time,
+        )
+        assert isinstance(factorial.legacy_replay, BreakoutRetestReplayResult)
+        assert factorial.cell is cell
+        factorial.validate()
     legacy_decision = next(
         item for item in corpus.decisions if item.decision.identity == decision.identity
     )
