@@ -61,6 +61,7 @@ SOURCE = _HELPERS["SOURCE"]
 BTC = _HELPERS["BTC"]
 _decision = _HELPERS["_decision"]
 _execution_path = _HELPERS["_execution_path"]
+_current_context = _HELPERS["_current_context"]
 PREFLIGHT_ROOT = (
     Path(__file__).parents[2]
     / "data/research_evidence/issue-191-factorial-preflight-fc3fc5096350d087"
@@ -627,3 +628,86 @@ def test_zero_admission_unit_writes_empty_artifact_without_task_reconstruction(
     assert gzip.decompress(output.read_bytes()) == b""
     assert digest == hashlib.sha256(output.read_bytes()).hexdigest()
     assert summary["outcome_count"] == 0
+
+
+def test_small_synthetic_staged_execution_storage_and_verification(
+    tmp_path: Path,
+) -> None:
+    decision = cast(DecisionJournalEntry[object, object], _decision(outcome="cleared"))
+    observations = tuple(
+        HistoricalStrategyContextObservation(_current_context(minutes))
+        for minutes in range(15, 168 * 60 + 15, 15)
+    )
+    task = frozen_tasks()[0]
+    view = factorial_cli._RetainedTaskView(
+        0,
+        SOURCE,
+        BTC,
+        "trend_pullback",
+        NOW,
+        NOW + timedelta(hours=168),
+        {0: decision},
+        observations,
+    )
+    identity = _digest(str(decision.identity))
+    reference: dict[str, object] = {
+        "task_id": task.task_id,
+        "decision_index": 0,
+        "decision_identity_sha256": identity,
+        "symbol": task.wire_symbol,
+        "family": task.family.upper(),
+        "population_sha256": "a" * 64,
+        "partition_sha256": "b" * 64,
+        "authority_sha256": "c" * 64,
+    }
+    grant = _grant(_inventory())
+    store = FactorialLedgerStore.create(
+        tmp_path,
+        grant,
+        actual_sha="d" * 40,
+        task_ids=(f"{task.task_id}:C1L0", f"{task.task_id}:C0L1"),
+        stage_a_count=1,
+        synthetic=True,
+    )
+    summaries: list[dict[str, object]] = []
+    outcomes: list[FactorialOutcome] = []
+    for index, cell in enumerate((FactorialCell.C1L0, FactorialCell.C0L1)):
+        if index == 1:
+            with pytest.raises(FactorialError, match="cannot be started"):
+                store.start(index)
+            authorization = StageContinuationAuthorization(
+                "ARCHITECT_AUTHORIZED_STAGE_B_CONTINUATION",
+                grant.run_uuid,
+                grant.executable_sha,
+                grant.protocol_sha256,
+                grant.input_plan_sha256,
+                grant.admitted_inventory_sha256,
+                "9" * 64,
+            )
+            store.authorize_stage_b(authorization, grant)
+        store.start(index)
+        artifact = store.directory / f"{index:02d}.factorial.jsonl.gz"
+        digest, _ = factorial_cli._execute_unit(
+            Path(__file__).parents[2],
+            0,
+            cell,
+            (reference,),
+            artifact,
+            task_view=view,
+        )
+        store.complete(index, digest)
+        summary, rows = factorial_cli._verify_unit_artifact(
+            Path(__file__).parents[2],
+            {"task_id": task.task_id, "cell": cell.value, "unit_id": store.load().task_ids[index]},
+            (reference,),
+            artifact,
+            task_view=view,
+        )
+        summaries.append(summary)
+        outcomes.extend(rows)
+        if index == 0:
+            store.pause_after_stage_a("9" * 64)
+    assert [row["outcome_count"] for row in summaries] == [1, 1]
+    assert {row.cell for row in outcomes} == {FactorialCell.C1L0, FactorialCell.C0L1}
+    store.finalize(_digest(tuple(row.result_sha256 for row in outcomes)))
+    assert store.load().run_state is FactorialRunState.FINALIZED

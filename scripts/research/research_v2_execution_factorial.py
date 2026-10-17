@@ -201,7 +201,19 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
             authority_path=paths["authority"],
             authority_sha=_sha(payloads["authority"]),
         )
-        all_trades.extend(result["trades"])
+        screens = cast(dict[str, tuple[dict[str, Any], ...]], result["screens"])
+        for trade in cast(list[dict[str, object]], result["trades"]):
+            screen = screens[str(trade["scenario"])][
+                _exact_int(trade["decision_index"], field="decision index")
+            ]
+            trade["hold_only_facts"] = {
+                "status": screen.get("hold_only_status"),
+                "closed_net_r": screen.get("hold_only_closed_net_r"),
+                "incurred_fees_quote": screen.get("hold_only_fee_quote"),
+                "residual_base_quantity": screen.get("hold_only_open_quantity"),
+                "branch_sha256": screen.get("hold_only_branch_sha256"),
+            }
+            all_trades.append(trade)
         task_payload_hashes[task.task_id] = {
             name: _sha(payload) for name, payload in payloads.items()
         }
@@ -291,6 +303,7 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
                         "recovery_reasons",
                     )
                 },
+                "hold_only_facts": row["hold_only_facts"],
             }
             for row in sorted(
                 all_trades,
