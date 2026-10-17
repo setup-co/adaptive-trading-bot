@@ -56,7 +56,7 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#187 — the frozen Research V2 exploratory screen completed and verified; its evidence-only result is now the active review gate.**
+**#187 — the frozen Research V2 exploratory screen completed, verified, and was accepted as immutable evidence. Issue #189 is the active bounded post-result descriptive diagnosis.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
@@ -66,6 +66,17 @@ Mean Reversion `INSUFFICIENT_EVIDENCE`. This retrospective normalized-base,
 unleveraged/pre-funding screen is not portfolio or trading authority. Do not
 rerun, tune, or reinterpret insufficient evidence as a positive result. See
 `docs/research/research_v2_exploratory_screen_primary_result.md`.
+Issue #189 reads only that retained evidence under
+`RESEARCH_V2_RETAINED_DIAGNOSIS_V1`; it does not reopen or rerun #187. Its
+compact tables and post-result interpretation are documented in
+`docs/research/research_v2_retained_diagnosis.md`. The final corrected v3
+diagnostic generation binds population, partition, authority and BASE/STRESS
+rows by actual retained identities, uses explicit local Decimal contexts,
+separates lossless quantity output from fixed historical compatibility, and
+records rounding reconciliation without claiming independent replication. Its
+v1 and v2 generations remain immutable and superseded. Five unresolved Trend
+hold-only branches remain explicit and separate from the primary fully closed
+population.
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -356,8 +367,9 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review and lock Issue #187's completed, verified evidence-only result. The
-   run must not be repeated or tuned on these windows. Its classifications are
+1. Review Issue #189's bounded retained-evidence diagnosis. Issue #187 is
+   merged, closed, and immutable; the run must not be repeated or tuned on
+   these windows. Its classifications remain
    Trend Pullback `NEGATIVE_EVIDENCE`, Breakout + Retest
    `INSUFFICIENT_EVIDENCE`, and Range Mean Reversion
    `INSUFFICIENT_EVIDENCE`. The next research gate, if any, requires a new
