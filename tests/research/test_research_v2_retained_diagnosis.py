@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import sys
 from collections import Counter
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Context, Decimal, localcontext
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,248 @@ from scripts.research import research_v2_retained_diagnosis as diagnosis
 def decimal_tag(value: Decimal) -> list[object]:
     item = value.as_tuple()
     return ["decimal", item.sign, list(item.digits), str(item.exponent)]
+
+
+def tagged(value: object) -> list[object]:
+    if value is None:
+        return ["none"]
+    if type(value) is bool:
+        return ["bool", value]
+    if type(value) is int:
+        return ["int", value]
+    if isinstance(value, str):
+        return ["str", value]
+    if isinstance(value, Decimal):
+        return decimal_tag(value)
+    if isinstance(value, datetime):
+        return ["datetime", value.isoformat(), value.fold]
+    if isinstance(value, timedelta):
+        return ["timedelta", value.days, value.seconds, value.microseconds]
+    if isinstance(value, tuple):
+        return ["tuple", [tagged(item) for item in value]]
+    if isinstance(value, dict):
+        if value == {"__reference__": "decision"}:
+            return ["decision_ref"]
+        return [
+            "dataclass",
+            "adaptive_trading_bot.synthetic.Record",
+            [[key, tagged(item)] for key, item in value.items()],
+        ]
+    raise TypeError(type(value))
+
+
+def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, bytes]:
+    start = datetime(2026, 8, 3, tzinfo=UTC)
+    expected = diagnosis.TaskExpectation(
+        index=0,
+        task_id="00-BTCUSDT-trend_pullback",
+        symbol="BTCUSDT",
+        family="trend_pullback",
+        context_start=datetime(2026, 7, 21, tzinfo=UTC),
+        decision_start=start,
+        decision_end=start + timedelta(minutes=30),
+        follow_up_end=start + timedelta(hours=168, minutes=30),
+        decision_count=2,
+        input_kind="ACCEPTED_C2",
+        source_id=diagnosis.SOURCE_ID,
+        dataset_version=diagnosis.DATASET_VERSION,
+        manifest_sha256=diagnosis.MANIFEST_SHA256,
+        profile="NORMALIZED_BASE_SIGNAL_V1",
+        protocol_sha256=diagnosis.PROTOCOL_SHA256,
+        task_plan_sha256=diagnosis.TASK_PLAN_SHA256,
+    )
+    source = {"value": expected.source_id}
+    symbol = {"base": "BTC", "quote": "USDT"}
+
+    def decision(index: int, action: str) -> dict[str, object]:
+        observed = start + timedelta(minutes=15 * (index + 1))
+        identity = {
+            "source_id": source,
+            "symbol": symbol,
+            "observed_at": observed,
+            "strategy_id": expected.family,
+            "strategy_version": "1.0.0",
+        }
+        return {
+            "identity": identity,
+            "context": {"source_id": source, "symbol": symbol, "observed_at": observed},
+            "strategy_evaluation": {
+                "source_id": source,
+                "symbol": symbol,
+                "observed_at": observed,
+                "strategy_id": expected.family,
+                "strategy_version": "1.0.0",
+                "action": action,
+                "reasons_for": (),
+                "reasons_against": (),
+                "rule_audit": {},
+            },
+            "risk_decision": {"disposition": "APPROVED", "reasons": ()},
+            "safety_decision": {"disposition": "CLEARED", "reasons": ()},
+        }
+
+    decisions = (decision(0, "NO_TRADE"), decision(1, "LONG_CANDIDATE"))
+    binding = {
+        "kind": expected.input_kind,
+        "source_id": source,
+        "dataset_version": expected.dataset_version,
+        "manifest_sha256": expected.manifest_sha256,
+        "schema_version": "research-v2-input-binding-v1",
+    }
+    population = {
+        "schema_version": "research-v2-study-decision-population-v1",
+        "protocol_sha256": expected.protocol_sha256,
+        "source_id": source,
+        "dataset_version": expected.dataset_version,
+        "manifest_sha256": expected.manifest_sha256,
+        "profile": expected.profile,
+        "integrity_seal": "f" * 64,
+        "configuration": {
+            "family": expected.family,
+            "schema_version": "research-v2-admission-configuration-v2",
+            "input_binding": binding,
+            "bounds": {
+                "symbol": symbol,
+                "source_id": source,
+                "context_start": expected.context_start,
+                "decision_start": expected.decision_start,
+                "decision_end": expected.decision_end,
+                "follow_up_end": expected.follow_up_end,
+                "profile": expected.profile,
+                "admission_version": "RESEARCH_V2_ISOLATED_ADMISSION_V1",
+            },
+        },
+        "decisions": decisions,
+    }
+    population_raw = {
+        "schema_version": "research-v2-screen-authority-evidence-v1",
+        "population": tagged(population),
+    }
+    population_payload = gzip.compress(diagnosis._canonical(population_raw), mtime=0)
+
+    screens: dict[str, object] = {}
+    authority_lines: list[bytes] = []
+    for scenario_index, scenario in enumerate(diagnosis.SCENARIOS):
+        rows: list[dict[str, object]] = []
+        for index, item in enumerate(decisions):
+            admitted = index == 1
+            status = "ENTRY_UNFILLED" if admitted else "NO_SIGNAL"
+            seal = ("a" if scenario_index == 0 else "b") * 64
+            observed = start + timedelta(minutes=15 * (index + 1))
+            identity = item["identity"]
+            intent = None
+            if admitted:
+                intent_identity = {"decision_identity": identity, "purpose": "ENTRY"}
+                intent = {
+                    "identity": intent_identity,
+                    "decision_identity": identity,
+                    "source_id": source,
+                    "symbol": symbol,
+                    "observed_at": observed,
+                    "strategy_id": expected.family,
+                    "strategy_version": "1.0.0",
+                    "side": "BUY",
+                    "authorized_for_execution": True,
+                    "reference_price": Decimal("100"),
+                    "stop_basis": Decimal("99"),
+                    "approved_risk_quote": Decimal("10"),
+                    "approved_notional_quote": Decimal("1000"),
+                    "quantity": Decimal("10"),
+                }
+            result = {
+                "decision": {"__reference__": "decision"},
+                "family": "TREND_PULLBACK",
+                "scenario": scenario,
+                "start": expected.context_start,
+                "end": observed + timedelta(hours=168),
+                "schema_version": "research-all-fill-economics-v1",
+                "policy_version": "RESEARCH_ALL_FILL_ECONOMICS_V1",
+                "is_trading_authority": False,
+                "series": {"source_id": source, "symbol": symbol, "timeframe": "15m"},
+                "costs": {
+                    "spread_bps": diagnosis.EXPECTED_COSTS[scenario][0],
+                    "slippage_bps": diagnosis.EXPECTED_COSTS[scenario][1],
+                    "fee_bps": diagnosis.EXPECTED_COSTS[scenario][2],
+                    "latency": diagnosis.EXPECTED_COSTS[scenario][3],
+                },
+                "integrity_seal": seal,
+                "status": status,
+                "entry_intent": intent,
+                "entry_unfilled": {"reason": "NO_ELIGIBLE_CANDLE"} if admitted else None,
+                "branches": (),
+                "legacy_replay": {},
+            }
+            row: dict[str, object] = {
+                "identity": diagnosis._identity_digest(identity, "synthetic identity"),
+                "observed_at": diagnosis._iso(observed),
+                "symbol": expected.symbol,
+                "family": "TREND_PULLBACK",
+                "scenario": scenario,
+                "source_id": expected.source_id,
+                "dataset_version": expected.dataset_version,
+                "manifest_sha256": expected.manifest_sha256,
+                "input_kind": expected.input_kind,
+                "side": "LONG" if admitted else "NONE",
+                "status": status,
+                "research_admissible": admitted,
+                "all_fill_result_sha256": seal,
+                "primary_closed_net_r": None,
+                "primary_fee_quote": "0",
+                "primary_open_quantity": "0",
+                "primary_gross_pnl_quote": None,
+                "primary_net_pnl_quote": None,
+                "hold_only_status": None,
+                "hold_only_closed_net_r": None,
+                "hold_only_fee_quote": None,
+                "hold_only_open_quantity": None,
+                "hold_only_branch_sha256": None,
+                "block": "P1",
+                "week": "2026-W32",
+                "regime": "NEUTRAL",
+            }
+            rows.append(row)
+            authority_lines.append(
+                diagnosis._canonical(
+                    {
+                        "schema_version": "research-v2-screen-authority-evidence-v1",
+                        "decision_index": index,
+                        "scenario": scenario,
+                        "result": tagged(result),
+                    }
+                )
+            )
+        screens[scenario] = {"rows": rows}
+    task = {
+        "context_start": diagnosis._iso(expected.context_start),
+        "decision_end": diagnosis._iso(expected.decision_end),
+        "decision_slots": expected.decision_count,
+        "decision_start": diagnosis._iso(expected.decision_start),
+        "family": expected.family,
+        "index": expected.index,
+        "last_follow_up_end": diagnosis._iso(expected.follow_up_end),
+        "scenario_rows": expected.decision_count * 2,
+        "symbol": expected.symbol,
+        "task_id": expected.task_id,
+    }
+    partition = {
+        "schema_version": "research-v2-exploratory-screen-v4",
+        "protocol_sha256": expected.protocol_sha256,
+        "task_plan_sha256": expected.task_plan_sha256,
+        "source_id": expected.source_id,
+        "dataset_version": expected.dataset_version,
+        "manifest_sha256": expected.manifest_sha256,
+        "population_decision_count": expected.decision_count,
+        "population_sha256": population["integrity_seal"],
+        "task": task,
+        "scenarios": screens,
+    }
+    partition["partition_sha256"] = diagnosis._sha(diagnosis._canonical(partition))
+    return (
+        expected,
+        population_payload,
+        diagnosis._canonical(partition),
+        gzip.compress(b"\n".join(authority_lines) + b"\n", mtime=0),
+    )
 
 
 def trade(
@@ -172,6 +415,17 @@ def test_pairing_counts_terminal_pairs_and_exact_deltas() -> None:
     assert rows[0]["entry_open_changed"] is True
 
 
+def test_pairing_rejects_row_position_match_with_different_authority() -> None:
+    base = trade("id", diagnosis.SCENARIOS[0])
+    stress = trade("id", diagnosis.SCENARIOS[1])
+    stress["symbol"] = "ETHUSDT"
+    with pytest.raises(diagnosis.DiagnosisError, match="exact decision authority"):
+        diagnosis._pair_rows([base, stress])
+    stress = trade("other-id", diagnosis.SCENARIOS[1])
+    with pytest.raises(diagnosis.DiagnosisError, match="exact decision authority"):
+        diagnosis._pair_rows([base, stress])
+
+
 def test_pairing_rejects_missing_duplicate_and_wrong_scenario() -> None:
     base = trade("id", diagnosis.SCENARIOS[0])
     with pytest.raises(diagnosis.DiagnosisError, match="exact BASE/STRESS"):
@@ -190,6 +444,56 @@ def test_effective_wait_uses_recorded_times_not_configured_latency() -> None:
     assert diagnosis._seconds(eligible, created) == "1.0"
     assert diagnosis._seconds(selected_open, eligible) == "899.0"
     assert diagnosis._seconds(selected_open, created) == "900.0"
+
+
+def test_derived_decimal_arithmetic_ignores_ambient_context() -> None:
+    before = "604.2725728390732038281484705826820"
+    after = "44.82746493348189514176665138066175"
+    expected = "-559.44510790559130868638181920202025"
+    with localcontext(Context(prec=6, rounding=ROUND_DOWN)):
+        assert diagnosis._decimal_delta(before, after) == expected
+        stats = diagnosis._decimal_stats([Decimal(before), Decimal(after)])
+    with localcontext(Context(prec=12, rounding=ROUND_DOWN)):
+        assert diagnosis._decimal_delta(before, after) == expected
+        assert diagnosis._decimal_stats([Decimal(before), Decimal(after)]) == stats
+
+
+def test_synthetic_positive_round_trip_uses_same_task_core() -> None:
+    expected, population, partition, authority = synthetic_task_payloads()
+    result = diagnosis.extract_task_payloads(
+        expected=expected,
+        population_payload=population,
+        partition_payload=partition,
+        authority_payload=authority,
+        authority_path="synthetic.authority.jsonl.gz",
+        authority_sha=hashlib.sha256(authority).hexdigest(),
+    )
+    assert result["base_counts"] == Counter({"NO_SIGNAL": 1, "ENTRY_UNFILLED": 1})
+    trades = result["trades"]
+    assert len(trades) == 2
+    assert {row["status"] for row in trades} == {"ENTRY_UNFILLED"}
+    assert all(row["entry_fill_at"] is None for row in trades)
+    pairs = diagnosis._pair_rows(trades)
+    assert len(pairs) == 1
+    assert pairs[0]["entry_fill_time_delta_seconds"] is None
+
+
+def test_same_core_rejects_reordered_partition_identity() -> None:
+    expected, population, partition_payload, authority = synthetic_task_payloads()
+    partition = json.loads(partition_payload)
+    scenario = diagnosis.SCENARIOS[0]
+    partition["scenarios"][scenario]["rows"].reverse()
+    partition.pop("partition_sha256")
+    partition["partition_sha256"] = diagnosis._sha(diagnosis._canonical(partition))
+    with pytest.raises(diagnosis.DiagnosisError, match="partition row differs"):
+        diagnosis.extract_task_payloads(
+            expected=expected,
+            population_payload=population,
+            partition_payload=diagnosis._canonical(partition),
+            authority_payload=authority,
+            authority_path="synthetic.authority.jsonl.gz",
+            authority_sha=hashlib.sha256(authority).hexdigest(),
+        )
 
 
 def test_trend_recovery_does_not_require_an_ema50_candidate() -> None:
@@ -239,6 +543,28 @@ def test_per_asset_residuals_are_not_summed() -> None:
     assert "total" not in residuals
 
 
+def test_hold_only_projection_keeps_unresolved_per_asset_quantities() -> None:
+    families: dict[str, object] = {}
+    for family in diagnosis.FAMILIES:
+        scenario = {
+            "hold_only_diagnostic": {
+                "branches": 5,
+                "closed": 3,
+                "unresolved": 2,
+                "incurred_fees_quote": "1.25",
+                "remaining_absolute_base_quantity_by_asset": {
+                    symbol: ("2.5" if symbol == "BTCUSDT" else "0") for symbol in diagnosis.PANEL
+                },
+            }
+        }
+        families[family.lower()] = {"base": scenario, "combined_stress": scenario}
+    projected = diagnosis._hold_only_projection({"families": families})
+    trend = projected["TREND_PULLBACK"]["BASE"]
+    assert trend["unresolved"] == 2
+    assert trend["remaining_absolute_base_quantity_by_asset"]["BTCUSDT"] == "2.5"
+    assert "total" not in trend
+
+
 def test_exact_decimal_summary_preserves_even_median() -> None:
     assert diagnosis._decimal_stats([Decimal("1.1"), Decimal("2.2")]) == {
         "count": 2,
@@ -257,12 +583,48 @@ def test_csv_evidence_uses_canonical_lf(tmp_path: Path) -> None:
 
 
 def test_grouping_summary_keeps_terminal_zero_cells() -> None:
-    grouped = {"TREND_PULLBACK": {"asset": {"BTCUSDT": Counter({"NO_SIGNAL": 2})}}}
+    grouped = diagnosis._new_grouped()
+    grouped["TREND_PULLBACK"]["asset"]["BTCUSDT"].update({"NO_SIGNAL": 2})
+    grouped["BREAKOUT_RETEST"]["asset"]["BTCUSDT"].update(
+        {status: 1 for status in diagnosis.TERMINAL_STATUSES}
+    )
     result = diagnosis._grouping_summary(grouped)
     cell = result["TREND_PULLBACK"]["asset"]["BTCUSDT"]
     assert cell["observations"] == 2
     assert cell["terminal_statuses"]["RECOVERY_OPEN"] == 0
     assert cell["terminal_statuses"]["RISK_BLOCKED"] == 0
+    assert result["RANGE_MEAN_REVERSION"]["side"]["SHORT"]["observations"] == 0
+    for status in diagnosis.TERMINAL_STATUSES:
+        assert status in result["RANGE_MEAN_REVERSION"]["side"]["SHORT"]["terminal_statuses"]
+        assert result["BREAKOUT_RETEST"]["asset"]["BTCUSDT"]["terminal_statuses"][status] == 1
+
+
+def test_projection_reconciliation_records_rounding_instead_of_claiming_equality() -> None:
+    families: dict[str, object] = {}
+    pair_summary: dict[str, object] = {}
+    for family in diagnosis.FAMILIES:
+        families[family.lower()] = {
+            "base": {
+                "impact_inclusive_gross_realized_quote": "604.2725728390732038281484705826820",
+                "incurred_fees_quote": "337.5232363150151025718754633238990",
+                "accounted_net_realized_quote": "266.7493365240581012562730072587829",
+            },
+            "combined_stress": {
+                "impact_inclusive_gross_realized_quote": "44.82746493348189514176665138066175",
+                "incurred_fees_quote": "675.8763928961981458102460088618546",
+                "accounted_net_realized_quote": "-631.0489279627162506684793574811930",
+            },
+        }
+        pair_summary[family] = {
+            "delta_gross_quote": "-559.44510790559130868638181920202025",
+            "delta_fees_quote": "338.3531565811830432383705455379556",
+            "delta_net_quote": "-897.7982644867743519247523647399759",
+        }
+    with localcontext(Context(prec=5, rounding=ROUND_DOWN)):
+        result = diagnosis._projection_reconciliation({"families": families}, pair_summary)
+    row = result["BREAKOUT_RETEST"]
+    assert row["descriptive_row_delta"]["gross"] == ("-559.44510790559130868638181920202025")
+    assert row["interpretation"] == "ROUNDING_RECONCILED_NOT_ASSERTED_AS_EXACT_EQUALITY"
 
 
 def test_index_hash_mismatch_fails_closed(tmp_path: Path) -> None:

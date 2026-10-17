@@ -25,14 +25,25 @@ and 492 admitted scenario rows. Every required file matched its indexed size
 and SHA-256; task, decision, scenario, partition, and result identities were
 complete and unique.
 
-The compact outputs are under
-`data/research_evidence/issue-189-retained-diagnosis-v1/`. `summary.json`
+The corrected compact outputs are under
+`data/research_evidence/issue-189-retained-diagnosis-v2/`. The original v1
+generation remains immutable but is superseded because it joined retained
+rows positionally and used ambient Decimal arithmetic. `summary.json`
 retains family/asset/P1–P3/side/regime groupings with explicit zero terminal
 cells. `trades.csv` contains the 492 scenario-level admitted records, and
-`pairs.csv` contains the 246 exact BASE/STRESS pairs. The utility source
+`pairs.csv` contains the 246 BASE/STRESS pairs bound by the actual decision,
+task, source, symbol, family, strategy version, accepted input binding and
+entry authority. `hold-only.json` preserves the distinct hold-only branch
+diagnostic and `reconciliation.json` records the correction lineage. The
+utility source
 SHA-256 is
-`9783661544fda96b4e11f2f2e4c6c0b01d3ec563ed9647e54c48fad2158ad6e3`;
+`9bfd709dfd7648667163d4316fcbb440ed85e8c1e1998e96ac107866386d26af`;
 it is distinct from the historical executable and UUID.
+
+The detailed sufficiency/dependence strata remain authoritative only in the
+accepted #187 `projection.json` under each `families.<family>.details` object.
+The diagnostic grouping tables are descriptive retained-row projections; they
+do not replace those accepted detailed-strata records.
 
 ## A. Recorded opportunity and admission funnel
 
@@ -85,9 +96,14 @@ prices/times, fees, gross/net PnL, approved-risk R, recovery facts, and
 remaining quantities are preserved per row in `trades.csv`.
 
 The separate Trend hold-only diagnostic has 217 branches, 212 closed and five
-unresolved in each scenario. Closed-only comparisons therefore have a
-different denominator and do not prove EMA50 improvement. No residual mark
-was invented and heterogeneous base quantities were not summed.
+unresolved in each scenario. The exact unresolved quantities are retained per
+asset, not summed across unlike base units: BTCUSDT
+`0.10947500751783555945913955292`, XRPUSDT
+`17755.377646621171718940007315`, and AVAXUSDT
+`221.2389380530973451327433628`; all other assets are zero. These are
+hold-only residuals. Primary branches remain fully closed with zero residual
+quantity. Closed-only hold comparisons therefore have a different denominator
+and do not prove EMA50 improvement. No residual mark was invented.
 
 ## C. Paired BASE versus STRESS
 
@@ -99,11 +115,17 @@ is simulator bar-selection evidence, not observed exchange latency.
 
 | Family | Pairs | Status changes | Delta gross | Delta fees | Delta net |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Trend | 217 | 3 | -513.3337319130089712352632346 | +1941.039054934802551183726163 | -2454.372786847811522418989390 |
-| Breakout | 28 | 2 | -559.4451079055913086863818191 | +338.3531565811830432383705455 | -897.7982644867743519247523646 |
-| Range | 1 | 1 | -4.554656905068592828835143539 | +10.16594559498699371052863064 | -14.72060250005558653936377418 |
+| Trend | 217 | 3 | -513.33373191300897123526323454654252734 | +1941.0390549348025511837261579941533189 | -2454.372786847811522418989392540696009 |
+| Breakout | 28 | 2 | -559.445107905591308686381819202020413 | +338.353156581183043238370545537955600 | -897.798264486774351924752364739976156 |
+| Range | 1 | 1 | -4.554656905068592828835143538791570 | +10.16594559498699371052863064487423 | -14.720602500055586539363774183665803 |
 
-The retained bridge satisfies `delta net = delta gross - delta fees`.
+These row-derived values use an explicit 50-digit `ROUND_HALF_EVEN` local
+context. The accepted #187 projection used its own 34-digit context. The two
+views reconcile within stored-scale rounding residuals, recorded explicitly
+in `summary.json`; the diagnosis does **not** claim unchecked exact equality
+or independent replication. Likewise, each view's displayed
+`delta net = delta gross - delta fees` bridge retains a small Decimal rounding
+residual rather than being asserted as algebraically exact.
 Breakout shifted from 13 targets/15 stops to 8 targets/18 stops plus two
 recoveries while both later opens and costs changed. This evidence cannot
 separate latency, spread/slippage/fee, market-path, or interaction effects.
@@ -129,10 +151,14 @@ recommended from this post-result diagnosis.
 ## Reproduction and limits
 
 ```console
-python -m scripts.research.research_v2_retained_diagnosis --repo . --output data/research_evidence/issue-189-retained-diagnosis-v1
+python -m scripts.research.research_v2_retained_diagnosis --repo . --output data/research_evidence/issue-189-retained-diagnosis-v2
 ```
 
-The finalized extraction reports 758.765 seconds, zero network requests, and
+The corrected manifest SHA-256 is
+`98ee47e5dbaf803cf301a545c65300757007630c55a684b005ff28de8ffb2e4e`;
+the summary SHA-256 is
+`7d7887064a5b7c34cd0678f788d380a07bda900b3410e0bbfb45cd94afc27836`.
+The finalized extraction reports zero network requests and
 zero feature/strategy/simulator calls. Historical-as-of universe quality,
 leveraged mechanics, funded portfolio effects, and causal component
 attribution remain unavailable or outside scope. Every original evidence byte,

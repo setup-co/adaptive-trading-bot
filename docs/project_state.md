@@ -69,7 +69,13 @@ rerun, tune, or reinterpret insufficient evidence as a positive result. See
 Issue #189 reads only that retained evidence under
 `RESEARCH_V2_RETAINED_DIAGNOSIS_V1`; it does not reopen or rerun #187. Its
 compact tables and post-result interpretation are documented in
-`docs/research/research_v2_retained_diagnosis.md`.
+`docs/research/research_v2_retained_diagnosis.md`. The corrected v2 diagnostic
+generation binds population, partition, authority and BASE/STRESS rows by
+actual retained identities, uses explicit local Decimal contexts, and records
+rounding reconciliation without claiming independent replication. Its v1
+generation remains immutable but is superseded. Five unresolved Trend
+hold-only branches remain explicit and separate from the primary fully closed
+population.
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
