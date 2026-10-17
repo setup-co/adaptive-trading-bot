@@ -84,7 +84,11 @@ records rounding reconciliation without claiming independent replication. Its
 v1 and v2 generations remain immutable and superseded. Five unresolved Trend
 hold-only branches remain explicit and separate from the primary fully closed
 population.
-Issue #191 freezes the same 246 admissions into four fixed cells. Its later
+Issue #191 preparation now uses `RESEARCH_V2_EXECUTION_FACTORIAL_V2` and
+freezes the same 246 admissions into four fixed cells. Its bounded retained
+loader does not reconstruct or re-evaluate the full entry population; shared
+all-fill validation, persisted checkpoint verification and read-only finalized
+verification remain mandatory. Its later
 execution is staged: BTC/ETH first, followed by a mandatory verified technical
 checkpoint and pause; the remaining eight assets require a separate architect
 authorization on the same frozen executable/protocol/UUID/ledger. Continuation

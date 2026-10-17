@@ -1,10 +1,10 @@
 # Research V2 execution factorial — preparation annex
 
-**Protocol:** `RESEARCH_V2_EXECUTION_FACTORIAL_V1`
+**Protocol:** `RESEARCH_V2_EXECUTION_FACTORIAL_V2`
 
-**Schema:** `research-v2-execution-factorial-v1`
+**Schema:** `research-v2-execution-factorial-v2`
 
-**Protocol SHA-256:** `d5d4e936534c52120007d4d2bcd1fa333c30f9de9be9b7fd9be8c55142cee91d`
+**Protocol SHA-256:** `470f4ba70d967c62b0ec5e777d876a926a8f204c471b5a28a6b12e33cb05160c`
 
 **Status:** implementation and inert retained-evidence preflight only; no historical execution grant
 
@@ -59,6 +59,15 @@ digests. Diagnosis tables are only a cross-check; they are not execution
 orders. The full controls are 246 admissions, 492 imported diagonal records,
 492 new off-diagonal outcomes and 984 matrix records. Zero-admission family
 tasks remain explicit.
+
+Execution later consumes a bounded retained-task view rather than constructing
+the stored full decision-population authority. The view validates the indexed
+envelope, partition, complete chronology and source joins as inert evidence,
+then reconstructs only selected sealed admissions and the already-computed
+contexts/candles required by exit and accounting authorities. It never repeats
+entry strategy/Risk/Safety population evaluation. The two new cells share one
+task-level parse; zero-admission tasks emit an explicit empty artifact without
+constructing a population.
 
 The accepted data-only preflight report is
 `data/research_evidence/issue-191-factorial-preflight-fc3fc5096350d087/input-plan.json`
@@ -136,6 +145,13 @@ accounting, recovery, timestamps and terminal facts. Imported results retain
 their original artifact/result hashes. Full histories are referenced once per
 task rather than copied per decision/cell.
 
+The shared all-fill relation validator remains authoritative for the bound
+execution snapshot, ordered Trend branch topology, ordinary exits, causal
+recovery, accounting and terminal status. The factorial envelope owns only its
+separate cell namespace and seal; it cannot relabel a result, omit a hold-only
+branch, substitute an unrelated unfilled record or change the exact t+168h
+cutoff.
+
 For a decision closed in all four cells, report exact local-Decimal contrasts:
 
 - cost at L0: `Y10 - Y00`; cost at L1: `Y11 - Y01`;
@@ -170,7 +186,12 @@ boundary. It performs no execution and grants no continuation. Only after an
 authorized Stage B completes may `finalize` reconstruct all new results, join
 the two immutable Issue-#187 diagonals, write the four-cell projection, and
 seal the ledger. Neither verifier is an independent replication or a new
-economic run.
+economic run. `continue-stage-b` first reopens the canonical checkpoint,
+verifies its digest, 48/96/192 denominators and reconstructed prefix, and
+reconciles retained grant/source/input metadata. `verify-finalized` performs
+the same bounded reconstruction against the saved projection and FINALIZED
+ledger without writing, appending a ledger event or replaying imported
+diagonal outcomes.
 
 This annex authorizes no historical pilot, market/API request, account access,
 Paper/Shadow/Live activation, tuning, new asset, news labeling or deployment.

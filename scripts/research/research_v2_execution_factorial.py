@@ -237,7 +237,7 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
     )
     counts = stage_counts(inventory)
     record: dict[str, object] = {
-        "schema_version": "research-v2-factorial-input-plan-v1",
+        "schema_version": "research-v2-factorial-input-plan-v2",
         "status": "DATA_ONLY_PREPARATION; NO_EXECUTION_GRANT",
         "protocol_sha256": PROTOCOL_SHA256,
         "protocol": protocol_facts(),
@@ -769,7 +769,7 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
     if len(imported_stage_a) != 96:
         raise FactorialError("Stage A imported diagonal coverage is not exactly 96 records")
     checkpoint: dict[str, object] = {
-        "schema_version": "research-v2-factorial-stage-a-checkpoint-v1",
+        "schema_version": "research-v2-factorial-stage-a-checkpoint-v2",
         "protocol_sha256": PROTOCOL_SHA256,
         "run_uuid": grant.run_uuid,
         "executable_sha": actual_sha,
