@@ -21,11 +21,10 @@ from hmac import compare_digest
 from pathlib import Path
 from typing import Any, cast
 
-from adaptive_trading_bot.backtest import ExecutionCostConfiguration, ExecutionSeries
+from adaptive_trading_bot.backtest import ExecutionCostConfiguration, ExecutionSeries, UnfilledOrder
 from adaptive_trading_bot.domain import Candle, Timeframe
 from adaptive_trading_bot.domain.clock import require_utc
 from adaptive_trading_bot.journal import DecisionJournalEntry
-from adaptive_trading_bot.orders import EntryOrderIntentAuthorizer, OrderIntentAuthorizationStatus
 from adaptive_trading_bot.research.all_fill_replay import (
     POLICY_VERSION as ALL_FILL_POLICY_VERSION,
 )
@@ -36,6 +35,7 @@ from adaptive_trading_bot.research.all_fill_replay import (
     ResearchAllFillReplayRunner,
     _family,
     _snapshot_digest,
+    validate_shared_all_fill_relations,
 )
 from adaptive_trading_bot.research.breakout_retest_replay import BreakoutRetestReplayResult
 from adaptive_trading_bot.research.paired_exit_replay import (
@@ -69,10 +69,10 @@ from adaptive_trading_bot.research.research_v2_screen_evidence import (
 )
 from adaptive_trading_bot.research.trend_pullback_corpus import _integrity_seal
 
-PROTOCOL_VERSION = "RESEARCH_V2_EXECUTION_FACTORIAL_V1"
-SCHEMA_VERSION = "research-v2-execution-factorial-v1"
-RESULT_SCHEMA_VERSION = "research-v2-factorial-all-fill-result-v1"
-LEDGER_SCHEMA_VERSION = "research-v2-factorial-ledger-v1"
+PROTOCOL_VERSION = "RESEARCH_V2_EXECUTION_FACTORIAL_V2"
+SCHEMA_VERSION = "research-v2-execution-factorial-v2"
+RESULT_SCHEMA_VERSION = "research-v2-factorial-all-fill-result-v2"
+LEDGER_SCHEMA_VERSION = "research-v2-factorial-ledger-v2"
 ORIGINAL_ARTIFACT_INDEX_SHA256 = "677a20834d41ba045d20235b749daebd53338e4694ec59c1bb094320344119f2"
 ORIGINAL_PROJECTION_SHA256 = "46d7e10899f06f4d16b6ded46f8cba5c62d9d25c119d05e35ca11b5af5833667"
 ORIGINAL_PROTOCOL_SHA256 = "ab78c022616bcffdb7af8b835064a14409e1d47bdc3e31649192de9cf0c63e1c"
@@ -203,6 +203,9 @@ class AdmittedDecisionReference:
     population_sha256: str
     partition_sha256: str
     authority_sha256: str
+    block: str = ""
+    week: str = ""
+    side: str = ""
 
     def to_record(self) -> dict[str, object]:
         require_utc(self.observed_at, field="admitted decision time")
@@ -233,6 +236,9 @@ class AdmittedDecisionReference:
             "population_sha256": self.population_sha256,
             "partition_sha256": self.partition_sha256,
             "authority_sha256": self.authority_sha256,
+            "block": self.block,
+            "week": self.week,
+            "side": self.side,
         }
 
 
@@ -296,7 +302,7 @@ class FactorialAllFillReplayResult:
     end: datetime
     status: AllFillStatus
     entry_intent: EntryIntentProvenance | None
-    entry_unfilled: object | None
+    entry_unfilled: UnfilledOrder | None
     branches: tuple[AllFillBranch, ...]
     execution_snapshot: tuple[Candle, ...]
     execution_snapshot_digest: str
@@ -360,47 +366,21 @@ class FactorialAllFillReplayResult:
             )
         ):
             raise FactorialError("factorial result differs from frozen cell authority")
-        authorization = EntryOrderIntentAuthorizer().authorize(self.decision)
-        if authorization.status is OrderIntentAuthorizationStatus.REJECTED_INCONSISTENT:
-            raise FactorialError("factorial result has inconsistent decision authority")
-        if authorization.status is OrderIntentAuthorizationStatus.NO_INTENT:
-            if any(
-                (
-                    self.entry_intent is not None,
-                    self.entry_unfilled is not None,
-                    bool(self.branches),
-                    bool(self.execution_snapshot),
-                    self.legacy_replay is not None,
-                )
-            ):
-                raise FactorialError("non-admitted factorial result contains replay evidence")
-            return
-        if authorization.intent is None or self.entry_intent is None or self.legacy_replay is None:
-            raise FactorialError("admitted factorial result lacks authority")
-        if self.entry_intent != EntryIntentProvenance.from_authorized_intent(authorization.intent):
-            raise FactorialError("factorial entry provenance differs from authorizer")
-        self.legacy_replay.validate()
-        if (
-            self.legacy_replay.entry_intent != self.entry_intent
-            or self.legacy_replay.execution_costs != self.costs
-            or self.legacy_replay.execution_series != self.series
-            or self.legacy_replay.end != self.end
-        ):
-            raise FactorialError("factorial replay is not bound to declared cell")
-        if self.entry_unfilled is not None:
-            if self.status is not AllFillStatus.ENTRY_UNFILLED or self.branches:
-                raise FactorialError("factorial unfilled result has accounted branches")
-            return
-        if not self.branches or self.status is not self.branches[-1].status:
-            raise FactorialError("factorial primary branch is incomplete")
-        for branch in self.branches:
-            branch.validate()
-            if (
-                branch.approved_risk_quote != self.entry_intent.approved_risk_quote
-                or branch.final_position.observed_at != self.end
-                or branch.entry_fill != self.legacy_replay.entry_fill
-            ):
-                raise FactorialError("factorial accounting branch differs from replay")
+        validate_shared_all_fill_relations(
+            decision=self.decision,
+            family=self.family,
+            series=self.series,
+            costs=self.costs,
+            start=self.start,
+            end=self.end,
+            status=self.status,
+            entry_intent=self.entry_intent,
+            entry_unfilled=self.entry_unfilled,
+            branches=self.branches,
+            execution_snapshot=self.execution_snapshot,
+            legacy_replay=self.legacy_replay,
+            error_type=FactorialError,
+        )
 
 
 def execute_factorial_cell(
@@ -483,6 +463,8 @@ def recover_factorial_result(
     decision_index: int,
     cell: FactorialCell,
     candles: tuple[Candle, ...],
+    task_id: str | None = None,
+    expected_end: datetime | None = None,
 ) -> FactorialAllFillReplayResult:
     if not isinstance(record, dict):
         raise FactorialError("factorial authority record is not an object")
@@ -502,6 +484,25 @@ def recover_factorial_result(
     if not isinstance(result, FactorialAllFillReplayResult):
         raise FactorialError("factorial authority is not the versioned result type")
     result.validate()
+    expected_task = next((item for item in frozen_tasks() if item.task_id == task_id), None)
+    if (
+        result.decision != decision
+        or result.cell is not cell
+        or result.costs != cell_costs(cell)
+        or result.series.source_id != decision.identity.source_id
+        or result.series.symbol != decision.identity.symbol
+        or (expected_end is not None and result.end != expected_end)
+        or (task_id is not None and expected_task is None)
+        or (
+            expected_task is not None
+            and (expected_task.wire_symbol, expected_task.family.upper())
+            != (
+                f"{decision.identity.symbol.base}{decision.identity.symbol.quote}",
+                result.family.value,
+            )
+        )
+    ):
+        raise FactorialError("factorial result differs from requested task/cell/cutoff")
     return result
 
 
@@ -521,6 +522,8 @@ class FactorialOutcome:
     residual_base_quantity: Decimal
     result_sha256: str
     source_artifact_sha256: str
+    evidence_facts: tuple[tuple[str, str | None], ...] = ()
+    hold_only_facts: tuple[tuple[str, str | None], ...] = ()
 
     def validate(self) -> None:
         task = next((item for item in frozen_tasks() if item.task_id == self.task_id), None)
@@ -546,6 +549,9 @@ class FactorialOutcome:
             )
             or not self.residual_base_quantity.is_finite()
             or self.residual_base_quantity < 0
+            or len({name for name, _ in self.evidence_facts}) != len(self.evidence_facts)
+            or any(not name for name, _ in self.evidence_facts)
+            or len({name for name, _ in self.hold_only_facts}) != len(self.hold_only_facts)
         ):
             raise FactorialError("factorial outcome is malformed or relabeled")
 
@@ -554,15 +560,74 @@ def outcome_from_factorial_result(
     result: FactorialAllFillReplayResult,
     *,
     task_id: str,
-    decision_identity_sha256: str,
     source_artifact_sha256: str,
 ) -> FactorialOutcome:
     """Project compact facts only from a validated authoritative result."""
 
     result.validate()
     branch = result.branches[-1] if result.branches else None
+    entry = None if branch is None else branch.entry_fill
+    exit_fill = None if branch is None else branch.exit_fill
+    recovery = None if branch is None else branch.recovery
+    intent = result.entry_intent
+    evidence_facts = tuple(
+        sorted(
+            {
+                "decision_observed_at": _iso(result.decision.identity.observed_at),
+                "side": None if intent is None else intent.side.value,
+                "approved_risk_quote": None if intent is None else str(intent.approved_risk_quote),
+                "entry_created_at": None if entry is None else _iso(entry.created_at),
+                "entry_eligible_at": None if entry is None else _iso(entry.eligible_at),
+                "entry_execution_candle_open_at": None
+                if entry is None
+                else _iso(entry.execution_candle_open_time),
+                "entry_fill_at": None if entry is None else _iso(entry.fill_at),
+                "entry_reference_open_price": None
+                if entry is None
+                else str(entry.reference_open_price),
+                "entry_fill_price": None if entry is None else str(entry.fill_price),
+                "entry_fee_quote": None if entry is None else str(entry.fee_quote),
+                "primary_exit_category": None if branch is None else branch.label,
+                "exit_created_at": None
+                if branch is None or branch.exit_request is None
+                else _iso(branch.exit_request.created_at),
+                "exit_eligible_at": None if exit_fill is None else _iso(exit_fill.eligible_at),
+                "exit_execution_candle_open_at": None
+                if exit_fill is None
+                else _iso(exit_fill.execution_candle_open_time),
+                "exit_fill_at": None if exit_fill is None else _iso(exit_fill.fill_at),
+                "exit_reference_open_price": None
+                if exit_fill is None
+                else str(exit_fill.reference_open_price),
+                "exit_fill_price": None if exit_fill is None else str(exit_fill.fill_price),
+                "exit_fee_quote": None if exit_fill is None else str(exit_fill.fee_quote),
+                "recovery_reasons": None if recovery is None else "|".join(recovery.reasons),
+                "unavailable_reason": (
+                    result.status.value if branch is None or branch.closed_net_r is None else None
+                ),
+            }.items()
+        )
+    )
+    hold = result.branches[0] if result.family is AllFillFamily.TREND_PULLBACK else None
+    hold_only_facts = tuple(
+        sorted(
+            {
+                "status": None if hold is None else hold.status.value,
+                "closed_net_r": None
+                if hold is None or hold.closed_net_r is None
+                else str(hold.closed_net_r),
+                "incurred_fees_quote": None
+                if hold is None
+                else str(hold.final_position.cumulative_fees),
+                "residual_base_quantity": None
+                if hold is None
+                else str(hold.final_position.quantity.copy_abs()),
+                "branch_sha256": None if hold is None else hold.integrity_seal,
+            }.items()
+        )
+    )
     outcome = FactorialOutcome(
-        decision_identity_sha256,
+        _digest(str(result.decision.identity)),
         task_id,
         f"{result.decision.identity.symbol.base}{result.decision.identity.symbol.quote}",
         result.family.value,
@@ -576,6 +641,8 @@ def outcome_from_factorial_result(
         Decimal(0) if branch is None else branch.final_position.quantity.copy_abs(),
         result.integrity_seal,
         source_artifact_sha256,
+        evidence_facts,
+        hold_only_facts,
     )
     outcome.validate()
     return outcome
@@ -586,13 +653,11 @@ def verify_outcome_against_factorial_result(
     result: FactorialAllFillReplayResult,
     *,
     task_id: str,
-    decision_identity_sha256: str,
     source_artifact_sha256: str,
 ) -> None:
     expected = outcome_from_factorial_result(
         result,
         task_id=task_id,
-        decision_identity_sha256=decision_identity_sha256,
         source_artifact_sha256=source_artifact_sha256,
     )
     if outcome != expected:
@@ -639,6 +704,22 @@ def imported_outcome_from_record(record: object) -> FactorialOutcome:
             cast(Decimal, decimal_value("residual_base_quantity", zero_if_none=True)),
             str(record["result_sha256"]),
             str(record["authority_sha256"]),
+            tuple(
+                sorted(
+                    (str(name), None if value is None else str(value))
+                    for name, value in cast(
+                        dict[str, object], record.get("evidence_facts", {})
+                    ).items()
+                )
+            ),
+            tuple(
+                sorted(
+                    (str(name), None if value is None else str(value))
+                    for name, value in cast(
+                        dict[str, object], record.get("hold_only_facts", {})
+                    ).items()
+                )
+            ),
         )
     except (KeyError, ValueError) as exc:
         raise FactorialError("imported diagonal record is malformed") from exc
@@ -674,6 +755,8 @@ def project_factorial_matrix(
     if complete and any(set(cells) != required for cells in seen.values()):
         raise FactorialError("complete factorial projection has missing cells")
     contrasts: list[dict[str, object]] = []
+    decision_cells: list[dict[str, object]] = []
+    hold_only: list[dict[str, object]] = []
     status_transitions: dict[str, int] = {}
     residual_by_asset_cell: dict[str, Decimal] = {}
     fees_by_cell: dict[str, Decimal] = {}
@@ -681,7 +764,64 @@ def project_factorial_matrix(
         f"{task.task_id}:{cell.value}": 0 for task in frozen_tasks() for cell in FactorialCell
     }
     for key, cells in seen.items():
+        reference = references[key]
+        decision_cells.append(
+            {
+                "decision_identity_sha256": key[0],
+                "task_id": key[1],
+                "symbol": reference.symbol,
+                "family": reference.family,
+                "block": reference.block,
+                "week": reference.week,
+                "side": reference.side,
+                "original_mask_member": reference.original_mask_member,
+                "cells": tuple(
+                    {
+                        "cell": cell.value,
+                        "available": cell in cells,
+                        "imported": None if cell not in cells else cells[cell].imported,
+                        "terminal_status": None
+                        if cell not in cells
+                        else cells[cell].terminal_status,
+                        "closed_net_r": None
+                        if cell not in cells or cells[cell].closed_net_r is None
+                        else str(cells[cell].closed_net_r),
+                        "incurred_fees_quote": None
+                        if cell not in cells
+                        else str(cells[cell].incurred_fees_quote),
+                        "gross_realized_pnl_quote": None
+                        if cell not in cells or cells[cell].gross_realized_pnl_quote is None
+                        else str(cells[cell].gross_realized_pnl_quote),
+                        "net_realized_pnl_quote": None
+                        if cell not in cells or cells[cell].net_realized_pnl_quote is None
+                        else str(cells[cell].net_realized_pnl_quote),
+                        "residual_base_quantity": None
+                        if cell not in cells
+                        else str(cells[cell].residual_base_quantity),
+                        "result_sha256": None if cell not in cells else cells[cell].result_sha256,
+                        "source_artifact_sha256": None
+                        if cell not in cells
+                        else cells[cell].source_artifact_sha256,
+                        "evidence_facts": None
+                        if cell not in cells
+                        else dict(cells[cell].evidence_facts),
+                    }
+                    for cell in FactorialCell
+                ),
+            }
+        )
         for outcome in cells.values():
+            if outcome.family == AllFillFamily.TREND_PULLBACK.value:
+                hold_only.append(
+                    {
+                        "decision_identity_sha256": outcome.decision_identity_sha256,
+                        "task_id": outcome.task_id,
+                        "cell": outcome.cell.value,
+                        "imported": outcome.imported,
+                        "available": bool(outcome.hold_only_facts),
+                        "facts": dict(outcome.hold_only_facts),
+                    }
+                )
             status_transitions[outcome.terminal_status] = (
                 status_transitions.get(outcome.terminal_status, 0) + 1
             )
@@ -748,11 +888,66 @@ def project_factorial_matrix(
             key: str(value) for key, value in sorted(residual_by_asset_cell.items())
         },
         "contrasts": tuple(contrasts),
+        "decision_by_four_cell": tuple(decision_cells),
+        "hold_only": tuple(hold_only),
         "warnings": (
             "CLOSURE_ONLY_CONTRASTS_HAVE_DIFFERENT_SUBSETS",
             "OVERLAPPING_AND_CROSS_ASSET_OUTCOMES_ARE_DEPENDENT",
             "FIXED_RECORDED_PATH_SIMULATION_NOT_REAL_WORLD_CAUSAL_ATTRIBUTION",
         ),
+    }
+    domains = {
+        "asset": PANEL,
+        "block": ("P1", "P2", "P3"),
+        "week": tuple(sorted({item.week for item in inventory if item.week})),
+        "side": ("LONG", "SHORT"),
+    }
+
+    def summaries(*, masked: bool) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for dimension, values in domains.items():
+            rows: list[dict[str, object]] = []
+            for value in values:
+                for cell in FactorialCell:
+                    members = tuple(
+                        outcome
+                        for outcome in outcomes
+                        if outcome.cell is cell
+                        and (
+                            not masked
+                            or references[
+                                (outcome.decision_identity_sha256, outcome.task_id)
+                            ].original_mask_member
+                        )
+                        and (
+                            outcome.symbol == value
+                            if dimension == "asset"
+                            else getattr(
+                                references[(outcome.decision_identity_sha256, outcome.task_id)],
+                                dimension,
+                            )
+                            == value
+                        )
+                    )
+                    closed = tuple(
+                        item.closed_net_r for item in members if item.closed_net_r is not None
+                    )
+                    rows.append(
+                        {
+                            "value": value,
+                            "cell": cell.value,
+                            "record_count": len(members),
+                            "closed_r_count": len(closed),
+                            "unavailable_r_count": len(members) - len(closed),
+                            "total_closed_net_r": str(sum(closed, Decimal(0))),
+                        }
+                    )
+            result[dimension] = tuple(rows)
+        return result
+
+    projection["descriptive_summaries"] = {
+        "full": summaries(masked=False),
+        "original_mask": summaries(masked=True),
     }
     projection["projection_sha256"] = _digest(projection)
     return projection
@@ -827,6 +1022,13 @@ class StageContinuationAuthorization:
 class FactorialLedgerState:
     run_uuid: str
     executable_sha: str
+    grant_kind: str
+    protocol_sha256: str
+    input_plan_sha256: str
+    admitted_inventory_sha256: str
+    source_id: str
+    dataset_version: str
+    manifest_sha256: str
     task_ids: tuple[str, ...]
     stage_a_count: int
     task_states: tuple[str, ...]
@@ -834,6 +1036,7 @@ class FactorialLedgerState:
     run_state: FactorialRunState
     checkpoint_sha256: str | None
     final_projection_sha256: str | None
+    stage_b_authorization_sha256: str | None
 
 
 class FactorialLedgerStore:
@@ -870,9 +1073,13 @@ class FactorialLedgerStore:
                 "previous_sha256": None,
                 "run_uuid": grant.run_uuid,
                 "executable_sha": grant.executable_sha,
+                "grant_kind": grant.kind,
                 "protocol_sha256": grant.protocol_sha256,
                 "input_plan_sha256": grant.input_plan_sha256,
                 "admitted_inventory_sha256": grant.admitted_inventory_sha256,
+                "source_id": grant.source_id,
+                "dataset_version": grant.dataset_version,
+                "manifest_sha256": grant.manifest_sha256,
                 "task_ids": task_ids,
                 "stage_a_count": stage_a_count,
             }
@@ -924,7 +1131,17 @@ class FactorialLedgerStore:
     def load(self) -> FactorialLedgerState:
         events = self._events()
         created = events[0]
-        if created.get("event") != "CREATED" or created.get("protocol_sha256") != PROTOCOL_SHA256:
+        if (
+            created.get("event") != "CREATED"
+            or created.get("protocol_sha256") != PROTOCOL_SHA256
+            or created.get("grant_kind")
+            not in ("EXTERNAL_REVIEWED_FACTORIAL_GRANT", "SYNTHETIC_FACTORIAL_GRANT")
+            or not _HEX64.fullmatch(str(created.get("input_plan_sha256")))
+            or not _HEX64.fullmatch(str(created.get("admitted_inventory_sha256")))
+            or not isinstance(created.get("source_id"), str)
+            or not isinstance(created.get("dataset_version"), str)
+            or not _HEX64.fullmatch(str(created.get("manifest_sha256")))
+        ):
             raise FactorialError("factorial ledger creation differs from protocol")
         task_ids = tuple(created.get("task_ids", ()))
         stage_a_count = created.get("stage_a_count")
@@ -934,6 +1151,7 @@ class FactorialLedgerStore:
         run_state = FactorialRunState.ACTIVE
         checkpoint: str | None = None
         final: str | None = None
+        stage_b_authorization: str | None = None
         for event in events[1:]:
             name = event.get("event")
             index = event.get("task_index")
@@ -954,6 +1172,18 @@ class FactorialLedgerStore:
             if name == "STAGE_B_AUTHORIZED":
                 if run_state is not FactorialRunState.PAUSED_AFTER_STAGE_A:
                     raise FactorialError("Stage B authorization lacks deliberate pause")
+                stage_b_authorization = str(event.get("authorization_sha256"))
+                if (
+                    not _HEX64.fullmatch(stage_b_authorization)
+                    or event.get("run_uuid") != created.get("run_uuid")
+                    or event.get("executable_sha") != created.get("executable_sha")
+                    or event.get("protocol_sha256") != created.get("protocol_sha256")
+                    or event.get("input_plan_sha256") != created.get("input_plan_sha256")
+                    or event.get("admitted_inventory_sha256")
+                    != created.get("admitted_inventory_sha256")
+                    or event.get("stage_a_checkpoint_sha256") != checkpoint
+                ):
+                    raise FactorialError("retained Stage B authorization changed experiment")
                 run_state = FactorialRunState.ACTIVE
                 continue
             if name == "FINALIZED":
@@ -996,6 +1226,13 @@ class FactorialLedgerStore:
         return FactorialLedgerState(
             str(created.get("run_uuid")),
             str(created.get("executable_sha")),
+            str(created.get("grant_kind")),
+            str(created.get("protocol_sha256")),
+            str(created.get("input_plan_sha256")),
+            str(created.get("admitted_inventory_sha256")),
+            str(created.get("source_id")),
+            str(created.get("dataset_version")),
+            str(created.get("manifest_sha256")),
             task_ids,
             stage_a_count,
             tuple(states),
@@ -1003,6 +1240,7 @@ class FactorialLedgerStore:
             run_state,
             checkpoint,
             final,
+            stage_b_authorization,
         )
 
     def _append(self, event: str, **facts: object) -> None:
@@ -1074,6 +1312,12 @@ class FactorialLedgerStore:
             authorization_sha256=_digest(
                 {name: getattr(authorization, name) for name in authorization.__dataclass_fields__}
             ),
+            run_uuid=authorization.run_uuid,
+            executable_sha=authorization.executable_sha,
+            protocol_sha256=authorization.protocol_sha256,
+            input_plan_sha256=authorization.input_plan_sha256,
+            admitted_inventory_sha256=authorization.admitted_inventory_sha256,
+            stage_a_checkpoint_sha256=authorization.stage_a_checkpoint_sha256,
         )
 
     def finalize(self, projection_sha256: str) -> None:

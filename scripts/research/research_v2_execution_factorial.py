@@ -15,21 +15,21 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Iterator
+from bisect import bisect_left
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
 from adaptive_trading_bot.backtest import ExecutionSeries
-from adaptive_trading_bot.domain import Timeframe
+from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
+from adaptive_trading_bot.journal import DecisionJournalEntry
 from adaptive_trading_bot.research.all_fill_replay import ResearchAllFillReplayRunner
-from adaptive_trading_bot.research.research_v2_admission import (
-    ResearchV2StudyDecisionPopulation,
-)
+from adaptive_trading_bot.research.paired_exit_replay import HistoricalStrategyContextObservation
 from adaptive_trading_bot.research.research_v2_exploratory_screen import (
-    _BoundTaskExecutionSource,
     _canonical,
     _digest,
     causal_follow_up_slice,
@@ -69,6 +69,7 @@ from adaptive_trading_bot.research.research_v2_screen_evidence import (
 from adaptive_trading_bot.research.research_v2_screen_evidence import (
     decode as decode_authority,
 )
+from adaptive_trading_bot.storage import SourceId
 from scripts.research import research_v2_retained_diagnosis as retained
 
 EVIDENCE_RELATIVE = Path("data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a")
@@ -143,7 +144,7 @@ def _task_paths(index: int) -> dict[str, str]:
     }
 
 
-def _mask_members(rows: list[dict[str, object]]) -> set[str]:
+def _mask_members(rows: Sequence[dict[str, object]]) -> set[str]:
     selected: set[str] = set()
     by_group: dict[tuple[str, str], list[dict[str, object]]] = {}
     for row in rows:
@@ -222,6 +223,9 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
             population_sha256=task_payload_hashes[str(row["task_id"])]["population"],
             partition_sha256=task_payload_hashes[str(row["task_id"])]["partition"],
             authority_sha256=task_payload_hashes[str(row["task_id"])]["authority"],
+            block=str(row["block"]),
+            week=str(row["week"]),
+            side=str(row["side"]),
         )
         for row in sorted(
             all_base_trades,
@@ -262,6 +266,31 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
                 "residual_base_quantity": row["remaining_base_quantity"],
                 "result_sha256": str(row["all_fill_result_sha256"]),
                 "authority_sha256": str(row["authority_sha256"]),
+                "evidence_facts": {
+                    name: row.get(name)
+                    for name in (
+                        "decision_observed_at",
+                        "side",
+                        "approved_risk_quote",
+                        "entry_created_at",
+                        "entry_eligible_at",
+                        "entry_execution_candle_open_at",
+                        "entry_fill_at",
+                        "entry_reference_open_price",
+                        "entry_fill_price",
+                        "entry_fee_quote",
+                        "primary_exit_category",
+                        "primary_exit_reason",
+                        "exit_created_at",
+                        "exit_eligible_at",
+                        "exit_execution_candle_open_at",
+                        "exit_fill_at",
+                        "exit_reference_open_price",
+                        "exit_fill_price",
+                        "exit_fee_quote",
+                        "recovery_reasons",
+                    )
+                },
             }
             for row in sorted(
                 all_trades,
@@ -319,19 +348,158 @@ def _continuation(path: Path) -> StageContinuationAuthorization:
         raise FactorialError("Stage B continuation authorization is malformed") from exc
 
 
-def _load_population(repo: Path, task_index: int) -> ResearchV2StudyDecisionPopulation:
+@dataclass(frozen=True, slots=True)
+class _RetainedTaskView:
+    """Inertly checked retained task with only selected decisions reconstructed."""
+
+    task_index: int
+    source_id: SourceId
+    symbol: TradingSymbol
+    family: str
+    context_start: datetime
+    follow_up_end: datetime
+    decisions: dict[int, DecisionJournalEntry[object, object]]
+    contexts: tuple[HistoricalStrategyContextObservation, ...]
+
+
+class _RetainedTaskExecutionSource:
+    def __init__(self, view: _RetainedTaskView) -> None:
+        self._series = ExecutionSeries(view.source_id, view.symbol, Timeframe.MINUTES_15)
+        self._candles = tuple(item.context.candle_15m for item in view.contexts)
+        self._opens = tuple(candle.open_time for candle in self._candles)
+        expected = view.context_start
+        for candle in self._candles:
+            if candle.open_time != expected:
+                raise FactorialError("retained task execution context has a missing candle")
+            expected = candle.close_time
+        if expected != view.follow_up_end:
+            raise FactorialError("retained task execution context lacks follow-up coverage")
+
+    def load(
+        self, series: ExecutionSeries, *, start: datetime, end: datetime
+    ) -> tuple[Candle, ...]:
+        if (
+            series != self._series
+            or not self._candles
+            or start < self._opens[0]
+            or end > self._candles[-1].close_time
+            or start >= end
+        ):
+            raise FactorialError("execution source differs from retained task")
+        selected = self._candles[bisect_left(self._opens, start) : bisect_left(self._opens, end)]
+        if not selected:
+            raise FactorialError("retained execution snapshot is unexpectedly empty")
+        return selected
+
+
+def _tagged_fields(value: object, expected_type: str) -> dict[str, object]:
+    if (
+        not isinstance(value, list)
+        or len(value) != 3
+        or value[0] != "dataclass"
+        or value[1] != expected_type
+        or not isinstance(value[2], list)
+    ):
+        raise FactorialError("retained authority has the wrong tagged type")
+    result: dict[str, object] = {}
+    for item in value[2]:
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or item[0] in result
+        ):
+            raise FactorialError("retained authority fields are malformed")
+        result[item[0]] = item[1]
+    return result
+
+
+def _tagged_tuple(value: object, field: str) -> tuple[object, ...]:
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or value[0] != "tuple"
+        or not isinstance(value[1], list)
+    ):
+        raise FactorialError(f"retained {field} is not a tagged tuple")
+    return tuple(value[1])
+
+
+def _load_task_view(
+    repo: Path,
+    task_index: int,
+    selected: tuple[dict[str, Any], ...],
+) -> _RetainedTaskView:
     evidence = repo / EVIDENCE_RELATIVE
     files, _ = retained.load_index(evidence)
-    payload = retained.verify_indexed_file(evidence, _task_paths(task_index)["population"], files)
+    paths = _task_paths(task_index)
+    population_payload = retained.verify_indexed_file(evidence, paths["population"], files)
+    partition_payload = retained.verify_indexed_file(evidence, paths["partition"], files)
+    authority_payload = retained.verify_indexed_file(evidence, paths["authority"], files)
+    expected = retained._task_expectation(task_index)
+    if any(
+        (
+            reference.get("population_sha256") != _sha(population_payload)
+            or reference.get("partition_sha256") != _sha(partition_payload)
+            or reference.get("authority_sha256") != _sha(authority_payload)
+        )
+        for reference in selected
+    ):
+        raise FactorialError("retained task bytes differ from admitted inventory")
     try:
-        raw = json.loads(gzip.decompress(payload))
-        population = decode_authority(raw["population"])
-    except (OSError, KeyError, ValueError, ScreenEvidenceError) as exc:
-        raise FactorialError("retained population cannot be reconstructed") from exc
-    if not isinstance(population, ResearchV2StudyDecisionPopulation):
-        raise FactorialError("retained population has the wrong authority type")
-    population.validate()
-    return population
+        inert_population, inert_decisions = retained._population(
+            population_payload, expected_count=expected.decision_count
+        )
+        partition = retained._parse_partition(partition_payload)
+        retained._validate_population_task(inert_population, inert_decisions, partition, expected)
+        envelope = json.loads(gzip.decompress(population_payload))
+        fields_by_name = _tagged_fields(
+            envelope["population"],
+            "adaptive_trading_bot.research.research_v2_admission.ResearchV2StudyDecisionPopulation",
+        )
+        tagged_decisions = _tagged_tuple(fields_by_name["decisions"], "decisions")
+        tagged_contexts = _tagged_tuple(fields_by_name["contexts"], "contexts")
+        decisions = {
+            int(reference["decision_index"]): cast(
+                DecisionJournalEntry[object, object],
+                decode_authority(tagged_decisions[int(reference["decision_index"])]),
+            )
+            for reference in selected
+        }
+        contexts = tuple(
+            cast(HistoricalStrategyContextObservation, decode_authority(item))
+            for item in tagged_contexts
+        )
+    except (
+        OSError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        retained.DiagnosisError,
+        ScreenEvidenceError,
+    ) as exc:
+        raise FactorialError("retained task cannot be reconstructed safely") from exc
+    for reference in selected:
+        index = int(reference["decision_index"])
+        decision = decisions[index]
+        decision.validate()
+        if str(reference["decision_identity_sha256"]) != _digest(str(decision.identity)):
+            raise FactorialError("retained admission changed decision identity")
+    if not contexts:
+        raise FactorialError("retained task has no causal contexts")
+    source_id = cast(SourceId, contexts[0].context.source_id)
+    symbol = contexts[0].context.symbol
+    return _RetainedTaskView(
+        task_index,
+        source_id,
+        symbol,
+        expected.family,
+        expected.context_start,
+        expected.follow_up_end,
+        decisions,
+        contexts,
+    )
 
 
 def _execute_unit(
@@ -341,26 +509,33 @@ def _execute_unit(
     inventory: tuple[dict[str, Any], ...],
     output: Path,
     *,
-    population: ResearchV2StudyDecisionPopulation | None = None,
+    task_view: _RetainedTaskView | None = None,
 ) -> tuple[str, dict[str, object]]:
     task = frozen_tasks()[task_index]
-    population = _load_population(repo, task_index) if population is None else population
     selected = tuple(row for row in inventory if row["task_id"] == task.task_id)
-    source = _BoundTaskExecutionSource(population)
+    if not selected:
+        payload = gzip.compress(b"", mtime=0)
+        digest = _immutable_write(output, payload)
+        return digest, {
+            "unit_id": f"{task.task_id}:{cell.value}",
+            "admission_count": 0,
+            "outcome_count": 0,
+            "elapsed_seconds": "0",
+            "artifact_sha256": digest,
+            "artifact_size_bytes": len(payload),
+        }
+    task_view = _load_task_view(repo, task_index, selected) if task_view is None else task_view
+    source = _RetainedTaskExecutionSource(task_view)
     runner = ResearchAllFillReplayRunner(source)
-    series = ExecutionSeries(
-        population.source_id, population.configuration.bounds.symbol, Timeframe.MINUTES_15
-    )
-    observed_times = tuple(item.context.observed_at for item in population.contexts)
-    candles = tuple(item.context.candle_15m for item in population.contexts)
+    series = ExecutionSeries(task_view.source_id, task_view.symbol, Timeframe.MINUTES_15)
+    observed_times = tuple(item.context.observed_at for item in task_view.contexts)
+    candles = tuple(item.context.candle_15m for item in task_view.contexts)
     started = time.monotonic()
     records: list[dict[str, object]] = []
     for reference in selected:
         index = int(reference["decision_index"])
-        decision = population.decisions[index]
-        if str(reference["decision_identity_sha256"]) != _digest(str(decision.identity)):
-            raise FactorialError("retained admission changed decision identity")
-        contexts = population.contexts[
+        decision = task_view.decisions[index]
+        contexts = task_view.contexts[
             causal_follow_up_slice(observed_times, decision.identity.observed_at)
         ]
         result = execute_factorial_cell(
@@ -370,8 +545,8 @@ def _execute_unit(
             series,
             cell,
             start=(
-                population.configuration.bounds.context_start
-                if population.configuration.family == "trend_pullback"
+                task_view.context_start
+                if task_view.family == "trend_pullback"
                 else decision.identity.observed_at
             ),
             end=decision_cutoff(decision.identity.observed_at),
@@ -395,40 +570,55 @@ def _verify_unit_artifact(
     inventory: tuple[dict[str, Any], ...],
     artifact: Path,
     *,
-    population: ResearchV2StudyDecisionPopulation | None = None,
+    task_view: _RetainedTaskView | None = None,
 ) -> tuple[dict[str, object], tuple[FactorialOutcome, ...]]:
     """Rebuild one new-cell artifact from its retained authorities without execution."""
 
     task_index = int(str(unit["task_id"]).split("-", 1)[0])
     task = frozen_tasks()[task_index]
-    population = _load_population(repo, task_index) if population is None else population
     selected = tuple(row for row in inventory if row["task_id"] == task.task_id)
+    artifact_payload = artifact.read_bytes()
+    artifact_sha256 = hashlib.sha256(artifact_payload).hexdigest()
     cell = FactorialCell(str(unit["cell"]))
     try:
         raw_records = tuple(
-            json.loads(line) for line in gzip.decompress(artifact.read_bytes()).splitlines() if line
+            json.loads(line) for line in gzip.decompress(artifact_payload).splitlines() if line
         )
     except (OSError, UnicodeError, ValueError) as exc:
         raise FactorialError("factorial result artifact is malformed") from exc
     if len(raw_records) != len(selected):
         raise FactorialError("factorial artifact coverage differs from frozen inventory")
-    candles = tuple(item.context.candle_15m for item in population.contexts)
+    if not selected:
+        return (
+            {
+                "unit_id": str(unit["unit_id"]),
+                "admission_count": 0,
+                "outcome_count": 0,
+                "artifact_sha256": artifact_sha256,
+                "artifact_size_bytes": len(artifact_payload),
+                "terminal_status_counts": {},
+            },
+            (),
+        )
+    task_view = _load_task_view(repo, task_index, selected) if task_view is None else task_view
+    candles = tuple(item.context.candle_15m for item in task_view.contexts)
     outcomes: list[FactorialOutcome] = []
     terminal: dict[str, int] = {}
     for reference, record in zip(selected, raw_records, strict=True):
         index = int(reference["decision_index"])
         result = recover_factorial_result(
             record,
-            decision=population.decisions[index],
+            decision=task_view.decisions[index],
             decision_index=index,
             cell=cell,
             candles=candles,
+            task_id=task.task_id,
+            expected_end=decision_cutoff(task_view.decisions[index].identity.observed_at),
         )
         outcome = outcome_from_factorial_result(
             result,
             task_id=task.task_id,
-            decision_identity_sha256=str(reference["decision_identity_sha256"]),
-            source_artifact_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            source_artifact_sha256=artifact_sha256,
         )
         outcomes.append(outcome)
         terminal[outcome.terminal_status] = terminal.get(outcome.terminal_status, 0) + 1
@@ -437,8 +627,8 @@ def _verify_unit_artifact(
             "unit_id": str(unit["unit_id"]),
             "admission_count": len(selected),
             "outcome_count": len(outcomes),
-            "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
-            "artifact_size_bytes": artifact.stat().st_size,
+            "artifact_sha256": artifact_sha256,
+            "artifact_size_bytes": len(artifact_payload),
             "terminal_status_counts": dict(sorted(terminal.items())),
         },
         tuple(outcomes),
@@ -464,18 +654,23 @@ def _verify_completed_prefix(
     summaries: list[dict[str, object]] = []
     outcomes: list[FactorialOutcome] = []
     cached_index: int | None = None
-    population: ResearchV2StudyDecisionPopulation | None = None
+    task_view: _RetainedTaskView | None = None
     for index, unit in enumerate(units[:end]):
         task_index = int(str(unit["task_id"]).split("-", 1)[0])
         if cached_index != task_index:
-            population = _load_population(repo, task_index)
+            selected = tuple(
+                row
+                for row in _inventory(plan["admitted_inventory"])
+                if row["task_id"] == str(unit["task_id"])
+            )
+            task_view = None if not selected else _load_task_view(repo, task_index, selected)
             cached_index = task_index
         summary, unit_outcomes = _verify_unit_artifact(
             repo,
             unit,
             _inventory(plan["admitted_inventory"]),
             ledger.directory / f"{index:02d}.factorial.jsonl.gz",
-            population=population,
+            task_view=task_view,
         )
         summaries.append(summary)
         outcomes.extend(unit_outcomes)
@@ -499,6 +694,9 @@ def _admitted_references(plan: dict[str, Any]) -> tuple[AdmittedDecisionReferenc
             population_sha256=str(row["population_sha256"]),
             partition_sha256=str(row["partition_sha256"]),
             authority_sha256=str(row["authority_sha256"]),
+            block=str(row.get("block", "")),
+            week=str(row.get("week", "")),
+            side=str(row.get("side", "")),
         )
         for row in _inventory(plan["admitted_inventory"])
     )
@@ -530,14 +728,19 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
     )
     summaries: list[dict[str, object]] = []
     cached_index: int | None = None
-    population: ResearchV2StudyDecisionPopulation | None = None
+    task_view: _RetainedTaskView | None = None
     execution_wall_started = time.monotonic()
     execution_cpu_started = time.process_time()
     with _no_network():
         for index, unit in enumerate(units[:stage_a_count]):
             task_index = int(str(unit["task_id"]).split("-", 1)[0])
             if cached_index != task_index:
-                population = _load_population(repo, task_index)
+                selected = tuple(
+                    row
+                    for row in _inventory(plan["admitted_inventory"])
+                    if row["task_id"] == str(unit["task_id"])
+                )
+                task_view = None if not selected else _load_task_view(repo, task_index, selected)
                 cached_index = task_index
             ledger.start(index)
             digest, summary = _execute_unit(
@@ -546,7 +749,7 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
                 FactorialCell(str(unit["cell"])),
                 _inventory(plan["admitted_inventory"]),
                 ledger.directory / f"{index:02d}.factorial.jsonl.gz",
-                population=population,
+                task_view=task_view,
             )
             ledger.complete(index, digest)
             summaries.append(summary)
@@ -586,11 +789,23 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
             "result_execution_cpu_seconds": str(execution_cpu_seconds),
             "verification_wall_seconds": str(verification_wall_seconds),
             "verification_cpu_seconds": str(verification_cpu_seconds),
-            "artifact_bytes": sum(int(row["artifact_size_bytes"]) for row in verified_units),
-            "admissions": sum(int(row["admission_count"]) for row in verified_units),
-            "new_outcomes": sum(int(row["outcome_count"]) for row in verified_units),
+            "artifact_bytes": sum(
+                _exact_int(row["artifact_size_bytes"], field="artifact size")
+                for row in verified_units
+            ),
+            "admissions": sum(
+                _exact_int(row["admission_count"], field="admission count")
+                for row in verified_units[::2]
+            ),
+            "new_outcomes": sum(
+                _exact_int(row["outcome_count"], field="outcome count") for row in verified_units
+            ),
             "matrix_records_with_imported_diagonals": (
-                len(imported_stage_a) + sum(int(row["outcome_count"]) for row in verified_units)
+                len(imported_stage_a)
+                + sum(
+                    _exact_int(row["outcome_count"], field="outcome count")
+                    for row in verified_units
+                )
             ),
         },
         "resource_note": (
@@ -626,20 +841,35 @@ def _continue_stage_b(
     units = _task_units(plan)
     if (
         state.run_uuid != grant.run_uuid
-        or state.executable_sha != actual_sha
+        or state.executable_sha != grant.executable_sha
+        or state.grant_kind != grant.kind
+        or state.protocol_sha256 != grant.protocol_sha256
+        or state.input_plan_sha256 != grant.input_plan_sha256
+        or state.admitted_inventory_sha256 != grant.admitted_inventory_sha256
+        or state.source_id != grant.source_id
+        or state.dataset_version != grant.dataset_version
+        or state.manifest_sha256 != grant.manifest_sha256
         or state.task_ids != tuple(str(unit["unit_id"]) for unit in units)
         or state.stage_a_count != sum(unit["stage"] == FactorialStage.A.value for unit in units)
     ):
         raise FactorialError("Stage B attempted with a different run or executable")
-    ledger.authorize_stage_b(_continuation(authorization_path.resolve(strict=True)), grant)
+    checkpoint, _ = _validate_stage_a_checkpoint(repo, plan, grant, ledger)
+    authorization = _continuation(authorization_path.resolve(strict=True))
+    authorization.validate(grant, str(checkpoint["checkpoint_sha256"]))
+    ledger.authorize_stage_b(authorization, grant)
     summaries: list[dict[str, object]] = []
     cached_index: int | None = None
-    population: ResearchV2StudyDecisionPopulation | None = None
+    task_view: _RetainedTaskView | None = None
     with _no_network():
         for index, unit in enumerate(units[state.stage_a_count :], start=state.stage_a_count):
             task_index = int(str(unit["task_id"]).split("-", 1)[0])
             if cached_index != task_index:
-                population = _load_population(repo, task_index)
+                selected = tuple(
+                    row
+                    for row in _inventory(plan["admitted_inventory"])
+                    if row["task_id"] == str(unit["task_id"])
+                )
+                task_view = None if not selected else _load_task_view(repo, task_index, selected)
                 cached_index = task_index
             ledger.start(index)
             digest, summary = _execute_unit(
@@ -648,7 +878,7 @@ def _continue_stage_b(
                 FactorialCell(str(unit["cell"])),
                 _inventory(plan["admitted_inventory"]),
                 ledger.directory / f"{index:02d}.factorial.jsonl.gz",
-                population=population,
+                task_view=task_view,
             )
             ledger.complete(index, digest)
             summaries.append(summary)
@@ -659,15 +889,14 @@ def _continue_stage_b(
     }
 
 
-def _verify_stage_a(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
-    """Read-only verification of the deliberate Stage-A pause boundary."""
+def _validate_stage_a_checkpoint(
+    repo: Path,
+    plan: dict[str, Any],
+    grant: FactorialExecutionGrant,
+    ledger: FactorialLedgerStore,
+) -> tuple[dict[str, Any], tuple[dict[str, object], ...]]:
+    """Read and reconstruct the exact persisted Stage-A pause evidence."""
 
-    repo = repo.resolve(strict=True)
-    actual_sha = _clean_sha(repo)
-    plan = data_only_factorial_plan(repo)
-    grant = _grant(grant_path.resolve(strict=True))
-    grant.validate(actual_sha=actual_sha)
-    ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
     state = ledger.load()
     units = _task_units(plan)
     expected_ids = tuple(str(unit["unit_id"]) for unit in units)
@@ -683,7 +912,14 @@ def _verify_stage_a(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str,
     if (
         state.run_state is not FactorialRunState.PAUSED_AFTER_STAGE_A
         or state.run_uuid != grant.run_uuid
-        or state.executable_sha != actual_sha
+        or state.executable_sha != grant.executable_sha
+        or state.grant_kind != grant.kind
+        or state.protocol_sha256 != grant.protocol_sha256
+        or state.input_plan_sha256 != grant.input_plan_sha256
+        or state.admitted_inventory_sha256 != grant.admitted_inventory_sha256
+        or state.source_id != grant.source_id
+        or state.dataset_version != grant.dataset_version
+        or state.manifest_sha256 != grant.manifest_sha256
         or state.task_ids != expected_ids
         or state.stage_a_count != sum(unit["stage"] == FactorialStage.A.value for unit in units)
         or grant.input_plan_sha256 != plan["input_plan_sha256"]
@@ -691,19 +927,101 @@ def _verify_stage_a(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str,
         or asserted != _digest(unsigned)
         or asserted != state.checkpoint_sha256
         or checkpoint_payload != _canonical(checkpoint)
+        or checkpoint.get("run_uuid") != grant.run_uuid
+        or checkpoint.get("executable_sha") != grant.executable_sha
+        or checkpoint.get("input_plan_sha256") != grant.input_plan_sha256
+        or checkpoint.get("admitted_inventory_sha256") != grant.admitted_inventory_sha256
+        or checkpoint.get("stage") != "A"
+        or checkpoint.get("technically_complete") is not True
     ):
         raise FactorialError("Stage A pause does not bind the frozen experiment")
-    started = time.monotonic()
     verified, _ = _verify_completed_prefix(repo, plan, ledger, end=state.stage_a_count)
+    if tuple(checkpoint.get("verified_units", ())) != verified:
+        raise FactorialError("Stage A checkpoint differs from reconstructed prefix")
+    observations = checkpoint.get("resource_observations")
+    if not isinstance(observations, dict) or (
+        observations.get("admissions") != 48
+        or observations.get("new_outcomes") != 96
+        or observations.get("matrix_records_with_imported_diagonals") != 192
+    ):
+        raise FactorialError("Stage A checkpoint denominators are contradictory")
+    return cast(dict[str, Any], checkpoint), verified
+
+
+def _verify_stage_a(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
+    """Read-only verification of the deliberate Stage-A pause boundary."""
+
+    repo = repo.resolve(strict=True)
+    actual_sha = _clean_sha(repo)
+    plan = data_only_factorial_plan(repo)
+    grant = _grant(grant_path.resolve(strict=True))
+    grant.validate(actual_sha=actual_sha)
+    ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
+    started = time.monotonic()
+    checkpoint, verified = _validate_stage_a_checkpoint(repo, plan, grant, ledger)
     return {
         "status": "STAGE_A_VERIFIED_PAUSE; ARCHITECT_AUTHORIZATION_REQUIRED_FOR_STAGE_B",
         "run_uuid": grant.run_uuid,
-        "checkpoint_sha256": asserted,
+        "checkpoint_sha256": checkpoint["checkpoint_sha256"],
         "verified_units": verified,
         "verification_wall_seconds": str(time.monotonic() - started),
         "economic_continuation_gate": False,
         "ten_member_classification": None,
     }
+
+
+def _build_final_projection(
+    repo: Path,
+    plan: dict[str, Any],
+    grant: FactorialExecutionGrant,
+    ledger: FactorialLedgerStore,
+) -> dict[str, object]:
+    """Reconstruct the final report read-only from precise retained artifacts."""
+
+    state = ledger.load()
+    units = _task_units(plan)
+    if (
+        state.run_uuid != grant.run_uuid
+        or state.executable_sha != grant.executable_sha
+        or state.grant_kind != grant.kind
+        or state.input_plan_sha256 != grant.input_plan_sha256
+        or state.admitted_inventory_sha256 != grant.admitted_inventory_sha256
+        or state.source_id != grant.source_id
+        or state.dataset_version != grant.dataset_version
+        or state.manifest_sha256 != grant.manifest_sha256
+        or state.task_ids != tuple(str(unit["unit_id"]) for unit in units)
+        or any(value != "COMPLETED" for value in state.task_states)
+        or state.checkpoint_sha256 is None
+    ):
+        raise FactorialError("full factorial run is not eligible for final verification")
+    verified_units, new_outcomes = _verify_completed_prefix(repo, plan, ledger, end=len(units))
+    imported_outcomes = tuple(
+        imported_outcome_from_record(row) for row in _inventory(plan["imported_diagonal_inventory"])
+    )
+    projection = project_factorial_matrix(
+        _admitted_references(plan),
+        (*imported_outcomes, *new_outcomes),
+        complete=True,
+    )
+    projection["run_uuid"] = grant.run_uuid
+    projection["executable_sha"] = grant.executable_sha
+    projection["input_kind"] = grant.kind
+    projection["input_plan_sha256"] = plan["input_plan_sha256"]
+    projection["admitted_inventory_sha256"] = plan["admitted_inventory_sha256"]
+    projection["imported_diagonal_inventory_sha256"] = plan["imported_diagonal_inventory_sha256"]
+    projection["new_artifact_identities"] = tuple(
+        {
+            "unit_id": row["unit_id"],
+            "artifact_sha256": row["artifact_sha256"],
+            "artifact_size_bytes": row["artifact_size_bytes"],
+        }
+        for row in verified_units
+    )
+    projection["verified_units"] = verified_units
+    projection["projection_sha256"] = _digest(
+        {key: value for key, value in projection.items() if key != "projection_sha256"}
+    )
+    return projection
 
 
 def _finalize_verified_run(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
@@ -720,36 +1038,46 @@ def _finalize_verified_run(repo: Path, grant_path: Path, ledger_dir: Path) -> di
     ):
         raise FactorialError("final verification differs from frozen preflight identities")
     ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
-    state = ledger.load()
-    units = _task_units(plan)
-    if (
-        state.run_state is not FactorialRunState.ACTIVE
-        or state.run_uuid != grant.run_uuid
-        or state.executable_sha != actual_sha
-        or state.task_ids != tuple(str(unit["unit_id"]) for unit in units)
-        or any(value != "COMPLETED" for value in state.task_states)
-        or state.checkpoint_sha256 is None
-    ):
-        raise FactorialError("full factorial run is not eligible for final verification")
-    verified_units, new_outcomes = _verify_completed_prefix(repo, plan, ledger, end=len(units))
-    imported_outcomes = tuple(
-        imported_outcome_from_record(row) for row in _inventory(plan["imported_diagonal_inventory"])
-    )
-    projection = project_factorial_matrix(
-        _admitted_references(plan),
-        (*imported_outcomes, *new_outcomes),
-        complete=True,
-    )
-    projection["run_uuid"] = grant.run_uuid
-    projection["input_plan_sha256"] = plan["input_plan_sha256"]
-    projection["verified_units"] = verified_units
-    projection["projection_sha256"] = _digest(
-        {key: value for key, value in projection.items() if key != "projection_sha256"}
-    )
+    if ledger.load().run_state is not FactorialRunState.ACTIVE:
+        raise FactorialError("factorial run is not eligible for finalization")
+    projection = _build_final_projection(repo, plan, grant, ledger)
     payload = _canonical(projection)
     _immutable_write(ledger.directory / "projection.json", payload)
     ledger.finalize(str(projection["projection_sha256"]))
     return projection
+
+
+def _verify_finalized_run(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
+    """Verify a finalized run without writing, replaying entry populations, or resealing."""
+
+    repo = repo.resolve(strict=True)
+    actual_sha = _clean_sha(repo)
+    plan = data_only_factorial_plan(repo)
+    grant = _grant(grant_path.resolve(strict=True))
+    grant.validate(actual_sha=actual_sha)
+    ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
+    state = ledger.load()
+    if state.run_state is not FactorialRunState.FINALIZED:
+        raise FactorialError("read-only final verification requires a finalized ledger")
+    expected = _build_final_projection(repo, plan, grant, ledger)
+    path = ledger.directory / "projection.json"
+    try:
+        payload = path.read_bytes()
+        stored = json.loads(payload)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise FactorialError("final projection is unavailable or malformed") from exc
+    if (
+        payload != _canonical(stored)
+        or stored != expected
+        or stored.get("projection_sha256") != state.final_projection_sha256
+    ):
+        raise FactorialError("final projection differs from reconstructed authority")
+    return {
+        "status": "FINALIZED_RUN_VERIFIED_READ_ONLY",
+        "run_uuid": grant.run_uuid,
+        "projection_sha256": state.final_projection_sha256,
+        "record_count": stored.get("record_count"),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -775,6 +1103,10 @@ def main(argv: list[str] | None = None) -> int:
     finalize.add_argument("--repo", required=True, type=Path)
     finalize.add_argument("--grant", required=True, type=Path)
     finalize.add_argument("--ledger", required=True, type=Path)
+    verify_finalized = commands.add_parser("verify-finalized")
+    verify_finalized.add_argument("--repo", required=True, type=Path)
+    verify_finalized.add_argument("--grant", required=True, type=Path)
+    verify_finalized.add_argument("--ledger", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.command == "preflight":
         result = data_only_factorial_plan(args.repo)
@@ -786,8 +1118,10 @@ def main(argv: list[str] | None = None) -> int:
         result = _continue_stage_b(args.repo, args.grant, args.authorization, args.ledger)
     elif args.command == "verify-stage-a":
         result = _verify_stage_a(args.repo, args.grant, args.ledger)
-    else:
+    elif args.command == "finalize":
         result = _finalize_verified_run(args.repo, args.grant, args.ledger)
+    else:
+        result = _verify_finalized_run(args.repo, args.grant, args.ledger)
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
 

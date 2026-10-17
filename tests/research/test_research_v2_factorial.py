@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import runpy
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from scripts.research import research_v2_execution_factorial as factorial_cli
 
 from adaptive_trading_bot.backtest import ExecutionCostConfiguration, ExecutionSeries
 from adaptive_trading_bot.domain import Candle, Timeframe
@@ -25,7 +27,7 @@ from adaptive_trading_bot.research.paired_exit_replay import (
     HistoricalStrategyContextObservation,
 )
 from adaptive_trading_bot.research.research_v2_admission import PANEL
-from adaptive_trading_bot.research.research_v2_exploratory_screen import frozen_tasks
+from adaptive_trading_bot.research.research_v2_exploratory_screen import _digest, frozen_tasks
 from adaptive_trading_bot.research.research_v2_factorial import (
     EXPECTED_ADMISSIONS,
     EXPECTED_MATRIX_RECORDS,
@@ -117,17 +119,44 @@ def test_missing_cells_use_shared_all_fill_authorities_for_long_and_short(
         candles=candles,
     )
     assert restored == result
+    if len(result.branches) == 2:
+        with pytest.raises(FactorialError, match="paired branches"):
+            replace(result, branches=(result.branches[-1],))
+    other_cell = FactorialCell.C0L1 if cell is FactorialCell.C1L0 else FactorialCell.C1L0
+    relabeled = dict(record)
+    relabeled["cell"] = other_cell.value
+    unsigned = dict(relabeled)
+    unsigned.pop("record_sha256")
+    relabeled["record_sha256"] = _digest(unsigned)
+    with pytest.raises(FactorialError, match="task/cell/cutoff"):
+        recover_factorial_result(
+            relabeled,
+            decision=decision,
+            decision_index=0,
+            cell=other_cell,
+            candles=candles,
+            task_id=frozen_tasks()[0].task_id,
+            expected_end=candles[-1].close_time,
+        )
+    with pytest.raises(FactorialError, match="task/cell/cutoff"):
+        recover_factorial_result(
+            record,
+            decision=decision,
+            decision_index=0,
+            cell=cell,
+            candles=candles,
+            task_id=frozen_tasks()[0].task_id,
+            expected_end=candles[-1].close_time + timedelta(minutes=15),
+        )
     outcome = outcome_from_factorial_result(
         restored,
         task_id=frozen_tasks()[0].task_id,
-        decision_identity_sha256="1" * 64,
         source_artifact_sha256="2" * 64,
     )
     verify_outcome_against_factorial_result(
         outcome,
         restored,
         task_id=frozen_tasks()[0].task_id,
-        decision_identity_sha256="1" * 64,
         source_artifact_sha256="2" * 64,
     )
     with pytest.raises(FactorialError, match="compact factorial row"):
@@ -135,7 +164,6 @@ def test_missing_cells_use_shared_all_fill_authorities_for_long_and_short(
             replace(outcome, incurred_fees_quote=outcome.incurred_fees_quote + Decimal("1")),
             restored,
             task_id=frozen_tasks()[0].task_id,
-            decision_identity_sha256="1" * 64,
             source_artifact_sha256="2" * 64,
         )
 
@@ -346,6 +374,31 @@ def test_completed_ledger_artifact_remains_required_for_pause(tmp_path: Path) ->
         store.load()
 
 
+def test_stage_b_checkpoint_file_is_required_before_continuation(tmp_path: Path) -> None:
+    grant = _grant(_inventory())
+    store = FactorialLedgerStore.create(
+        tmp_path,
+        grant,
+        actual_sha="d" * 40,
+        task_ids=("a:C1L0", "b:C1L0"),
+        stage_a_count=1,
+        synthetic=True,
+    )
+    store.start(0)
+    artifact = store.directory / "00.factorial.jsonl.gz"
+    artifact.write_bytes(gzip.compress(b"", mtime=0))
+    store.complete(0, hashlib.sha256(artifact.read_bytes()).hexdigest())
+    store.pause_after_stage_a("1" * 64)
+    plan: dict[str, object] = {
+        "new_task_cell_inventory": (
+            {"unit_id": "a:C1L0", "stage": "A", "task_id": "a", "cell": "C1L0"},
+            {"unit_id": "b:C1L0", "stage": "B", "task_id": "b", "cell": "C1L0"},
+        )
+    }
+    with pytest.raises(FactorialError, match="checkpoint is unavailable"):
+        factorial_cli._validate_stage_a_checkpoint(Path(__file__).parents[2], plan, grant, store)
+
+
 def test_grant_rejects_changed_code_protocol_inputs_and_accepted_source_relabeling() -> None:
     inventory = _inventory()
     grant = _grant(inventory)
@@ -398,6 +451,11 @@ def test_partial_projection_is_not_a_ten_member_classification_and_decimal_is_lo
         "PARTIAL_TECHNICAL_CHECKPOINT_NO_TEN_MEMBER_CLASSIFICATION"
     )
     assert projection["complete_quadruple_count"] == 1
+    decision_rows = cast(tuple[dict[str, object], ...], projection["decision_by_four_cell"])
+    assert len(decision_rows) == EXPECTED_ADMISSIONS
+    assert len(cast(tuple[object, ...], decision_rows[0]["cells"])) == 4
+    summaries = cast(dict[str, object], projection["descriptive_summaries"])
+    assert set(summaries) == {"full", "original_mask"}
     contrast = cast(tuple[dict[str, object], ...], projection["contrasts"])[0]
     assert contrast == {
         "decision_identity_sha256": first.decision_identity_sha256,
@@ -443,6 +501,39 @@ def test_positive_latency_without_a_later_open_is_entry_unfilled() -> None:
     )
     assert result.status.value == "ENTRY_UNFILLED"
     assert result.branches == ()
+
+
+def test_filled_factorial_result_cannot_be_resealed_as_entry_unfilled() -> None:
+    decision = cast(DecisionJournalEntry[object, object], _decision(outcome="cleared"))
+    series = ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15)
+    filled_candles = cast(tuple[Candle, ...], _execution_path(100, 110))
+    filled = execute_factorial_cell(
+        ResearchAllFillReplayRunner(_Source(filled_candles)),
+        decision,
+        (),
+        series,
+        FactorialCell.C0L1,
+        start=NOW,
+        end=filled_candles[-1].close_time,
+    )
+    unfilled_candles = cast(tuple[Candle, ...], _execution_path(100))
+    unfilled = execute_factorial_cell(
+        ResearchAllFillReplayRunner(_Source(unfilled_candles)),
+        decision,
+        (),
+        series,
+        FactorialCell.C0L1,
+        start=NOW,
+        end=unfilled_candles[-1].close_time,
+    )
+    assert unfilled.entry_unfilled is not None
+    with pytest.raises(FactorialError, match="unfilled entry contradicts"):
+        replace(
+            filled,
+            status=unfilled.status,
+            entry_unfilled=unfilled.entry_unfilled,
+            branches=(),
+        )
 
 
 def test_imported_diagonal_record_is_lossless_and_cannot_claim_new_cell() -> None:
@@ -498,3 +589,41 @@ def test_locked_data_only_preflight_artifact_matches_manifest() -> None:
     assert plan["input_plan_sha256"] == manifest["input_plan_sha256"]
     assert plan["counts"]["stages"]["A"]["admission_count"] == 48
     assert plan["counts"]["stages"]["B"]["admission_count"] == 198
+
+
+def test_retained_loader_never_constructs_full_entry_population(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = json.loads((PREFLIGHT_ROOT / "input-plan.json").read_bytes())
+    first = cast(dict[str, object], plan["admitted_inventory"][0])
+
+    def prohibited(*args: object, **kwargs: object) -> None:
+        raise AssertionError("full entry population evaluation is prohibited")
+
+    monkeypatch.setattr(
+        "adaptive_trading_bot.research.research_v2_admission."
+        "ResearchV2StudyDecisionPopulation._validate_population_facts",
+        prohibited,
+    )
+    view = factorial_cli._load_task_view(Path(__file__).parents[2], 0, (first,))
+    decision_index = first["decision_index"]
+    assert type(decision_index) is int
+    assert tuple(view.decisions) == (decision_index,)
+    assert view.contexts
+
+
+def test_zero_admission_unit_writes_empty_artifact_without_task_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        factorial_cli,
+        "_load_task_view",
+        lambda *args, **kwargs: pytest.fail("zero-admission task reconstructed input"),
+    )
+    output = tmp_path / "empty.jsonl.gz"
+    digest, summary = factorial_cli._execute_unit(
+        Path(__file__).parents[2], 2, FactorialCell.C1L0, (), output
+    )
+    assert gzip.decompress(output.read_bytes()) == b""
+    assert digest == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert summary["outcome_count"] == 0

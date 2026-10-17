@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from hmac import compare_digest
-from typing import Any
+from typing import Any, NoReturn
 
 from adaptive_trading_bot.backtest import (
     AccountingFillBatch,
@@ -331,6 +331,22 @@ class AllFillReplayResult:
             or self.scenario is not _scenario(self.costs)
         ):
             raise AllFillReplayError("all-fill identity or range differs from authority")
+        validate_shared_all_fill_relations(
+            decision=self.decision,
+            family=self.family,
+            series=self.series,
+            costs=self.costs,
+            start=self.start,
+            end=self.end,
+            status=self.status,
+            entry_intent=self.entry_intent,
+            entry_unfilled=self.entry_unfilled,
+            branches=self.branches,
+            execution_snapshot=self.execution_snapshot,
+            legacy_replay=self.legacy_replay,
+            error_type=AllFillReplayError,
+        )
+        return
         authorization = EntryOrderIntentAuthorizer().authorize(self.decision)
         if authorization.status is OrderIntentAuthorizationStatus.REJECTED_INCONSISTENT:
             raise AllFillReplayError("decision chain is inconsistent")
@@ -538,12 +554,217 @@ class AllFillReplayResult:
                     () if branch.exit_unfilled is None else (branch.exit_unfilled,)
                 ):
                     raise AllFillReplayError("recovery differs from bound execution snapshot")
-            if len(self.branches) == 2 and (
-                self.branches[0].recovery != self.branches[1].recovery
-                or self.branches[0].exit_fill != self.branches[1].exit_fill
-                or self.branches[0].exit_unfilled != self.branches[1].exit_unfilled
+
+
+def validate_shared_all_fill_relations(
+    *,
+    decision: DecisionJournalEntry[object, object],
+    family: AllFillFamily,
+    series: ExecutionSeries,
+    costs: ExecutionCostConfiguration,
+    start: datetime,
+    end: datetime,
+    status: AllFillStatus,
+    entry_intent: EntryIntentProvenance | None,
+    entry_unfilled: UnfilledOrder | None,
+    branches: tuple[AllFillBranch, ...],
+    execution_snapshot: tuple[Candle, ...],
+    legacy_replay: (
+        PairedTrendPullbackExitReplayResult
+        | BreakoutRetestReplayResult
+        | RangeMeanReversionReplayResult
+        | None
+    ),
+    error_type: type[ValueError],
+) -> None:
+    """Validate relations shared by legacy and factorial all-fill envelopes.
+
+    Schema/scenario seals stay owned by their envelopes.  This seam owns the
+    replay-to-entry, snapshot, branch topology, recovery and accounting graph.
+    """
+
+    def fail(message: str) -> NoReturn:
+        raise error_type(message)
+
+    authorization = EntryOrderIntentAuthorizer().authorize(decision)
+    if authorization.status is OrderIntentAuthorizationStatus.REJECTED_INCONSISTENT:
+        fail("all-fill decision chain is inconsistent")
+    if authorization.status is OrderIntentAuthorizationStatus.NO_INTENT:
+        if entry_intent is not None or entry_unfilled is not None or branches or legacy_replay:
+            fail("non-admitted all-fill result contains replay evidence")
+        if status is not _non_admitted_status(decision):
+            fail("non-admitted all-fill terminal status contradicts decision")
+        return
+    if authorization.intent is None or entry_intent is None or legacy_replay is None:
+        fail("admitted all-fill result lacks authority")
+    assert authorization.intent is not None
+    assert entry_intent is not None
+    assert legacy_replay is not None
+    if entry_intent != EntryIntentProvenance.from_authorized_intent(authorization.intent):
+        fail("all-fill entry provenance differs from authorizer")
+    expected_type = {
+        AllFillFamily.TREND_PULLBACK: PairedTrendPullbackExitReplayResult,
+        AllFillFamily.BREAKOUT_RETEST: BreakoutRetestReplayResult,
+        AllFillFamily.RANGE_MEAN_REVERSION: RangeMeanReversionReplayResult,
+    }[family]
+    if not isinstance(legacy_replay, expected_type):
+        fail("all-fill legacy replay family differs from decision")
+    legacy_replay.validate()
+    legacy_identity = (
+        legacy_replay.originating_decision_identity
+        if isinstance(legacy_replay, PairedTrendPullbackExitReplayResult)
+        else legacy_replay.decision_identity
+    )
+    if (
+        legacy_replay.entry_intent != entry_intent
+        or legacy_identity != decision.identity
+        or legacy_replay.execution_series != series
+        or legacy_replay.execution_costs != costs
+        or legacy_replay.end != end
+        or (
+            isinstance(legacy_replay, PairedTrendPullbackExitReplayResult)
+            and legacy_replay.start != start
+        )
+        or (
+            not isinstance(legacy_replay, PairedTrendPullbackExitReplayResult)
+            and start != decision.identity.observed_at
+        )
+    ):
+        fail("all-fill legacy replay entry provenance mismatch")
+    source_start = entry_source_start(
+        decision_at=entry_intent.decision_identity.observed_at,
+        authorized_at=entry_intent.authorized_at,
+        requested_start=(
+            start if family is AllFillFamily.TREND_PULLBACK else decision.identity.observed_at
+        ),
+        end=end,
+    )
+    bound = _BoundExecutionCandleSource(series, source_start, end, execution_snapshot)
+    entry_request = (
+        legacy_replay.entry_order
+        if isinstance(legacy_replay, PairedTrendPullbackExitReplayResult)
+        else legacy_replay.entry_request
+    )
+    entry_execution = BacktestExecutionSimulator(bound).run(
+        series, costs, (entry_request,), start=source_start, end=end
+    )
+    if entry_execution.fills != (
+        () if legacy_replay.entry_fill is None else (legacy_replay.entry_fill,)
+    ):
+        fail("all-fill entry outcome differs from bound execution snapshot")
+    if entry_execution.unfilled_orders != (
+        () if legacy_replay.entry_unfilled is None else (legacy_replay.entry_unfilled,)
+    ):
+        fail("all-fill entry outcome differs from bound execution snapshot")
+    if entry_unfilled is not None:
+        if (
+            status is not AllFillStatus.ENTRY_UNFILLED
+            or branches
+            or entry_unfilled != legacy_replay.entry_unfilled
+            or legacy_replay.entry_fill is not None
+        ):
+            fail("all-fill unfilled entry contradicts legacy replay")
+        return
+    if (
+        legacy_replay.entry_fill is None
+        or legacy_replay.entry_unfilled is not None
+        or not branches
+        or status is AllFillStatus.ENTRY_UNFILLED
+    ):
+        fail("all-fill filled entry lacks accounted branches")
+    if family is AllFillFamily.TREND_PULLBACK:
+        if tuple(branch.label for branch in branches) != (
+            ExitReplayBranchPolicy.HOLD_ONLY.value,
+            ExitReplayBranchPolicy.EMA50_THESIS_EXIT.value,
+        ):
+            fail("all-fill paired branches are incomplete")
+    elif len(branches) != 1:
+        fail("all-fill single-family result has multiple branches")
+    if status is not branches[-1].status:
+        fail("all-fill primary terminal status differs from candidate branch")
+    if len({branch.entry_fill for branch in branches}) != 1:
+        fail("all-fill paired branches have different entry fills")
+    for branch in branches:
+        branch.validate()
+        if (
+            branch.approved_risk_quote != entry_intent.approved_risk_quote
+            or branch.entry_fill != legacy_replay.entry_fill
+            or branch.final_position.observed_at != end
+        ):
+            fail("all-fill branch differs from entry/accounting authority")
+    if legacy_replay.entry_fill_invalidation is None:
+        ordinary = (
+            (legacy_replay.baseline, legacy_replay.ema50_candidate)
+            if isinstance(legacy_replay, PairedTrendPullbackExitReplayResult)
+            else (legacy_replay,)
+        )
+        for branch, source_branch in zip(branches, ordinary, strict=True):
+            if (
+                source_branch is None
+                or branch.recovery is not None
+                or branch.status
+                is not (
+                    AllFillStatus.ORDINARY_CLOSED
+                    if source_branch.position_closed
+                    else AllFillStatus.ORDINARY_OPEN
+                )
+                or branch.exit_request != source_branch.exit_request
+                or branch.exit_fill != source_branch.exit_fill
+                or branch.exit_unfilled != source_branch.exit_unfilled
+                or branch.accounting_events != source_branch.accounting_events
+                or branch.final_position != source_branch.final_position
             ):
-                raise AllFillReplayError("paired recovery execution differs")
+                fail("all-fill ordinary branch differs from legacy authority")
+            if branch.exit_request is not None:
+                exit_execution = BacktestExecutionSimulator(bound).run(
+                    series, costs, (branch.exit_request,), start=source_start, end=end
+                )
+                if exit_execution.fills != (
+                    () if branch.exit_fill is None else (branch.exit_fill,)
+                ) or exit_execution.unfilled_orders != (
+                    () if branch.exit_unfilled is None else (branch.exit_unfilled,)
+                ):
+                    fail("all-fill ordinary exit differs from bound snapshot")
+    elif any(branch.recovery is None for branch in branches):
+        fail("all-fill invalidated entry lacks accounted recovery")
+    else:
+        invalidation = legacy_replay.entry_fill_invalidation
+        if isinstance(invalidation, RangeEntryInvalidationAudit):
+            expected_reasons = tuple(reason.value for reason in invalidation.reasons)
+        elif isinstance(invalidation, EntryFillInvalidationAudit):
+            expected_reasons = (invalidation.reason.value,)
+        else:
+            fail("all-fill invalidated replay has no known geometry audit")
+        expected_midpoint = (
+            legacy_replay.entry_rule_audit.midpoint
+            if isinstance(legacy_replay, RangeMeanReversionReplayResult)
+            else None
+        )
+        for branch in branches:
+            recovery = branch.recovery
+            if recovery is None or (
+                recovery.decision_identity != decision.identity
+                or recovery.entry_intent != entry_intent
+                or recovery.sealed_midpoint != expected_midpoint
+                or recovery.reasons != expected_reasons
+            ):
+                fail("all-fill recovery geometry differs from sealed entry audit")
+            assert recovery is not None
+            recovery_execution = BacktestExecutionSimulator(
+                _AfterDetectionSource(bound, recovery.detected_at)
+            ).run(series, costs, (recovery.request,), start=source_start, end=end)
+            if recovery_execution.fills != (
+                () if branch.exit_fill is None else (branch.exit_fill,)
+            ) or recovery_execution.unfilled_orders != (
+                () if branch.exit_unfilled is None else (branch.exit_unfilled,)
+            ):
+                fail("all-fill recovery differs from bound execution snapshot")
+        if len(branches) == 2 and (
+            branches[0].recovery != branches[1].recovery
+            or branches[0].exit_fill != branches[1].exit_fill
+            or branches[0].exit_unfilled != branches[1].exit_unfilled
+        ):
+            fail("all-fill paired recovery execution differs")
 
 
 def _family(decision: DecisionJournalEntry[object, object]) -> AllFillFamily:
