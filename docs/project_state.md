@@ -88,7 +88,12 @@ Issue #191 preparation now uses `RESEARCH_V2_EXECUTION_FACTORIAL_V2` and
 freezes the same 246 admissions into four fixed cells. Its bounded retained
 loader does not reconstruct or re-evaluate the full entry population; shared
 all-fill validation, persisted checkpoint verification and read-only finalized
-verification remain mandatory. Its later
+verification remain mandatory. The final inert V3 preflight separates raw
+BUY/SELL order provenance from LONG/SHORT position direction, preserves the
+nine-week reporting domain and complete grouped-contrast denominators, and is
+bound to input plan
+`aa1df44692d8cad8aa966c2e23c0c7d3772de8a829451c8a76f0bee89f83c792`.
+Its later
 execution is staged: BTC/ETH first, followed by a mandatory verified technical
 checkpoint and pause; the remaining eight assets require a separate architect
 authorization on the same frozen executable/protocol/UUID/ledger. Continuation

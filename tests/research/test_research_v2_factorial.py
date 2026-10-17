@@ -71,6 +71,9 @@ _current_context = _HELPERS["_current_context"]
 PREFLIGHT_ROOT = (
     Path(__file__).parents[2] / "data/research_evidence/issue-191-factorial-preflight-v2-4a1248c"
 )
+PREFLIGHT_V3_ROOT = (
+    Path(__file__).parents[2] / "data/research_evidence/issue-191-factorial-preflight-v3-8b84a65"
+)
 
 
 class _Source:
@@ -666,6 +669,37 @@ def test_locked_data_only_preflight_artifact_matches_manifest() -> None:
     assert manifest["preparation_source_commit"] == ("4a1248c7cddb857f64fe02c5d8f60ad63924f377")
     assert plan["counts"]["stages"]["A"]["admission_count"] == 48
     assert plan["counts"]["stages"]["B"]["admission_count"] == 198
+
+
+def test_final_locked_data_only_preflight_artifact_matches_manifest() -> None:
+    manifest_payload = (PREFLIGHT_V3_ROOT / "manifest.json").read_bytes()
+    manifest = json.loads(manifest_payload)
+    plan_payload = (PREFLIGHT_V3_ROOT / "input-plan.json").read_bytes()
+    assert hashlib.sha256(manifest_payload).hexdigest() == (
+        "9eab0437dbcd3f776d25b6e2d0a46064b54ce2a7c48a796bf791dbc7f0473581"
+    )
+    assert len(plan_payload) == manifest["artifact"]["size_bytes"] == 1157695
+    assert (
+        hashlib.sha256(plan_payload).hexdigest()
+        == manifest["artifact"]["sha256"]
+        == "e9fecb2308e88900412e977fa55bfa266f2f1494c67359cc2f2aac27db5bec47"
+    )
+    plan = json.loads(plan_payload)
+    assert plan["status"] == "DATA_ONLY_PREPARATION; NO_EXECUTION_GRANT"
+    assert plan["protocol_sha256"] == PROTOCOL_SHA256
+    assert (
+        plan["input_plan_sha256"]
+        == manifest["input_plan_sha256"]
+        == ("aa1df44692d8cad8aa966c2e23c0c7d3772de8a829451c8a76f0bee89f83c792")
+    )
+    assert manifest["preparation_source_commit"] == ("8b84a65bbc4a522370419fcad1ad78e378b81374")
+    assert plan["counts"]["stages"]["A"]["admission_count"] == 48
+    assert plan["counts"]["stages"]["B"]["admission_count"] == 198
+    assert {row["side"] for row in plan["admitted_inventory"]} == {"LONG", "SHORT"}
+    assert {row["order_side"] for row in plan["admitted_inventory"]} == {
+        "BUY",
+        "SELL",
+    }
 
 
 def test_retained_loader_never_constructs_full_entry_population(

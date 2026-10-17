@@ -69,22 +69,26 @@ entry strategy/Risk/Safety population evaluation. The two new cells share one
 task-level parse; zero-admission tasks emit an explicit empty artifact without
 constructing a population.
 
-The corrected V2 data-only preflight report is
-`data/research_evidence/issue-191-factorial-preflight-v2-4a1248c/input-plan.json`
-(917,964 bytes; SHA-256
-`038ad51b127039f3a62d1b5d8c0f5e72eb5451359b5881964bd1d09e8b7d7334`).
-Its immutable identities are:
+The final corrected V3 data-only preflight report is
+`data/research_evidence/issue-191-factorial-preflight-v3-8b84a65/input-plan.json`
+(1,157,695 bytes; SHA-256
+`e9fecb2308e88900412e977fa55bfa266f2f1494c67359cc2f2aac27db5bec47`).
+It preserves raw BUY/SELL entry-order provenance separately while reporting
+validated LONG/SHORT position direction, and retains quantity/reference/stop,
+ordinary-exit and accounting facts needed by every four-cell row. Its
+immutable identities are:
 
-- input plan `963c6007218e8e6561a31bbde8ac9d595e04c416ea334e879c302768962d19df`;
-- admitted inventory `0f9731c1b6aec7a85b9048a35460a942692f203d17505e98027c9295e538d24c`;
+- input plan `aa1df44692d8cad8aa966c2e23c0c7d3772de8a829451c8a76f0bee89f83c792`;
+- admitted inventory `f9643e5f84ed131c9ee7e704e36cd00c2b0c413876cffd297988f3a4730c5968`;
 - original mask `21fd62428c2d76d0f6800dfad30c4396c5096e660b186b81a8bcb201a11c12d7`;
-- imported diagonals `bdb180fdd7cd2e0caac3fd2e540fb87dc1ebfed211e49431b6f8f82757a33099`.
+- imported diagonals `2324898ffa07675a4752fdc87e974e57e4c3e7b80e4e2bfd55aaea201eae4e40`.
 
-The separate manifest SHA-256 is
-`0fb0bd5a84fa584a440adfd8626048481569b0c9b2be43a1d12096187f9912a6`.
-The V1 preparation directory remains immutable and is explicitly superseded;
-the V2 plan records the expanded report provenance and was regenerated from
-source commit `4a1248c7cddb857f64fe02c5d8f60ad63924f377` rather than relabeling V1.
+The separate V3 manifest SHA-256 is
+`9eab0437dbcd3f776d25b6e2d0a46064b54ce2a7c48a796bf791dbc7f0473581`.
+The V1 and V2 preparation directories remain immutable and explicitly superseded;
+V3 was regenerated from source commit
+`8b84a65bbc4a522370419fcad1ad78e378b81374` rather than relabeling either
+predecessor.
 These facts were derived from the pinned Issue-#187 bytes without invoking a
 strategy, Feature/Regime engine, simulator, or PnL calculation.
 
@@ -164,7 +168,10 @@ For a decision closed in all four cells, report exact local-Decimal contrasts:
 Open or unfilled results stay unavailable for closed-R contrasts and are never
 replaced by zero or forced closed. Reports retain all admissions, status
 transitions, fees, realized accounting and per-asset residual base units, plus
-the original fixed mask and asset/P1–P3/week/side zero cells. Overlap,
+the original fixed mask and all ten assets, P1–P3, W1–W9 and LONG/SHORT zero
+cells. Grouped factor contrasts retain their complete-quadruple denominators
+and unavailable decision identities for both the full and original-mask
+populations. Overlap,
 closure-selection and correlated-market warnings remain explicit. A Stage A
 checkpoint cannot produce a completed-ten-member classification, promote a
 strategy or replace Issue #187.
