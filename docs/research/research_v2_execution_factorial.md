@@ -171,10 +171,13 @@ transitions, fees, realized accounting and per-asset residual base units, plus
 the original fixed mask and all ten assets, P1–P3, W1–W9 and LONG/SHORT zero
 cells. Grouped factor contrasts retain their complete-quadruple denominators
 and unavailable decision identities for both the full and original-mask
-populations. Overlap,
-closure-selection and correlated-market warnings remain explicit. A Stage A
-checkpoint cannot produce a completed-ten-member classification, promote a
-strategy or replace Issue #187.
+populations. The same totals and fixed asset/P1–P3/W1–W9/LONG–SHORT groups are
+reported separately for Trend, Breakout and Range; a zero-admission family or
+group remains explicit with unavailable contrast means rather than a zero
+effect. Cross-family pooled summaries are labeled as diagnostics, never as
+family evidence. Overlap, closure-selection and correlated-market warnings
+remain explicit. A Stage A checkpoint cannot produce a completed-ten-member
+classification, promote a strategy or replace Issue #187.
 
 ## Commands and explicit non-authorization
 

@@ -51,6 +51,7 @@ from adaptive_trading_bot.research.research_v2_factorial import (
     execute_factorial_cell,
     factorial_result_record,
     imported_outcome_from_record,
+    is_imported_cell,
     outcome_from_factorial_result,
     project_factorial_matrix,
     protocol_facts,
@@ -479,13 +480,30 @@ def test_partial_projection_is_not_a_ten_member_classification_and_decimal_is_lo
     assert len(decision_rows) == EXPECTED_ADMISSIONS
     assert len(cast(tuple[object, ...], decision_rows[0]["cells"])) == 4
     summaries = cast(dict[str, object], projection["descriptive_summaries"])
-    assert set(summaries) == {"full", "original_mask"}
+    assert summaries["interpretation"] == "POOLED_DIAGNOSTIC_NOT_FAMILY_EVIDENCE"
+    assert set(summaries) == {"interpretation", "full", "original_mask"}
     assert len(cast(tuple[object, ...], cast(dict[str, object], summaries["full"])["week"])) == 36
     grouped = cast(dict[str, object], projection["grouped_factor_contrasts"])
     full_grouped = cast(dict[str, object], grouped["full"])
     side_rows = cast(tuple[dict[str, object], ...], full_grouped["side"])
     assert cast(int, side_rows[0]["eligible_decision_count"]) > 0
     assert cast(int, side_rows[1]["eligible_decision_count"]) > 0
+    family_grouped = cast(dict[str, object], projection["family_grouped_factor_contrasts"])
+    trend_grouped = cast(dict[str, object], family_grouped["TREND_PULLBACK"])
+    trend_full = cast(dict[str, object], trend_grouped["full"])
+    trend_total = cast(dict[str, object], trend_full["total"])
+    assert trend_total["eligible_decision_count"] == 217
+    assert trend_total["complete_closed_quadruple_count"] == 1
+    assert trend_total["unavailable_decision_count"] == 216
+    assert len(cast(tuple[str, ...], trend_total["unavailable_decision_identities"])) == 216
+    family_descriptions = cast(dict[str, object], projection["family_descriptive_summaries"])
+    trend_description = cast(dict[str, object], family_descriptions["TREND_PULLBACK"])
+    trend_description_full = cast(dict[str, object], trend_description["full"])
+    trend_population = cast(dict[str, object], trend_description_full["total"])
+    c0l0 = cast(tuple[dict[str, object], ...], trend_population["cell_summaries"])[0]
+    assert c0l0["eligible_decision_count"] == 217
+    assert c0l0["record_count"] == c0l0["closed_r_count"] == 1
+    assert c0l0["terminal_status_counts"] == {"ORDINARY_CLOSED": 1}
     contrast = cast(tuple[dict[str, object], ...], projection["contrasts"])[0]
     assert contrast == {
         "decision_identity_sha256": first.decision_identity_sha256,
@@ -499,6 +517,148 @@ def test_partial_projection_is_not_a_ten_member_classification_and_decimal_is_lo
     }
     with pytest.raises(FactorialError, match="missing cells"):
         project_factorial_matrix(inventory, outcomes, complete=True)
+
+
+def test_family_reporting_preserves_opposite_contrasts_masks_and_empty_family(
+    tmp_path: Path,
+) -> None:
+    tasks = frozen_tasks()
+    trend_task = next(task for task in tasks if task.family.upper() == "TREND_PULLBACK")
+    breakout_task = next(task for task in tasks if task.family.upper() == "BREAKOUT_RETEST")
+    references = (
+        AdmittedDecisionReference(
+            trend_task.task_id,
+            0,
+            "1" * 64,
+            trend_task.wire_symbol,
+            trend_task.family.upper(),
+            trend_task.decision_start,
+            True,
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
+            "P1",
+            "W1",
+            "LONG",
+            "BUY",
+        ),
+        AdmittedDecisionReference(
+            breakout_task.task_id,
+            0,
+            "2" * 64,
+            breakout_task.wire_symbol,
+            breakout_task.family.upper(),
+            breakout_task.decision_start,
+            False,
+            "d" * 64,
+            "e" * 64,
+            "f" * 64,
+            "P1",
+            "W1",
+            "LONG",
+            "BUY",
+        ),
+    )
+    outcomes: list[FactorialOutcome] = []
+    for reference, values in zip(
+        references,
+        (("0", "2", "0", "2"), ("0", "-2", "0", "-2")),
+        strict=True,
+    ):
+        for index, (cell, value) in enumerate(zip(FactorialCell, values, strict=True)):
+            outcomes.append(
+                FactorialOutcome(
+                    reference.decision_identity_sha256,
+                    reference.task_id,
+                    reference.symbol,
+                    reference.family,
+                    cell,
+                    is_imported_cell(cell),
+                    "ORDINARY_CLOSED",
+                    Decimal(value),
+                    Decimal("0.1"),
+                    Decimal(value),
+                    Decimal(value),
+                    Decimal(0),
+                    f"{len(outcomes) + 1:064x}",
+                    reference.authority_sha256 if is_imported_cell(cell) else f"{index + 20:064x}",
+                )
+            )
+    projection = project_factorial_matrix(
+        references,
+        tuple(outcomes),
+        complete=True,
+        _validate_frozen_inventory=False,
+    )
+
+    families = cast(dict[str, object], projection["family_grouped_factor_contrasts"])
+    trend = cast(dict[str, object], families["TREND_PULLBACK"])
+    breakout = cast(dict[str, object], families["BREAKOUT_RETEST"])
+    range_family = cast(dict[str, object], families["RANGE_MEAN_REVERSION"])
+
+    def total(view: dict[str, object], population: str) -> dict[str, object]:
+        population_view = cast(dict[str, object], view[population])
+        return cast(dict[str, object], population_view["total"])
+
+    def cost_mean(view: dict[str, object], population: str) -> object:
+        factors = cast(dict[str, object], total(view, population)["factor_contrasts"])
+        cost = cast(dict[str, object], factors["cost_contrast_l0"])
+        return cost["mean"]
+
+    assert cost_mean(trend, "full") == "2"
+    assert cost_mean(breakout, "full") == "-2"
+    assert cost_mean(trend, "original_mask") == "2"
+    assert cost_mean(breakout, "original_mask") is None
+    assert total(trend, "full")["eligible_decision_count"] == 1
+    assert total(breakout, "full")["eligible_decision_count"] == 1
+    assert total(range_family, "full") == {
+        "eligible_decision_count": 0,
+        "complete_closed_quadruple_count": 0,
+        "unavailable_decision_count": 0,
+        "unavailable_decision_identities": (),
+        "factor_contrasts": {
+            field: {
+                "available_count": 0,
+                "unavailable_count": 0,
+                "total": None,
+                "mean": None,
+            }
+            for field in (
+                "cost_contrast_l0",
+                "cost_contrast_l1",
+                "eligibility_contrast_c0",
+                "eligibility_contrast_c1",
+                "interaction",
+                "combined_difference",
+            )
+        },
+    }
+    pooled = cast(dict[str, object], projection["grouped_factor_contrasts"])
+    pooled_full = cast(dict[str, object], pooled["full"])
+    asset_rows = cast(tuple[dict[str, object], ...], pooled_full["asset"])
+    shared_asset = next(row for row in asset_rows if row["value"] == trend_task.wire_symbol)
+    pooled_factors = cast(dict[str, object], shared_asset["factor_contrasts"])
+    assert cast(dict[str, object], pooled_factors["cost_contrast_l0"])["mean"] == "0"
+
+    descriptions = cast(dict[str, object], projection["family_descriptive_summaries"])
+    range_description = cast(dict[str, object], descriptions["RANGE_MEAN_REVERSION"])
+    range_full = cast(dict[str, object], range_description["full"])
+    range_total = cast(dict[str, object], range_full["total"])
+    assert range_total["admission_denominator"] == 0
+    assert range_total["complete_closed_quadruple_denominator"] == 0
+    assert range_total["unavailable_decision_identities"] == ()
+    assert all(
+        row["eligible_decision_count"] == row["closed_r_count"] == 0
+        for row in cast(tuple[dict[str, object], ...], range_total["cell_summaries"])
+    )
+
+    payload = _canonical(projection)
+    path = tmp_path / "projection.json"
+    path.write_bytes(payload)
+    stored = json.loads(path.read_bytes())
+    assert path.read_bytes() == _canonical(stored) == payload
+    unsigned = {key: value for key, value in projection.items() if key != "projection_sha256"}
+    assert projection["projection_sha256"] == _digest(unsigned)
 
 
 def test_imported_diagonals_cannot_be_executed() -> None:
@@ -1116,6 +1276,14 @@ def test_small_synthetic_staged_execution_storage_and_verification(
     )
     assert first_verification == second_verification
     assert first_verification["projection_sha256"] == projection["projection_sha256"]
+    family_contrasts = cast(dict[str, object], projection["family_grouped_factor_contrasts"])
+    trend_family = cast(dict[str, object], family_contrasts["TREND_PULLBACK"])
+    trend_full = cast(dict[str, object], trend_family["full"])
+    assert cast(dict[str, object], trend_full["total"])["eligible_decision_count"] == 1
+    for empty_family in ("BREAKOUT_RETEST", "RANGE_MEAN_REVERSION"):
+        family = cast(dict[str, object], family_contrasts[empty_family])
+        full = cast(dict[str, object], family["full"])
+        assert cast(dict[str, object], full["total"])["eligible_decision_count"] == 0
     assert calls == [
         (0, FactorialCell.C1L0),
         (0, FactorialCell.C0L1),

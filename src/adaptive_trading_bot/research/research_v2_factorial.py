@@ -944,6 +944,7 @@ def project_factorial_matrix(
         "week": tuple(f"W{index}" for index in range(1, 10)),
         "side": ("LONG", "SHORT"),
     }
+    families = tuple(family.value for family in AllFillFamily)
 
     contrast_fields = (
         "cost_contrast_l0",
@@ -971,95 +972,156 @@ def project_factorial_matrix(
                 total += value
             return total
 
-    def summaries(*, masked: bool) -> dict[str, object]:
+    def eligible_references(
+        *,
+        masked: bool,
+        family: str | None = None,
+        dimension: str | None = None,
+        value: str | None = None,
+    ) -> tuple[
+        tuple[tuple[str, str], AdmittedDecisionReference],
+        ...,
+    ]:
+        return tuple(
+            (key, reference)
+            for key, reference in references.items()
+            if (not masked or reference.original_mask_member)
+            and (family is None or reference.family == family)
+            and (
+                dimension is None
+                or (value is not None and matches_dimension(reference, dimension, value))
+            )
+        )
+
+    def cell_summary(
+        eligible: tuple[tuple[tuple[str, str], AdmittedDecisionReference], ...],
+        cell: FactorialCell,
+    ) -> dict[str, object]:
+        keys = {key for key, _ in eligible}
+        members = tuple(
+            outcome
+            for outcome in outcomes
+            if outcome.cell is cell and (outcome.decision_identity_sha256, outcome.task_id) in keys
+        )
+        closed = tuple(item.closed_net_r for item in members if item.closed_net_r is not None)
+        statuses: dict[str, int] = {}
+        for member in members:
+            statuses[member.terminal_status] = statuses.get(member.terminal_status, 0) + 1
+        return {
+            "cell": cell.value,
+            "eligible_decision_count": len(eligible),
+            "record_count": len(members),
+            "missing_record_count": len(eligible) - len(members),
+            "closed_r_count": len(closed),
+            "unavailable_r_count": len(eligible) - len(closed),
+            "terminal_status_counts": dict(sorted(statuses.items())),
+            "total_closed_net_r": str(exact_total(closed)),
+        }
+
+    def summaries(*, masked: bool, family: str | None = None) -> dict[str, object]:
         result: dict[str, object] = {}
         for dimension, values in domains.items():
             rows: list[dict[str, object]] = []
             for value in values:
+                eligible = eligible_references(
+                    masked=masked,
+                    family=family,
+                    dimension=dimension,
+                    value=value,
+                )
                 for cell in FactorialCell:
-                    members = tuple(
-                        outcome
-                        for outcome in outcomes
-                        if outcome.cell is cell
-                        and (
-                            not masked
-                            or references[
-                                (outcome.decision_identity_sha256, outcome.task_id)
-                            ].original_mask_member
-                        )
-                        and (
-                            outcome.symbol == value
-                            if dimension == "asset"
-                            else getattr(
-                                references[(outcome.decision_identity_sha256, outcome.task_id)],
-                                dimension,
-                            )
-                            == value
-                        )
-                    )
-                    closed = tuple(
-                        item.closed_net_r for item in members if item.closed_net_r is not None
-                    )
-                    rows.append(
-                        {
-                            "value": value,
-                            "cell": cell.value,
-                            "record_count": len(members),
-                            "closed_r_count": len(closed),
-                            "unavailable_r_count": len(members) - len(closed),
-                            "total_closed_net_r": str(exact_total(closed)),
-                        }
-                    )
+                    rows.append({"value": value, **cell_summary(eligible, cell)})
             result[dimension] = tuple(rows)
         return result
 
-    def grouped_contrasts(*, masked: bool) -> dict[str, object]:
+    def contrast_summary(
+        eligible: tuple[tuple[tuple[str, str], AdmittedDecisionReference], ...],
+    ) -> dict[str, object]:
+        available = tuple(
+            (key, contrast_by_key[key]) for key, _ in eligible if key in contrast_by_key
+        )
+        unavailable = tuple(key[0] for key, _ in eligible if key not in contrast_by_key)
+        factor_values: dict[str, object] = {}
+        for field_name in contrast_fields:
+            decimals = tuple(Decimal(str(row[field_name])) for _, row in available)
+            total = exact_total(decimals)
+            with localcontext(_DECIMAL_CONTEXT):
+                mean = None if not decimals else total / Decimal(len(decimals))
+            factor_values[field_name] = {
+                "available_count": len(decimals),
+                "unavailable_count": len(eligible) - len(decimals),
+                "total": None if not decimals else str(total),
+                "mean": None if mean is None else str(mean),
+            }
+        return {
+            "eligible_decision_count": len(eligible),
+            "complete_closed_quadruple_count": len(available),
+            "unavailable_decision_count": len(unavailable),
+            "unavailable_decision_identities": unavailable,
+            "factor_contrasts": factor_values,
+        }
+
+    def population_summary(*, masked: bool, family: str) -> dict[str, object]:
+        eligible = eligible_references(masked=masked, family=family)
+        contrast = contrast_summary(eligible)
+        return {
+            "admission_denominator": len(eligible),
+            "complete_closed_quadruple_denominator": contrast["complete_closed_quadruple_count"],
+            "unavailable_decision_count": contrast["unavailable_decision_count"],
+            "unavailable_decision_identities": contrast["unavailable_decision_identities"],
+            "cell_summaries": tuple(cell_summary(eligible, cell) for cell in FactorialCell),
+        }
+
+    def grouped_contrasts(*, masked: bool, family: str | None = None) -> dict[str, object]:
         result: dict[str, object] = {}
         for dimension, values in domains.items():
             rows: list[dict[str, object]] = []
             for value in values:
-                eligible = tuple(
-                    (key, reference)
-                    for key, reference in references.items()
-                    if (not masked or reference.original_mask_member)
-                    and matches_dimension(reference, dimension, value)
+                eligible = eligible_references(
+                    masked=masked,
+                    family=family,
+                    dimension=dimension,
+                    value=value,
                 )
-                available = tuple(
-                    (key, contrast_by_key[key]) for key, _ in eligible if key in contrast_by_key
-                )
-                unavailable = tuple(key[0] for key, _ in eligible if key not in contrast_by_key)
-                factor_values: dict[str, object] = {}
-                for field_name in contrast_fields:
-                    decimals = tuple(Decimal(str(row[field_name])) for _, row in available)
-                    total = exact_total(decimals)
-                    with localcontext(_DECIMAL_CONTEXT):
-                        mean = None if not decimals else total / Decimal(len(decimals))
-                    factor_values[field_name] = {
-                        "available_count": len(decimals),
-                        "unavailable_count": len(eligible) - len(decimals),
-                        "total": None if not decimals else str(total),
-                        "mean": None if mean is None else str(mean),
-                    }
-                rows.append(
-                    {
-                        "value": value,
-                        "eligible_decision_count": len(eligible),
-                        "complete_closed_quadruple_count": len(available),
-                        "unavailable_decision_count": len(unavailable),
-                        "unavailable_decision_identities": unavailable,
-                        "factor_contrasts": factor_values,
-                    }
-                )
+                rows.append({"value": value, **contrast_summary(eligible)})
             result[dimension] = tuple(rows)
         return result
 
     projection["descriptive_summaries"] = {
+        "interpretation": "POOLED_DIAGNOSTIC_NOT_FAMILY_EVIDENCE",
         "full": summaries(masked=False),
         "original_mask": summaries(masked=True),
     }
     projection["grouped_factor_contrasts"] = {
+        "interpretation": "POOLED_DIAGNOSTIC_NOT_FAMILY_EVIDENCE",
         "full": grouped_contrasts(masked=False),
         "original_mask": grouped_contrasts(masked=True),
+    }
+    projection["family_descriptive_summaries"] = {
+        family: {
+            "full": {
+                "total": population_summary(masked=False, family=family),
+                "groups": summaries(masked=False, family=family),
+            },
+            "original_mask": {
+                "total": population_summary(masked=True, family=family),
+                "groups": summaries(masked=True, family=family),
+            },
+        }
+        for family in families
+    }
+    projection["family_grouped_factor_contrasts"] = {
+        family: {
+            "full": {
+                "total": contrast_summary(eligible_references(masked=False, family=family)),
+                "groups": grouped_contrasts(masked=False, family=family),
+            },
+            "original_mask": {
+                "total": contrast_summary(eligible_references(masked=True, family=family)),
+                "groups": grouped_contrasts(masked=True, family=family),
+            },
+        }
+        for family in families
     }
     projection["projection_sha256"] = _digest(projection)
     return projection
