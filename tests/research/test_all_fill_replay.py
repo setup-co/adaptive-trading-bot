@@ -41,6 +41,7 @@ from adaptive_trading_bot.research.range_mean_reversion_replay import (
 )
 from adaptive_trading_bot.research.research_v2_factorial import (
     FactorialCell,
+    FactorialError,
     execute_factorial_cell,
 )
 from adaptive_trading_bot.strategies import CandidateAction, StrategyEvaluationContext
@@ -197,6 +198,41 @@ def test_no_signal_does_not_load_market_or_create_accounting() -> None:
     assert result.status is AllFillStatus.NO_SIGNAL
     assert result.branches == ()
     assert source.loads == []
+
+
+def test_non_admitted_results_reject_resealed_nonempty_execution_snapshots() -> None:
+    decision = cast(DecisionJournalEntry[object, object], _decision(outcome="no_action"))
+    candle = cast(tuple[Candle, ...], _execution_path(100))[0]
+    series = ExecutionSeries(SOURCE, BTC, Timeframe.MINUTES_15)
+    legacy = ResearchAllFillReplayRunner(RecordingExecutionSource((candle,))).run(
+        decision,
+        (),
+        series,
+        ExecutionCostConfiguration(Decimal(2), Decimal(2), Decimal(10)),
+        start=NOW,
+        end=candle.close_time,
+    )
+    with pytest.raises(AllFillReplayError, match="replay evidence"):
+        replace(
+            legacy,
+            execution_snapshot=(candle,),
+            execution_snapshot_digest=_snapshot_digest((candle,)),
+        )
+    factorial = execute_factorial_cell(
+        ResearchAllFillReplayRunner(RecordingExecutionSource((candle,))),
+        decision,
+        (),
+        series,
+        FactorialCell.C1L0,
+        start=NOW,
+        end=candle.close_time,
+    )
+    with pytest.raises(FactorialError, match="replay evidence"):
+        replace(
+            factorial,
+            execution_snapshot=(candle,),
+            execution_snapshot_digest=_snapshot_digest((candle,)),
+        )
 
 
 @pytest.mark.parametrize(

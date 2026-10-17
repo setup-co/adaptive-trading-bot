@@ -206,6 +206,7 @@ class AdmittedDecisionReference:
     block: str = ""
     week: str = ""
     side: str = ""
+    order_side: str = ""
 
     def to_record(self) -> dict[str, object]:
         require_utc(self.observed_at, field="admitted decision time")
@@ -214,6 +215,7 @@ class AdmittedDecisionReference:
             or self.decision_index < 0
             or self.symbol not in PANEL
             or self.family not in {task.family.upper() for task in frozen_tasks()}
+            or (self.side, self.order_side) not in (("LONG", "BUY"), ("SHORT", "SELL"))
             or not all(
                 _HEX64.fullmatch(value)
                 for value in (
@@ -239,6 +241,7 @@ class AdmittedDecisionReference:
             "block": self.block,
             "week": self.week,
             "side": self.side,
+            "order_side": self.order_side,
         }
 
 
@@ -570,11 +573,37 @@ def outcome_from_factorial_result(
     exit_fill = None if branch is None else branch.exit_fill
     recovery = None if branch is None else branch.recovery
     intent = result.entry_intent
+    ordinary_exit_reason: str | None = None
+    legacy = result.legacy_replay
+    if recovery is not None:
+        ordinary_exit_reason = "POST_FILL_STOP_RECOVERY"
+    elif isinstance(legacy, PairedTrendPullbackExitReplayResult):
+        if (
+            legacy.ema50_candidate is not None
+            and legacy.ema50_candidate.winning_exit_cause is not None
+        ):
+            ordinary_exit_reason = legacy.ema50_candidate.winning_exit_cause.value
+    elif (
+        isinstance(legacy, (BreakoutRetestReplayResult, RangeMeanReversionReplayResult))
+        and legacy.exit_cause is not None
+    ):
+        ordinary_exit_reason = legacy.exit_cause.value
     evidence_facts = tuple(
         sorted(
             {
                 "decision_observed_at": _iso(result.decision.identity.observed_at),
                 "side": None if intent is None else intent.side.value,
+                "position_direction": None
+                if intent is None
+                else ("LONG" if intent.side.value == "BUY" else "SHORT"),
+                "authorized_quantity": None if intent is None else str(intent.quantity),
+                "authorized_reference_price": None
+                if intent is None
+                else str(intent.reference_price),
+                "authorized_stop_basis": None if intent is None else str(intent.stop_basis),
+                "approved_notional_quote": None
+                if intent is None
+                else str(intent.approved_notional_quote),
                 "approved_risk_quote": None if intent is None else str(intent.approved_risk_quote),
                 "entry_created_at": None if entry is None else _iso(entry.created_at),
                 "entry_eligible_at": None if entry is None else _iso(entry.eligible_at),
@@ -588,6 +617,7 @@ def outcome_from_factorial_result(
                 "entry_fill_price": None if entry is None else str(entry.fill_price),
                 "entry_fee_quote": None if entry is None else str(entry.fee_quote),
                 "primary_exit_category": None if branch is None else branch.label,
+                "primary_exit_reason": ordinary_exit_reason,
                 "exit_created_at": None
                 if branch is None or branch.exit_request is None
                 else _iso(branch.exit_request.created_at),
@@ -608,7 +638,11 @@ def outcome_from_factorial_result(
             }.items()
         )
     )
-    hold = result.branches[0] if result.family is AllFillFamily.TREND_PULLBACK else None
+    hold = (
+        result.branches[0]
+        if result.family is AllFillFamily.TREND_PULLBACK and result.branches
+        else None
+    )
     hold_only_facts = tuple(
         sorted(
             {
@@ -732,10 +766,18 @@ def project_factorial_matrix(
     outcomes: tuple[FactorialOutcome, ...],
     *,
     complete: bool,
+    _validate_frozen_inventory: bool = True,
 ) -> dict[str, object]:
     """Project fixed contrasts without replacing unavailable closed outcomes by zero."""
 
-    stage_counts(inventory)
+    if _validate_frozen_inventory:
+        stage_counts(inventory)
+    else:
+        records = tuple(item.to_record() for item in inventory)
+        if not records or len(records) != len(
+            {(row["task_id"], row["decision_index"]) for row in records}
+        ):
+            raise FactorialError("synthetic factorial inventory is empty or duplicated")
     references = {(item.decision_identity_sha256, item.task_id): item for item in inventory}
     seen: dict[tuple[str, str], dict[FactorialCell, FactorialOutcome]] = {
         key: {} for key in references
@@ -899,9 +941,35 @@ def project_factorial_matrix(
     domains = {
         "asset": PANEL,
         "block": ("P1", "P2", "P3"),
-        "week": tuple(sorted({item.week for item in inventory if item.week})),
+        "week": tuple(f"W{index}" for index in range(1, 10)),
         "side": ("LONG", "SHORT"),
     }
+
+    contrast_fields = (
+        "cost_contrast_l0",
+        "cost_contrast_l1",
+        "eligibility_contrast_c0",
+        "eligibility_contrast_c1",
+        "interaction",
+        "combined_difference",
+    )
+    contrast_by_key = {
+        (str(row["decision_identity_sha256"]), str(row["task_id"])): row for row in contrasts
+    }
+
+    def matches_dimension(reference: AdmittedDecisionReference, dimension: str, value: str) -> bool:
+        return (
+            reference.symbol == value
+            if dimension == "asset"
+            else getattr(reference, dimension) == value
+        )
+
+    def exact_total(values: tuple[Decimal, ...]) -> Decimal:
+        with localcontext(_DECIMAL_CONTEXT):
+            total = Decimal(0)
+            for value in values:
+                total += value
+            return total
 
     def summaries(*, masked: bool) -> dict[str, object]:
         result: dict[str, object] = {}
@@ -939,15 +1007,59 @@ def project_factorial_matrix(
                             "record_count": len(members),
                             "closed_r_count": len(closed),
                             "unavailable_r_count": len(members) - len(closed),
-                            "total_closed_net_r": str(sum(closed, Decimal(0))),
+                            "total_closed_net_r": str(exact_total(closed)),
                         }
                     )
+            result[dimension] = tuple(rows)
+        return result
+
+    def grouped_contrasts(*, masked: bool) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for dimension, values in domains.items():
+            rows: list[dict[str, object]] = []
+            for value in values:
+                eligible = tuple(
+                    (key, reference)
+                    for key, reference in references.items()
+                    if (not masked or reference.original_mask_member)
+                    and matches_dimension(reference, dimension, value)
+                )
+                available = tuple(
+                    (key, contrast_by_key[key]) for key, _ in eligible if key in contrast_by_key
+                )
+                unavailable = tuple(key[0] for key, _ in eligible if key not in contrast_by_key)
+                factor_values: dict[str, object] = {}
+                for field_name in contrast_fields:
+                    decimals = tuple(Decimal(str(row[field_name])) for _, row in available)
+                    total = exact_total(decimals)
+                    with localcontext(_DECIMAL_CONTEXT):
+                        mean = None if not decimals else total / Decimal(len(decimals))
+                    factor_values[field_name] = {
+                        "available_count": len(decimals),
+                        "unavailable_count": len(eligible) - len(decimals),
+                        "total": None if not decimals else str(total),
+                        "mean": None if mean is None else str(mean),
+                    }
+                rows.append(
+                    {
+                        "value": value,
+                        "eligible_decision_count": len(eligible),
+                        "complete_closed_quadruple_count": len(available),
+                        "unavailable_decision_count": len(unavailable),
+                        "unavailable_decision_identities": unavailable,
+                        "factor_contrasts": factor_values,
+                    }
+                )
             result[dimension] = tuple(rows)
         return result
 
     projection["descriptive_summaries"] = {
         "full": summaries(masked=False),
         "original_mask": summaries(masked=True),
+    }
+    projection["grouped_factor_contrasts"] = {
+        "full": grouped_contrasts(masked=False),
+        "original_mask": grouped_contrasts(masked=True),
     }
     projection["projection_sha256"] = _digest(projection)
     return projection

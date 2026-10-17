@@ -161,6 +161,13 @@ def _mask_members(rows: Sequence[dict[str, object]]) -> set[str]:
     return selected
 
 
+def _position_direction(order_side: object) -> str:
+    try:
+        return {"BUY": "LONG", "SELL": "SHORT"}[str(order_side)]
+    except KeyError as exc:
+        raise FactorialError("retained entry side is not BUY or SELL") from exc
+
+
 def data_only_factorial_plan(repo: Path) -> dict[str, object]:
     """Verify original indexed bytes and derive the retained 246-source inventory."""
 
@@ -237,7 +244,8 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
             authority_sha256=task_payload_hashes[str(row["task_id"])]["authority"],
             block=str(row["block"]),
             week=str(row["week"]),
-            side=str(row["side"]),
+            side=_position_direction(row["side"]),
+            order_side=str(row["side"]),
         )
         for row in sorted(
             all_base_trades,
@@ -279,29 +287,36 @@ def data_only_factorial_plan(repo: Path) -> dict[str, object]:
                 "result_sha256": str(row["all_fill_result_sha256"]),
                 "authority_sha256": str(row["authority_sha256"]),
                 "evidence_facts": {
-                    name: row.get(name)
-                    for name in (
-                        "decision_observed_at",
-                        "side",
-                        "approved_risk_quote",
-                        "entry_created_at",
-                        "entry_eligible_at",
-                        "entry_execution_candle_open_at",
-                        "entry_fill_at",
-                        "entry_reference_open_price",
-                        "entry_fill_price",
-                        "entry_fee_quote",
-                        "primary_exit_category",
-                        "primary_exit_reason",
-                        "exit_created_at",
-                        "exit_eligible_at",
-                        "exit_execution_candle_open_at",
-                        "exit_fill_at",
-                        "exit_reference_open_price",
-                        "exit_fill_price",
-                        "exit_fee_quote",
-                        "recovery_reasons",
-                    )
+                    **{
+                        name: row.get(name)
+                        for name in (
+                            "decision_observed_at",
+                            "side",
+                            "approved_risk_quote",
+                            "approved_notional_quote",
+                            "entry_created_at",
+                            "entry_eligible_at",
+                            "entry_execution_candle_open_at",
+                            "entry_fill_at",
+                            "entry_reference_open_price",
+                            "entry_fill_price",
+                            "entry_fee_quote",
+                            "primary_exit_category",
+                            "primary_exit_reason",
+                            "exit_created_at",
+                            "exit_eligible_at",
+                            "exit_execution_candle_open_at",
+                            "exit_fill_at",
+                            "exit_reference_open_price",
+                            "exit_fill_price",
+                            "exit_fee_quote",
+                            "recovery_reasons",
+                        )
+                    },
+                    "position_direction": _position_direction(row.get("side")),
+                    "authorized_quantity": row.get("quantity"),
+                    "authorized_reference_price": row.get("reference_price"),
+                    "authorized_stop_basis": row.get("stop_basis"),
                 },
                 "hold_only_facts": row["hold_only_facts"],
             }
@@ -375,6 +390,50 @@ class _RetainedTaskView:
     contexts: tuple[HistoricalStrategyContextObservation, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _SyntheticStagedFixture:
+    """Explicit small fixture for exercising the production staging core in tests."""
+
+    actual_sha: str
+    plan: dict[str, Any]
+    task_views: dict[int, _RetainedTaskView]
+
+    def view(self, task_index: int, selected: tuple[dict[str, Any], ...]) -> _RetainedTaskView:
+        try:
+            view = self.task_views[task_index]
+        except KeyError as exc:
+            raise FactorialError("synthetic staged fixture lacks a task view") from exc
+        expected = {int(row["decision_index"]) for row in selected}
+        if set(view.decisions) != expected:
+            raise FactorialError("synthetic task view differs from selected inventory")
+        return view
+
+
+def _staged_inputs(
+    repo: Path,
+    grant_path: Path,
+    fixture: _SyntheticStagedFixture | None,
+) -> tuple[str, dict[str, Any], FactorialExecutionGrant]:
+    actual_sha = _clean_sha(repo) if fixture is None else fixture.actual_sha
+    plan = data_only_factorial_plan(repo) if fixture is None else fixture.plan
+    grant = _grant(grant_path.resolve(strict=True))
+    grant.validate(actual_sha=actual_sha, synthetic=fixture is not None)
+    return actual_sha, plan, grant
+
+
+def _selected_task_view(
+    repo: Path,
+    task_index: int,
+    selected: tuple[dict[str, Any], ...],
+    fixture: _SyntheticStagedFixture | None,
+) -> _RetainedTaskView:
+    return (
+        _load_task_view(repo, task_index, selected)
+        if fixture is None
+        else fixture.view(task_index, selected)
+    )
+
+
 class _RetainedTaskExecutionSource:
     def __init__(self, view: _RetainedTaskView) -> None:
         self._series = ExecutionSeries(view.source_id, view.symbol, Timeframe.MINUTES_15)
@@ -446,10 +505,30 @@ def _load_task_view(
     evidence = repo / EVIDENCE_RELATIVE
     files, _ = retained.load_index(evidence)
     paths = _task_paths(task_index)
+    return _load_indexed_task_view(
+        evidence=evidence,
+        files=files,
+        paths=paths,
+        task_index=task_index,
+        selected=selected,
+        expected=retained._task_expectation(task_index),
+    )
+
+
+def _load_indexed_task_view(
+    *,
+    evidence: Path,
+    files: dict[str, tuple[int, str]],
+    paths: dict[str, str],
+    task_index: int,
+    selected: tuple[dict[str, Any], ...],
+    expected: retained.TaskExpectation,
+) -> _RetainedTaskView:
+    """Verify indexed bytes before decoding a bounded retained task view."""
+
     population_payload = retained.verify_indexed_file(evidence, paths["population"], files)
     partition_payload = retained.verify_indexed_file(evidence, paths["partition"], files)
     authority_payload = retained.verify_indexed_file(evidence, paths["authority"], files)
-    expected = retained._task_expectation(task_index)
     if any(
         (
             reference.get("population_sha256") != _sha(population_payload)
@@ -459,6 +538,25 @@ def _load_task_view(
         for reference in selected
     ):
         raise FactorialError("retained task bytes differ from admitted inventory")
+    return _load_task_view_payloads(
+        task_index=task_index,
+        selected=selected,
+        expected=expected,
+        population_payload=population_payload,
+        partition_payload=partition_payload,
+    )
+
+
+def _load_task_view_payloads(
+    *,
+    task_index: int,
+    selected: tuple[dict[str, Any], ...],
+    expected: retained.TaskExpectation,
+    population_payload: bytes,
+    partition_payload: bytes,
+) -> _RetainedTaskView:
+    """Validate explicit retained payloads and decode only selected authorities."""
+
     try:
         inert_population, inert_decisions = retained._population(
             population_payload, expected_count=expected.decision_count
@@ -654,6 +752,7 @@ def _verify_completed_prefix(
     ledger: FactorialLedgerStore,
     *,
     end: int,
+    fixture: _SyntheticStagedFixture | None = None,
 ) -> tuple[tuple[dict[str, object], ...], tuple[FactorialOutcome, ...]]:
     state = ledger.load()
     units = _task_units(plan)
@@ -676,7 +775,9 @@ def _verify_completed_prefix(
                 for row in _inventory(plan["admitted_inventory"])
                 if row["task_id"] == str(unit["task_id"])
             )
-            task_view = None if not selected else _load_task_view(repo, task_index, selected)
+            task_view = (
+                None if not selected else _selected_task_view(repo, task_index, selected, fixture)
+            )
             cached_index = task_index
         summary, unit_outcomes = _verify_unit_artifact(
             repo,
@@ -710,21 +811,25 @@ def _admitted_references(plan: dict[str, Any]) -> tuple[AdmittedDecisionReferenc
             block=str(row.get("block", "")),
             week=str(row.get("week", "")),
             side=str(row.get("side", "")),
+            order_side=str(row.get("order_side", "")),
         )
         for row in _inventory(plan["admitted_inventory"])
     )
 
 
-def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
+def _run_stage_a(
+    repo: Path,
+    grant_path: Path,
+    ledger_root: Path,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
+) -> dict[str, object]:
     repo = repo.resolve(strict=True)
-    actual_sha = _clean_sha(repo)
     preflight_wall_started = time.monotonic()
     preflight_cpu_started = time.process_time()
-    plan = data_only_factorial_plan(repo)
+    actual_sha, plan, grant = _staged_inputs(repo, grant_path, fixture)
     preflight_wall_seconds = time.monotonic() - preflight_wall_started
     preflight_cpu_seconds = time.process_time() - preflight_cpu_started
-    grant = _grant(grant_path.resolve(strict=True))
-    grant.validate(actual_sha=actual_sha)
     if (
         grant.input_plan_sha256 != plan["input_plan_sha256"]
         or grant.admitted_inventory_sha256 != plan["admitted_inventory_sha256"]
@@ -738,6 +843,7 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
         actual_sha=actual_sha,
         task_ids=tuple(str(unit["unit_id"]) for unit in units),
         stage_a_count=stage_a_count,
+        synthetic=fixture is not None,
     )
     summaries: list[dict[str, object]] = []
     cached_index: int | None = None
@@ -753,7 +859,11 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
                     for row in _inventory(plan["admitted_inventory"])
                     if row["task_id"] == str(unit["task_id"])
                 )
-                task_view = None if not selected else _load_task_view(repo, task_index, selected)
+                task_view = (
+                    None
+                    if not selected
+                    else _selected_task_view(repo, task_index, selected, fixture)
+                )
                 cached_index = task_index
             ledger.start(index)
             digest, summary = _execute_unit(
@@ -770,7 +880,9 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
     execution_cpu_seconds = time.process_time() - execution_cpu_started
     verification_wall_started = time.monotonic()
     verification_cpu_started = time.process_time()
-    verified_units, _ = _verify_completed_prefix(repo, plan, ledger, end=stage_a_count)
+    verified_units, _ = _verify_completed_prefix(
+        repo, plan, ledger, end=stage_a_count, fixture=fixture
+    )
     verification_wall_seconds = time.monotonic() - verification_wall_started
     verification_cpu_seconds = time.process_time() - verification_cpu_started
     stage_a_tasks = {str(unit["task_id"]) for unit in units[:stage_a_count]}
@@ -779,7 +891,13 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
         for row in _inventory(plan["imported_diagonal_inventory"])
         if str(row["task_id"]) in stage_a_tasks
     )
-    if len(imported_stage_a) != 96:
+    stage_a_admissions = sum(
+        _exact_int(row["admission_count"], field="admission count") for row in verified_units[::2]
+    )
+    expected_stage_a_imported = stage_a_admissions * 2
+    if len(imported_stage_a) != expected_stage_a_imported or (
+        fixture is None and len(imported_stage_a) != 96
+    ):
         raise FactorialError("Stage A imported diagonal coverage is not exactly 96 records")
     checkpoint: dict[str, object] = {
         "schema_version": "research-v2-factorial-stage-a-checkpoint-v2",
@@ -806,10 +924,7 @@ def _run_stage_a(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, o
                 _exact_int(row["artifact_size_bytes"], field="artifact size")
                 for row in verified_units
             ),
-            "admissions": sum(
-                _exact_int(row["admission_count"], field="admission count")
-                for row in verified_units[::2]
-            ),
+            "admissions": stage_a_admissions,
             "new_outcomes": sum(
                 _exact_int(row["outcome_count"], field="outcome count") for row in verified_units
             ),
@@ -838,12 +953,11 @@ def _continue_stage_b(
     grant_path: Path,
     authorization_path: Path,
     ledger_dir: Path,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
 ) -> dict[str, object]:
     repo = repo.resolve(strict=True)
-    actual_sha = _clean_sha(repo)
-    plan = data_only_factorial_plan(repo)
-    grant = _grant(grant_path.resolve(strict=True))
-    grant.validate(actual_sha=actual_sha)
+    _, plan, grant = _staged_inputs(repo, grant_path, fixture)
     if (
         grant.input_plan_sha256 != plan["input_plan_sha256"]
         or grant.admitted_inventory_sha256 != plan["admitted_inventory_sha256"]
@@ -866,7 +980,7 @@ def _continue_stage_b(
         or state.stage_a_count != sum(unit["stage"] == FactorialStage.A.value for unit in units)
     ):
         raise FactorialError("Stage B attempted with a different run or executable")
-    checkpoint, _ = _validate_stage_a_checkpoint(repo, plan, grant, ledger)
+    checkpoint, _ = _validate_stage_a_checkpoint(repo, plan, grant, ledger, fixture=fixture)
     authorization = _continuation(authorization_path.resolve(strict=True))
     authorization.validate(grant, str(checkpoint["checkpoint_sha256"]))
     ledger.authorize_stage_b(authorization, grant)
@@ -882,7 +996,11 @@ def _continue_stage_b(
                     for row in _inventory(plan["admitted_inventory"])
                     if row["task_id"] == str(unit["task_id"])
                 )
-                task_view = None if not selected else _load_task_view(repo, task_index, selected)
+                task_view = (
+                    None
+                    if not selected
+                    else _selected_task_view(repo, task_index, selected, fixture)
+                )
                 cached_index = task_index
             ledger.start(index)
             digest, summary = _execute_unit(
@@ -907,6 +1025,8 @@ def _validate_stage_a_checkpoint(
     plan: dict[str, Any],
     grant: FactorialExecutionGrant,
     ledger: FactorialLedgerStore,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
 ) -> tuple[dict[str, Any], tuple[dict[str, object], ...]]:
     """Read and reconstruct the exact persisted Stage-A pause evidence."""
 
@@ -948,30 +1068,47 @@ def _validate_stage_a_checkpoint(
         or checkpoint.get("technically_complete") is not True
     ):
         raise FactorialError("Stage A pause does not bind the frozen experiment")
-    verified, _ = _verify_completed_prefix(repo, plan, ledger, end=state.stage_a_count)
+    verified, _ = _verify_completed_prefix(
+        repo, plan, ledger, end=state.stage_a_count, fixture=fixture
+    )
     if tuple(checkpoint.get("verified_units", ())) != verified:
         raise FactorialError("Stage A checkpoint differs from reconstructed prefix")
     observations = checkpoint.get("resource_observations")
-    if not isinstance(observations, dict) or (
-        observations.get("admissions") != 48
-        or observations.get("new_outcomes") != 96
-        or observations.get("matrix_records_with_imported_diagonals") != 192
+    if not isinstance(observations, dict):
+        raise FactorialError("Stage A checkpoint denominators are contradictory")
+    stage_a_task_ids = {str(unit["task_id"]) for unit in units[: state.stage_a_count]}
+    expected_admissions = sum(
+        row["task_id"] in stage_a_task_ids for row in _inventory(plan["admitted_inventory"])
+    )
+    expected_new = expected_admissions * 2
+    expected_matrix = expected_admissions * 4
+    if (
+        observations.get("admissions") != expected_admissions
+        or observations.get("new_outcomes") != expected_new
+        or observations.get("matrix_records_with_imported_diagonals") != expected_matrix
+        or (
+            fixture is None
+            and (expected_admissions, expected_new, expected_matrix) != (48, 96, 192)
+        )
     ):
         raise FactorialError("Stage A checkpoint denominators are contradictory")
     return cast(dict[str, Any], checkpoint), verified
 
 
-def _verify_stage_a(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
+def _verify_stage_a(
+    repo: Path,
+    grant_path: Path,
+    ledger_dir: Path,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
+) -> dict[str, object]:
     """Read-only verification of the deliberate Stage-A pause boundary."""
 
     repo = repo.resolve(strict=True)
-    actual_sha = _clean_sha(repo)
-    plan = data_only_factorial_plan(repo)
-    grant = _grant(grant_path.resolve(strict=True))
-    grant.validate(actual_sha=actual_sha)
+    _, plan, grant = _staged_inputs(repo, grant_path, fixture)
     ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
     started = time.monotonic()
-    checkpoint, verified = _validate_stage_a_checkpoint(repo, plan, grant, ledger)
+    checkpoint, verified = _validate_stage_a_checkpoint(repo, plan, grant, ledger, fixture=fixture)
     return {
         "status": "STAGE_A_VERIFIED_PAUSE; ARCHITECT_AUTHORIZATION_REQUIRED_FOR_STAGE_B",
         "run_uuid": grant.run_uuid,
@@ -988,6 +1125,8 @@ def _build_final_projection(
     plan: dict[str, Any],
     grant: FactorialExecutionGrant,
     ledger: FactorialLedgerStore,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
 ) -> dict[str, object]:
     """Reconstruct the final report read-only from precise retained artifacts."""
 
@@ -1007,7 +1146,9 @@ def _build_final_projection(
         or state.checkpoint_sha256 is None
     ):
         raise FactorialError("full factorial run is not eligible for final verification")
-    verified_units, new_outcomes = _verify_completed_prefix(repo, plan, ledger, end=len(units))
+    verified_units, new_outcomes = _verify_completed_prefix(
+        repo, plan, ledger, end=len(units), fixture=fixture
+    )
     imported_outcomes = tuple(
         imported_outcome_from_record(row) for row in _inventory(plan["imported_diagonal_inventory"])
     )
@@ -1015,6 +1156,7 @@ def _build_final_projection(
         _admitted_references(plan),
         (*imported_outcomes, *new_outcomes),
         complete=True,
+        _validate_frozen_inventory=fixture is None,
     )
     projection["run_uuid"] = grant.run_uuid
     projection["executable_sha"] = grant.executable_sha
@@ -1037,14 +1179,17 @@ def _build_final_projection(
     return projection
 
 
-def _finalize_verified_run(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
+def _finalize_verified_run(
+    repo: Path,
+    grant_path: Path,
+    ledger_dir: Path,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
+) -> dict[str, object]:
     """Verify all new outcomes, join immutable diagonals, and finalize once."""
 
     repo = repo.resolve(strict=True)
-    actual_sha = _clean_sha(repo)
-    plan = data_only_factorial_plan(repo)
-    grant = _grant(grant_path.resolve(strict=True))
-    grant.validate(actual_sha=actual_sha)
+    _, plan, grant = _staged_inputs(repo, grant_path, fixture)
     if (
         grant.input_plan_sha256 != plan["input_plan_sha256"]
         or grant.admitted_inventory_sha256 != plan["admitted_inventory_sha256"]
@@ -1053,26 +1198,29 @@ def _finalize_verified_run(repo: Path, grant_path: Path, ledger_dir: Path) -> di
     ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
     if ledger.load().run_state is not FactorialRunState.ACTIVE:
         raise FactorialError("factorial run is not eligible for finalization")
-    projection = _build_final_projection(repo, plan, grant, ledger)
+    projection = _build_final_projection(repo, plan, grant, ledger, fixture=fixture)
     payload = _canonical(projection)
     _immutable_write(ledger.directory / "projection.json", payload)
     ledger.finalize(str(projection["projection_sha256"]))
     return projection
 
 
-def _verify_finalized_run(repo: Path, grant_path: Path, ledger_dir: Path) -> dict[str, object]:
+def _verify_finalized_run(
+    repo: Path,
+    grant_path: Path,
+    ledger_dir: Path,
+    *,
+    fixture: _SyntheticStagedFixture | None = None,
+) -> dict[str, object]:
     """Verify a finalized run without writing, replaying entry populations, or resealing."""
 
     repo = repo.resolve(strict=True)
-    actual_sha = _clean_sha(repo)
-    plan = data_only_factorial_plan(repo)
-    grant = _grant(grant_path.resolve(strict=True))
-    grant.validate(actual_sha=actual_sha)
+    _, plan, grant = _staged_inputs(repo, grant_path, fixture)
     ledger = FactorialLedgerStore(ledger_dir.resolve(strict=True))
     state = ledger.load()
     if state.run_state is not FactorialRunState.FINALIZED:
         raise FactorialError("read-only final verification requires a finalized ledger")
-    expected = _build_final_projection(repo, plan, grant, ledger)
+    expected = _build_final_projection(repo, plan, grant, ledger, fixture=fixture)
     path = ledger.directory / "projection.json"
     try:
         payload = path.read_bytes()
@@ -1081,7 +1229,8 @@ def _verify_finalized_run(repo: Path, grant_path: Path, ledger_dir: Path) -> dic
         raise FactorialError("final projection is unavailable or malformed") from exc
     if (
         payload != _canonical(stored)
-        or stored != expected
+        or payload != _canonical(expected)
+        or not isinstance(stored, dict)
         or stored.get("projection_sha256") != state.final_projection_sha256
     ):
         raise FactorialError("final projection differs from reconstructed authority")

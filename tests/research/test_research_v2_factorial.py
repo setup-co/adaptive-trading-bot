@@ -9,12 +9,13 @@ import runpy
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
-from decimal import Decimal, getcontext, setcontext
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, getcontext, setcontext
 from pathlib import Path
 from typing import cast
 
 import pytest
 from scripts.research import research_v2_execution_factorial as factorial_cli
+from scripts.research import research_v2_retained_diagnosis as retained
 
 from adaptive_trading_bot.backtest import ExecutionCostConfiguration, ExecutionSeries
 from adaptive_trading_bot.domain import Candle, Timeframe
@@ -27,7 +28,11 @@ from adaptive_trading_bot.research.paired_exit_replay import (
     HistoricalStrategyContextObservation,
 )
 from adaptive_trading_bot.research.research_v2_admission import PANEL
-from adaptive_trading_bot.research.research_v2_exploratory_screen import _digest, frozen_tasks
+from adaptive_trading_bot.research.research_v2_exploratory_screen import (
+    _canonical,
+    _digest,
+    frozen_tasks,
+)
 from adaptive_trading_bot.research.research_v2_factorial import (
     EXPECTED_ADMISSIONS,
     EXPECTED_MATRIX_RECORDS,
@@ -53,6 +58,7 @@ from adaptive_trading_bot.research.research_v2_factorial import (
     stage_counts,
     verify_outcome_against_factorial_result,
 )
+from adaptive_trading_bot.research.research_v2_screen_evidence import encode as encode_authority
 from adaptive_trading_bot.strategies import CandidateAction
 
 _HELPERS = runpy.run_path(str(Path(__file__).with_name("test_paired_exit_replay.py")))
@@ -153,6 +159,12 @@ def test_missing_cells_use_shared_all_fill_authorities_for_long_and_short(
         task_id=frozen_tasks()[0].task_id,
         source_artifact_sha256="2" * 64,
     )
+    assert result.entry_intent is not None
+    facts = dict(outcome.evidence_facts)
+    assert facts["authorized_quantity"] == str(result.entry_intent.quantity)
+    assert facts["authorized_reference_price"] == str(result.entry_intent.reference_price)
+    assert facts["authorized_stop_basis"] == str(result.entry_intent.stop_basis)
+    assert "primary_exit_reason" in facts
     verify_outcome_against_factorial_result(
         outcome,
         restored,
@@ -227,6 +239,10 @@ def _inventory() -> tuple[AdmittedDecisionReference, ...]:
                     "a" * 64,
                     "b" * 64,
                     "c" * 64,
+                    f"P{index % 3 + 1}",
+                    f"W{index % 9 + 1}",
+                    "LONG" if index % 2 == 0 else "SHORT",
+                    "BUY" if index % 2 == 0 else "SELL",
                 )
             )
     assert len(rows) == EXPECTED_ADMISSIONS
@@ -443,10 +459,15 @@ def test_partial_projection_is_not_a_ten_member_classification_and_decimal_is_lo
     )
     original = getcontext().copy()
     try:
-        getcontext().prec = 2
+        getcontext().prec = 6
+        getcontext().rounding = ROUND_DOWN
+        low_precision = project_factorial_matrix(inventory, outcomes, complete=False)
+        getcontext().prec = 28
+        getcontext().rounding = ROUND_HALF_EVEN
         projection = project_factorial_matrix(inventory, outcomes, complete=False)
     finally:
         setcontext(original)
+    assert _canonical(low_precision) == _canonical(projection)
     assert projection["classification"] == (
         "PARTIAL_TECHNICAL_CHECKPOINT_NO_TEN_MEMBER_CLASSIFICATION"
     )
@@ -456,6 +477,12 @@ def test_partial_projection_is_not_a_ten_member_classification_and_decimal_is_lo
     assert len(cast(tuple[object, ...], decision_rows[0]["cells"])) == 4
     summaries = cast(dict[str, object], projection["descriptive_summaries"])
     assert set(summaries) == {"full", "original_mask"}
+    assert len(cast(tuple[object, ...], cast(dict[str, object], summaries["full"])["week"])) == 36
+    grouped = cast(dict[str, object], projection["grouped_factor_contrasts"])
+    full_grouped = cast(dict[str, object], grouped["full"])
+    side_rows = cast(tuple[dict[str, object], ...], full_grouped["side"])
+    assert cast(int, side_rows[0]["eligible_decision_count"]) > 0
+    assert cast(int, side_rows[1]["eligible_decision_count"]) > 0
     contrast = cast(tuple[dict[str, object], ...], projection["contrasts"])[0]
     assert contrast == {
         "decision_identity_sha256": first.decision_identity_sha256,
@@ -501,6 +528,55 @@ def test_positive_latency_without_a_later_open_is_entry_unfilled() -> None:
     )
     assert result.status.value == "ENTRY_UNFILLED"
     assert result.branches == ()
+    record = json.loads(
+        json.dumps(factorial_result_record(result, decision_index=0, candles=candles))
+    )
+    restored = recover_factorial_result(
+        record,
+        decision=decision,
+        decision_index=0,
+        cell=FactorialCell.C0L1,
+        candles=candles,
+    )
+    task = frozen_tasks()[0]
+    outcome = outcome_from_factorial_result(
+        restored,
+        task_id=task.task_id,
+        source_artifact_sha256="4" * 64,
+    )
+    assert outcome.closed_net_r is None
+    assert dict(outcome.hold_only_facts)["status"] is None
+    reference = AdmittedDecisionReference(
+        task.task_id,
+        0,
+        outcome.decision_identity_sha256,
+        task.wire_symbol,
+        task.family.upper(),
+        decision.identity.observed_at,
+        False,
+        "1" * 64,
+        "2" * 64,
+        "3" * 64,
+        "P1",
+        "W1",
+        "LONG",
+        "BUY",
+    )
+    projection = project_factorial_matrix(
+        (reference,),
+        (outcome,),
+        complete=False,
+        _validate_frozen_inventory=False,
+    )
+    assert projection["record_count"] == 1
+    assert projection["complete_quadruple_count"] == 0
+
+
+def test_entry_order_side_maps_to_position_direction_without_zeroing_side_cells() -> None:
+    assert factorial_cli._position_direction("BUY") == "LONG"
+    assert factorial_cli._position_direction("SELL") == "SHORT"
+    with pytest.raises(FactorialError, match="BUY or SELL"):
+        factorial_cli._position_direction("LONG")
 
 
 def test_filled_factorial_result_cannot_be_resealed_as_entry_unfilled() -> None:
@@ -593,10 +669,166 @@ def test_locked_data_only_preflight_artifact_matches_manifest() -> None:
 
 
 def test_retained_loader_never_constructs_full_entry_population(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = json.loads((PREFLIGHT_ROOT / "input-plan.json").read_bytes())
-    first = cast(dict[str, object], plan["admitted_inventory"][0])
+    decision = cast(DecisionJournalEntry[object, object], _decision(outcome="cleared"))
+    observations = tuple(
+        HistoricalStrategyContextObservation(_current_context(minutes))
+        for minutes in range(15, 61, 15)
+    )
+    expected = retained.TaskExpectation(
+        index=0,
+        task_id=frozen_tasks()[0].task_id,
+        symbol="BTCUSDT",
+        family="trend_pullback",
+        context_start=NOW,
+        decision_start=NOW - timedelta(minutes=15),
+        decision_end=NOW,
+        follow_up_end=NOW + timedelta(hours=1),
+        decision_count=1,
+        input_kind="SYNTHETIC_INDEXED_FIXTURE",
+        source_id=SOURCE.value,
+        dataset_version="synthetic-loader-v1",
+        manifest_sha256="1" * 64,
+        profile="SYNTHETIC_PROFILE",
+        protocol_sha256="2" * 64,
+        task_plan_sha256="3" * 64,
+    )
+    binding = {
+        "kind": expected.input_kind,
+        "source_id": SOURCE,
+        "dataset_version": expected.dataset_version,
+        "manifest_sha256": expected.manifest_sha256,
+        "schema_version": "research-v2-input-binding-v1",
+    }
+    population_values: dict[str, object] = {
+        "schema_version": "research-v2-study-decision-population-v1",
+        "protocol_sha256": expected.protocol_sha256,
+        "source_id": SOURCE,
+        "dataset_version": expected.dataset_version,
+        "manifest_sha256": expected.manifest_sha256,
+        "profile": expected.profile,
+        "integrity_seal": "4" * 64,
+        "configuration": {
+            "family": expected.family,
+            "schema_version": "research-v2-admission-configuration-v2",
+            "input_binding": binding,
+            "bounds": {
+                "symbol": BTC,
+                "source_id": SOURCE,
+                "context_start": expected.context_start,
+                "decision_start": expected.decision_start,
+                "decision_end": expected.decision_end,
+                "follow_up_end": expected.follow_up_end,
+                "profile": expected.profile,
+                "admission_version": "RESEARCH_V2_ISOLATED_ADMISSION_V1",
+            },
+        },
+    }
+
+    def tagged_object(name: str, values: dict[str, object]) -> list[object]:
+        return [
+            "dataclass",
+            f"adaptive_trading_bot.research.synthetic.{name}",
+            [[field_name, encode_authority(value)] for field_name, value in values.items()],
+        ]
+
+    bounds = cast(dict[str, object], population_values["configuration"])["bounds"]
+    configuration = cast(dict[str, object], population_values["configuration"])
+    configuration_fields = [
+        ["family", encode_authority(configuration["family"])],
+        ["schema_version", encode_authority(configuration["schema_version"])],
+        ["input_binding", tagged_object("SyntheticInputBinding", binding)],
+        ["bounds", tagged_object("SyntheticBounds", cast(dict[str, object], bounds))],
+    ]
+    fields = [
+        [
+            name,
+            (
+                [
+                    "dataclass",
+                    "adaptive_trading_bot.research.synthetic.SyntheticConfiguration",
+                    configuration_fields,
+                ]
+                if name == "configuration"
+                else encode_authority(value)
+            ),
+        ]
+        for name, value in population_values.items()
+    ]
+    fields.extend(
+        (
+            ["decisions", ["tuple", [encode_authority(decision)]]],
+            [
+                "contexts",
+                ["tuple", [encode_authority(item) for item in observations]],
+            ],
+        )
+    )
+    population_payload = gzip.compress(
+        retained._canonical(
+            {
+                "schema_version": "research-v2-screen-authority-evidence-v1",
+                "population": [
+                    "dataclass",
+                    "adaptive_trading_bot.research.research_v2_admission."
+                    "ResearchV2StudyDecisionPopulation",
+                    fields,
+                ],
+            }
+        ),
+        mtime=0,
+    )
+    partition: dict[str, object] = {
+        "schema_version": "research-v2-exploratory-screen-v4",
+        "protocol_sha256": expected.protocol_sha256,
+        "task_plan_sha256": expected.task_plan_sha256,
+        "source_id": expected.source_id,
+        "dataset_version": expected.dataset_version,
+        "manifest_sha256": expected.manifest_sha256,
+        "population_decision_count": 1,
+        "population_sha256": "4" * 64,
+        "task": {
+            "context_start": retained._iso(expected.context_start),
+            "decision_end": retained._iso(expected.decision_end),
+            "decision_slots": 1,
+            "decision_start": retained._iso(expected.decision_start),
+            "family": expected.family,
+            "index": 0,
+            "last_follow_up_end": retained._iso(expected.follow_up_end),
+            "scenario_rows": 2,
+            "symbol": expected.symbol,
+            "task_id": expected.task_id,
+        },
+    }
+    partition["partition_sha256"] = hashlib.sha256(retained._canonical(partition)).hexdigest()
+    partition_payload = retained._canonical(partition)
+    authority_payload = gzip.compress(b"", mtime=0)
+    evidence = tmp_path / "synthetic-indexed"
+    evidence.mkdir()
+    paths = {
+        "population": "population.json.gz",
+        "partition": "partition.json",
+        "authority": "authority.jsonl.gz",
+    }
+    payloads = {
+        "population": population_payload,
+        "partition": partition_payload,
+        "authority": authority_payload,
+    }
+    files: dict[str, tuple[int, str]] = {}
+    for name, relative in paths.items():
+        payload = payloads[name]
+        (evidence / relative).write_bytes(payload)
+        files[relative] = (len(payload), hashlib.sha256(payload).hexdigest())
+    first: dict[str, object] = {
+        "decision_index": 0,
+        "decision_identity_sha256": _digest(str(decision.identity)),
+        "population_sha256": hashlib.sha256(population_payload).hexdigest(),
+        "partition_sha256": hashlib.sha256(partition_payload).hexdigest(),
+        "authority_sha256": hashlib.sha256(authority_payload).hexdigest(),
+    }
 
     def prohibited(*args: object, **kwargs: object) -> None:
         raise AssertionError("full entry population evaluation is prohibited")
@@ -606,11 +838,28 @@ def test_retained_loader_never_constructs_full_entry_population(
         "ResearchV2StudyDecisionPopulation._validate_population_facts",
         prohibited,
     )
-    view = factorial_cli._load_task_view(Path(__file__).parents[2], 0, (first,))
+    view = factorial_cli._load_indexed_task_view(
+        evidence=evidence,
+        files=files,
+        paths=paths,
+        task_index=0,
+        selected=(first,),
+        expected=expected,
+    )
     decision_index = first["decision_index"]
     assert type(decision_index) is int
     assert tuple(view.decisions) == (decision_index,)
-    assert view.contexts
+    assert view.contexts == observations
+    (evidence / paths["population"]).write_bytes(b"LFS pointer, not fixture bytes")
+    with pytest.raises(retained.DiagnosisError, match="bytes differ"):
+        factorial_cli._load_indexed_task_view(
+            evidence=evidence,
+            files=files,
+            paths=paths,
+            task_index=0,
+            selected=(first,),
+            expected=expected,
+        )
 
 
 def test_zero_admission_unit_writes_empty_artifact_without_task_reconstruction(
@@ -632,6 +881,7 @@ def test_zero_admission_unit_writes_empty_artifact_without_task_reconstruction(
 
 def test_small_synthetic_staged_execution_storage_and_verification(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     decision = cast(DecisionJournalEntry[object, object], _decision(outcome="cleared"))
     observations = tuple(
@@ -650,64 +900,200 @@ def test_small_synthetic_staged_execution_storage_and_verification(
         observations,
     )
     identity = _digest(str(decision.identity))
-    reference: dict[str, object] = {
-        "task_id": task.task_id,
-        "decision_index": 0,
-        "decision_identity_sha256": identity,
-        "symbol": task.wire_symbol,
-        "family": task.family.upper(),
-        "population_sha256": "a" * 64,
-        "partition_sha256": "b" * 64,
-        "authority_sha256": "c" * 64,
-    }
-    grant = _grant(_inventory())
-    store = FactorialLedgerStore.create(
-        tmp_path,
-        grant,
-        actual_sha="d" * 40,
-        task_ids=(f"{task.task_id}:C1L0", f"{task.task_id}:C0L1"),
-        stage_a_count=1,
-        synthetic=True,
+    reference = AdmittedDecisionReference(
+        task.task_id,
+        0,
+        identity,
+        task.wire_symbol,
+        task.family.upper(),
+        decision.identity.observed_at,
+        True,
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        "P1",
+        "W1",
+        "LONG",
+        "BUY",
     )
-    summaries: list[dict[str, object]] = []
-    outcomes: list[FactorialOutcome] = []
-    for index, cell in enumerate((FactorialCell.C1L0, FactorialCell.C0L1)):
-        if index == 1:
-            with pytest.raises(FactorialError, match="cannot be started"):
-                store.start(index)
-            authorization = StageContinuationAuthorization(
-                "ARCHITECT_AUTHORIZED_STAGE_B_CONTINUATION",
-                grant.run_uuid,
-                grant.executable_sha,
-                grant.protocol_sha256,
-                grant.input_plan_sha256,
-                grant.admitted_inventory_sha256,
-                "9" * 64,
-            )
-            store.authorize_stage_b(authorization, grant)
-        store.start(index)
-        artifact = store.directory / f"{index:02d}.factorial.jsonl.gz"
-        digest, _ = factorial_cli._execute_unit(
-            Path(__file__).parents[2],
-            0,
+    reference_record = reference.to_record()
+    imported: tuple[dict[str, object], ...] = tuple(
+        {
+            "task_id": task.task_id,
+            "decision_index": 0,
+            "decision_identity_sha256": identity,
+            "cell": cell.value,
+            "terminal_status": "ORDINARY_OPEN",
+            "symbol": task.wire_symbol,
+            "family": task.family.upper(),
+            "closed_net_r": None,
+            "incurred_fees_quote": "0",
+            "gross_realized_pnl_quote": "0",
+            "net_realized_pnl_quote": "0",
+            "residual_base_quantity": "1",
+            "result_sha256": character * 64,
+            "authority_sha256": "c" * 64,
+            "evidence_facts": {},
+            "hold_only_facts": {},
+        }
+        for cell, character in (
+            (FactorialCell.C0L0, "7"),
+            (FactorialCell.C1L1, "8"),
+        )
+    )
+    stage_b_task = frozen_tasks()[1]
+    plan: dict[str, object] = {
+        "input_plan_sha256": "e" * 64,
+        "admitted_inventory_sha256": admitted_inventory_digest((reference,)),
+        "admitted_inventory": (reference_record,),
+        "imported_diagonal_inventory": imported,
+        "imported_diagonal_inventory_sha256": _digest(imported),
+        "new_task_cell_inventory": (
+            {
+                "unit_id": f"{task.task_id}:C1L0",
+                "stage": "A",
+                "task_id": task.task_id,
+                "cell": "C1L0",
+                "admission_count": 1,
+            },
+            {
+                "unit_id": f"{task.task_id}:C0L1",
+                "stage": "A",
+                "task_id": task.task_id,
+                "cell": "C0L1",
+                "admission_count": 1,
+            },
+            {
+                "unit_id": f"{stage_b_task.task_id}:C1L0",
+                "stage": "B",
+                "task_id": stage_b_task.task_id,
+                "cell": "C1L0",
+                "admission_count": 0,
+            },
+            {
+                "unit_id": f"{stage_b_task.task_id}:C0L1",
+                "stage": "B",
+                "task_id": stage_b_task.task_id,
+                "cell": "C0L1",
+                "admission_count": 0,
+            },
+        ),
+    }
+    grant = FactorialExecutionGrant(
+        "SYNTHETIC_FACTORIAL_GRANT",
+        str(uuid.uuid4()),
+        "d" * 40,
+        PROTOCOL_SHA256,
+        str(plan["input_plan_sha256"]),
+        str(plan["admitted_inventory_sha256"]),
+        "synthetic-source",
+        "synthetic-dataset",
+        "f" * 64,
+    )
+    grant_path = tmp_path / "grant.json"
+    grant_path.write_bytes(
+        _canonical({name: getattr(grant, name) for name in grant.__dataclass_fields__})
+    )
+    fixture = factorial_cli._SyntheticStagedFixture("d" * 40, plan, {0: view})
+    calls: list[tuple[int, FactorialCell]] = []
+    actual_execute = factorial_cli._execute_unit
+
+    def counted_execute(
+        repo: Path,
+        task_index: int,
+        cell: FactorialCell,
+        inventory: tuple[dict[str, object], ...],
+        output: Path,
+        *,
+        task_view: factorial_cli._RetainedTaskView | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        calls.append((task_index, cell))
+        return actual_execute(
+            repo,
+            task_index,
             cell,
-            (reference,),
-            artifact,
-            task_view=view,
+            inventory,
+            output,
+            task_view=task_view,
         )
-        store.complete(index, digest)
-        summary, rows = factorial_cli._verify_unit_artifact(
+
+    monkeypatch.setattr(factorial_cli, "_execute_unit", counted_execute)
+    checkpoint = factorial_cli._run_stage_a(
+        Path(__file__).parents[2], grant_path, tmp_path, fixture=fixture
+    )
+    ledger_dir = tmp_path / grant.run_uuid
+    checkpoint_sha = str(checkpoint["checkpoint_sha256"])
+    assert (ledger_dir / "stage-a-checkpoint.json").read_bytes() == _canonical(checkpoint)
+    assert (
+        factorial_cli._verify_stage_a(
+            Path(__file__).parents[2], grant_path, ledger_dir, fixture=fixture
+        )["checkpoint_sha256"]
+        == checkpoint_sha
+    )
+
+    wrong = StageContinuationAuthorization(
+        "ARCHITECT_AUTHORIZED_STAGE_B_CONTINUATION",
+        grant.run_uuid,
+        grant.executable_sha,
+        grant.protocol_sha256,
+        grant.input_plan_sha256,
+        grant.admitted_inventory_sha256,
+        "9" * 64,
+    )
+    wrong_path = tmp_path / "wrong-continuation.json"
+    wrong_path.write_bytes(
+        _canonical({name: getattr(wrong, name) for name in wrong.__dataclass_fields__})
+    )
+    with pytest.raises(FactorialError, match="changed frozen"):
+        factorial_cli._continue_stage_b(
             Path(__file__).parents[2],
-            {"task_id": task.task_id, "cell": cell.value, "unit_id": store.load().task_ids[index]},
-            (reference,),
-            artifact,
-            task_view=view,
+            grant_path,
+            wrong_path,
+            ledger_dir,
+            fixture=fixture,
         )
-        summaries.append(summary)
-        outcomes.extend(rows)
-        if index == 0:
-            store.pause_after_stage_a("9" * 64)
-    assert [row["outcome_count"] for row in summaries] == [1, 1]
-    assert {row.cell for row in outcomes} == {FactorialCell.C1L0, FactorialCell.C0L1}
-    store.finalize(_digest(tuple(row.result_sha256 for row in outcomes)))
-    assert store.load().run_state is FactorialRunState.FINALIZED
+    assert FactorialLedgerStore(ledger_dir).load().task_states[2:] == (
+        "NOT_STARTED",
+        "NOT_STARTED",
+    )
+
+    authorization = replace(wrong, stage_a_checkpoint_sha256=checkpoint_sha)
+    authorization_path = tmp_path / "continuation.json"
+    authorization_path.write_bytes(
+        _canonical(
+            {name: getattr(authorization, name) for name in authorization.__dataclass_fields__}
+        )
+    )
+    factorial_cli._continue_stage_b(
+        Path(__file__).parents[2],
+        grant_path,
+        authorization_path,
+        ledger_dir,
+        fixture=fixture,
+    )
+    projection = factorial_cli._finalize_verified_run(
+        Path(__file__).parents[2], grant_path, ledger_dir, fixture=fixture
+    )
+    first_verification = factorial_cli._verify_finalized_run(
+        Path(__file__).parents[2], grant_path, ledger_dir, fixture=fixture
+    )
+    second_verification = factorial_cli._verify_finalized_run(
+        Path(__file__).parents[2], grant_path, ledger_dir, fixture=fixture
+    )
+    assert first_verification == second_verification
+    assert first_verification["projection_sha256"] == projection["projection_sha256"]
+    assert calls == [
+        (0, FactorialCell.C1L0),
+        (0, FactorialCell.C0L1),
+        (1, FactorialCell.C1L0),
+        (1, FactorialCell.C0L1),
+    ]
+    saved_projection = (ledger_dir / "projection.json").read_bytes()
+    changed_projection = json.loads(saved_projection)
+    changed_projection["incurred_fees_quote_by_cell"]["C1L0"] = "999"
+    (ledger_dir / "projection.json").write_bytes(_canonical(changed_projection))
+    with pytest.raises(FactorialError, match="differs from reconstructed"):
+        factorial_cli._verify_finalized_run(
+            Path(__file__).parents[2], grant_path, ledger_dir, fixture=fixture
+        )
+    (ledger_dir / "projection.json").write_bytes(saved_projection)
