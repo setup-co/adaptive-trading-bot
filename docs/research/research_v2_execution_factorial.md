@@ -69,19 +69,22 @@ entry strategy/Risk/Safety population evaluation. The two new cells share one
 task-level parse; zero-admission tasks emit an explicit empty artifact without
 constructing a population.
 
-The accepted data-only preflight report is
-`data/research_evidence/issue-191-factorial-preflight-fc3fc5096350d087/input-plan.json`
-(489,029 bytes; SHA-256
-`299ebc3b4b920ff78b382fa56efb86dc6975c4f0176f8803486a6cca13e95cd2`).
+The corrected V2 data-only preflight report is
+`data/research_evidence/issue-191-factorial-preflight-v2-4a1248c/input-plan.json`
+(917,964 bytes; SHA-256
+`038ad51b127039f3a62d1b5d8c0f5e72eb5451359b5881964bd1d09e8b7d7334`).
 Its immutable identities are:
 
-- input plan `f57577ca785ce3f97a4d35d85b039219e10f179c029336640f4a44db168a0b5b`;
-- admitted inventory `50e809059022b0093d1874dca4d5cc9f8e1f8013366df499650ad723e6289307`;
+- input plan `963c6007218e8e6561a31bbde8ac9d595e04c416ea334e879c302768962d19df`;
+- admitted inventory `0f9731c1b6aec7a85b9048a35460a942692f203d17505e98027c9295e538d24c`;
 - original mask `21fd62428c2d76d0f6800dfad30c4396c5096e660b186b81a8bcb201a11c12d7`;
-- imported diagonals `29d745efb3c471eeded66be1167e298e41d11c3b8484d771925741249351207d`.
+- imported diagonals `bdb180fdd7cd2e0caac3fd2e540fb87dc1ebfed211e49431b6f8f82757a33099`.
 
 The separate manifest SHA-256 is
-`d006b6e5f19bc990efa4010ea9ece668a7a69fe24b4ba93688935f76995daaba`.
+`0fb0bd5a84fa584a440adfd8626048481569b0c9b2be43a1d12096187f9912a6`.
+The V1 preparation directory remains immutable and is explicitly superseded;
+the V2 plan records the expanded report provenance and was regenerated from
+source commit `4a1248c7cddb857f64fe02c5d8f60ad63924f377` rather than relabeling V1.
 These facts were derived from the pinned Issue-#187 bytes without invoking a
 strategy, Feature/Regime engine, simulator, or PnL calculation.
 

@@ -63,8 +63,7 @@ _decision = _HELPERS["_decision"]
 _execution_path = _HELPERS["_execution_path"]
 _current_context = _HELPERS["_current_context"]
 PREFLIGHT_ROOT = (
-    Path(__file__).parents[2]
-    / "data/research_evidence/issue-191-factorial-preflight-fc3fc5096350d087"
+    Path(__file__).parents[2] / "data/research_evidence/issue-191-factorial-preflight-v2-4a1248c"
 )
 
 
@@ -576,18 +575,19 @@ def test_locked_data_only_preflight_artifact_matches_manifest() -> None:
     manifest = json.loads(manifest_payload)
     plan_payload = (PREFLIGHT_ROOT / "input-plan.json").read_bytes()
     assert hashlib.sha256(manifest_payload).hexdigest() == (
-        "d006b6e5f19bc990efa4010ea9ece668a7a69fe24b4ba93688935f76995daaba"
+        "0fb0bd5a84fa584a440adfd8626048481569b0c9b2be43a1d12096187f9912a6"
     )
-    assert len(plan_payload) == manifest["artifact"]["size_bytes"] == 489029
+    assert len(plan_payload) == manifest["artifact"]["size_bytes"] == 917964
     assert (
         hashlib.sha256(plan_payload).hexdigest()
         == manifest["artifact"]["sha256"]
-        == "299ebc3b4b920ff78b382fa56efb86dc6975c4f0176f8803486a6cca13e95cd2"
+        == "038ad51b127039f3a62d1b5d8c0f5e72eb5451359b5881964bd1d09e8b7d7334"
     )
     plan = json.loads(plan_payload)
     assert plan["status"] == "DATA_ONLY_PREPARATION; NO_EXECUTION_GRANT"
     assert plan["protocol_sha256"] == PROTOCOL_SHA256
     assert plan["input_plan_sha256"] == manifest["input_plan_sha256"]
+    assert manifest["preparation_source_commit"] == ("4a1248c7cddb857f64fe02c5d8f60ad63924f377")
     assert plan["counts"]["stages"]["A"]["admission_count"] == 48
     assert plan["counts"]["stages"]["B"]["admission_count"] == 198
 
