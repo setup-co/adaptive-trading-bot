@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-10-15
+**Snapshot date:** 2026-10-17
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,15 +8,20 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified pre-Issue-#185 `main` after Issue #183 / PR #184:
+Verified Issue-#187 execution base after Issue #185 / PR #186:
 
-`d7f7b2f88429a9e41611ca0a000eeb7ac2085cf5`
+`316744efa9c4b50aa8d999b3c4d11fd874b4c28c`
 
-This is the exact base for Issue #185's prospective exploratory-screen work.
+This is the exact executable used by Issue #187's one-shot offline Research V2
+exploratory screen. Its file tree is
+`0c6626dc913457b41221af8ac6e46ddf4e0a3c75`, identical to the reviewed PR
+#186 tree.
 Issue #183's accepted isolated admission was squash-integrated with reviewed
 tree `a4e74abfbc2f25484364a9d138a122e24afdc45b`; its synthetic-only
-integration guard remains. Issue #185 preparation has no real execution grant
-or historical strategy result.
+integration guard remains. Issue #185 preparation was followed by the separate
+reviewed external grant in Issue #187. All 30 ordered tasks finalized once and
+the read-only verifier returned exit code `0`; the evidence-only PR records the
+result without changing the executable or protocol.
 PR #180 was closed after metadata reconciliation because its accepted content
 was already integrated on `main`; Issue #179 is closed for its bounded tooling
 and partial evidence, not for a completed ten-member Package A. Issue #177's
@@ -51,7 +56,16 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#181 — bounded Research V2 C2 tail acquired, verified and merged; #183 isolates prospective admission; #185 predeclares the exploratory screen, with no real historical study authorized yet.**
+**#187 — the frozen Research V2 exploratory screen completed and verified; its evidence-only result is now the active review gate.**
+The single external-grant run used UUID
+`686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
+`316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
+binding. Frozen family classifications are Trend Pullback
+`NEGATIVE_EVIDENCE`, Breakout + Retest `INSUFFICIENT_EVIDENCE`, and Range
+Mean Reversion `INSUFFICIENT_EVIDENCE`. This retrospective normalized-base,
+unleveraged/pre-funding screen is not portfolio or trading authority. Do not
+rerun, tune, or reinterpret insufficient evidence as a positive result. See
+`docs/research/research_v2_exploratory_screen_primary_result.md`.
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -342,7 +356,14 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #175's original locked one-shot `RANKING_INCOMPLETE` result
+1. Review and lock Issue #187's completed, verified evidence-only result. The
+   run must not be repeated or tuned on these windows. Its classifications are
+   Trend Pullback `NEGATIVE_EVIDENCE`, Breakout + Retest
+   `INSUFFICIENT_EVIDENCE`, and Range Mean Reversion
+   `INSUFFICIENT_EVIDENCE`. The next research gate, if any, requires a new
+   architect-selected protocol after this evidence is accepted. Historical
+   context remains: Issue #175's original locked one-shot
+   `RANKING_INCOMPLETE` result
    alongside the separate architect-authorized KAS-only completion and
    `SELECTED_FOR_DATA_QUALIFICATION` combined projection. Do not issue another
    KAS request or infer study readiness from the exploratory panel. The four
@@ -359,10 +380,9 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    the accepted C2 binding is data-only in its synthetic integration seam.
    Issue #185's [versioned annex](research/research_v2_exploratory_screen.md)
    and guarded runner predeclare the ten-member calendar, 30 tasks, fixed
-   scenarios and screen. The implementation PR permits synthetic validation
-   and actual **data-only** preflight, not historical strategy execution. A
-   separate architect-reviewed exact executable SHA/protocol/input grant is
-   still required; no such grant is committed or implied by coverage.
+   scenarios and screen. Issue #187 supplied the separate reviewed external
+   grant and completed that exact one-shot execution; neither the grant nor
+   this result expands runtime or Live authority.
 2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161

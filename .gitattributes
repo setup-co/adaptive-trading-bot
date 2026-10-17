@@ -3,3 +3,10 @@ data/research_inputs/** -text
 docs/research/manifests/*.json -text
 data/research_evidence/issue-157-range-scarcity-95b2ba209d121cd6/run-a-report.json filter=lfs diff=lfs merge=lfs -text
 data/research_evidence/range-scarcity-continuation-v1-*/run-[bc]-report.json filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/ledger/**/*.authority.jsonl.gz filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/ledger/**/*.population.json.gz filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/ledger/**/*.partition.json filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/environment.txt -text -diff
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/preflight-output.json -text -diff
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/run-output.log -text -diff
+data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/verify-output.log -text -diff

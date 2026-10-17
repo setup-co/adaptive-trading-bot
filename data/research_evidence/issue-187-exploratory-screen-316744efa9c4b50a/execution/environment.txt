@@ -1,0 +1,6 @@
+python=3.12.14
+platform=Windows-11-10.0.26200-SP0
+module=C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-187-execution\src\adaptive_trading_bot\__init__.py
+pytest=8.4.2
+pyarrow=25.0.1
+ccxt=4.5.78
