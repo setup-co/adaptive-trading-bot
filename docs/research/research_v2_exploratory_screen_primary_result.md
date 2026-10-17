@@ -80,9 +80,9 @@ Decimal strings in USDT.
 
 There were no `ENTRY_UNFILLED`, `SAFETY_BLOCKED`, `ORDINARY_OPEN`, or
 `RECOVERY_OPEN` primary rows in any family/scenario. Residual absolute base
-quantity is exactly zero for every one of the ten assets in every primary and
-hold-only summary. Base units are retained per asset in the projection and
-are not summed across instruments.
+quantity is exactly zero for every one of the ten assets in every primary
+summary. Base units are retained per asset in the projection and are not
+summed across instruments.
 
 ## Dependence and sufficiency diagnostics
 
@@ -98,10 +98,14 @@ Masked admissions by UTC week are:
 - Breakout + Retest: `W1:2, W2:4, W3:1, W4:0, W5:3, W6:5, W7:2, W8:4, W9:4`.
 - Range Mean Reversion: `W1:0, W2:0, W3:0, W4:0, W5:0, W6:0, W7:0, W8:0, W9:1`.
 
-The full projection retains the complete P1–P3, asset, week, side, regime,
-and zero-cell strata. The STRESS leave-one-asset-out full/masked mean R pairs
-are preserved below because the frozen positive screen requires every pair to
-remain positive:
+The complete P1–P3, asset, week, side, regime, and explicit zero-cell strata
+are retained in each per-task `NN.partition.json` artifact. The corresponding
+task IDs are listed in `projection.json.task_artifacts`, and the raw file
+SHA-256 and size for every partition are listed in `artifact-index.json`.
+`projection.json` retains family-level aggregates and selected diagnostics;
+it does not contain every detailed stratum. The STRESS leave-one-asset-out
+full/masked mean R pairs are preserved below because the frozen positive
+screen requires every pair to remain positive:
 
 | Asset | Trend full / masked | Breakout full / masked | Range full / masked |
 | --- | ---: | ---: | ---: |
@@ -130,6 +134,17 @@ and five unresolved. BASE reports fees
 `-1.713274812049028677150786308973173`, and R profit factor
 `0.06034889720264385660131127552807125`.
 
+The five unresolved branches leave the same per-asset absolute base quantities
+in BASE and STRESS: BTCUSDT
+`0.10947500751783555945913955292`, XRPUSDT
+`17755.377646621171718940007315`, and AVAXUSDT
+`221.2389380530973451327433628`; each of the other seven assets is exactly
+zero. These quantities are sums of independent hypothetical residual
+exposures within the hold-only diagnostic branch. They do not represent a
+common funded account or a market-value estimate, and base units of different
+assets must not be summed. The unresolved hold-only branches do not affect
+EMA50 primary sufficiency or the Trend Pullback classification.
+
 ## Immutable evidence delivery
 
 The evidence directory is
@@ -150,7 +165,9 @@ file SHA-256 and size in the index. The directory includes:
 
 The final run output and verifier output are byte-identical after capture
 (SHA-256 `50565d7265501447d60633fe6ff85c7019ce1952f777eb364622a94813c37a17`),
-which independently confirms the verifier reconstructed the same projection.
+showing that the existing offline verifier reproduced the recorded projection.
+This equality is not an independent implementation, data replication, or
+second research run.
 
 ## Interpretation limits
 
