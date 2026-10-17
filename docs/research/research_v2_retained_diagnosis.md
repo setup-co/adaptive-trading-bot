@@ -25,10 +25,12 @@ and 492 admitted scenario rows. Every required file matched its indexed size
 and SHA-256; task, decision, scenario, partition, and result identities were
 complete and unique.
 
-The corrected compact outputs are under
-`data/research_evidence/issue-189-retained-diagnosis-v2/`. The original v1
-generation remains immutable but is superseded because it joined retained
-rows positionally and used ambient Decimal arithmetic. `summary.json`
+The final corrected compact outputs are under
+`data/research_evidence/issue-189-retained-diagnosis-v3/`. The v1 and v2
+generations remain immutable and superseded. v2 fixed identity joins and most
+Decimal arithmetic; v3 closes the remaining quantity-context boundary and
+records explicit filled/open/recovery/hold-only synthetic coverage.
+`summary.json`
 retains family/asset/P1–P3/side/regime groupings with explicit zero terminal
 cells. `trades.csv` contains the 492 scenario-level admitted records, and
 `pairs.csv` contains the 246 BASE/STRESS pairs bound by the actual decision,
@@ -37,8 +39,16 @@ entry authority. `hold-only.json` preserves the distinct hold-only branch
 diagnostic and `reconciliation.json` records the correction lineage. The
 utility source
 SHA-256 is
-`9bfd709dfd7648667163d4316fcbb440ed85e8c1e1998e96ac107866386d26af`;
+`0c815e4a6ce913b0aaf006022e0d23540fc9c5bbbd160b1c38c5aa223f9d6a74`;
 it is distinct from the historical executable and UUID.
+
+Quantity handling has two documented meanings. Diagnostic output uses
+context-free `Decimal.copy_abs()` and therefore preserves the stored primitive
+exactly. Compatibility checks against the already serialized #187 compact row
+use an explicit 28-digit `ROUND_HALF_EVEN` context, reproducing the historical
+row producer without inheriting the caller's ambient context. This is separate
+from the accepted aggregate projection's 34-digit context and the diagnosis's
+50-digit descriptive arithmetic.
 
 The detailed sufficiency/dependence strata remain authoritative only in the
 accepted #187 `projection.json` under each `families.<family>.details` object.
@@ -151,13 +161,18 @@ recommended from this post-result diagnosis.
 ## Reproduction and limits
 
 ```console
-python -m scripts.research.research_v2_retained_diagnosis --repo . --output data/research_evidence/issue-189-retained-diagnosis-v2
+python -m scripts.research.research_v2_retained_diagnosis --repo . --output data/research_evidence/issue-189-retained-diagnosis-v3
 ```
 
 The corrected manifest SHA-256 is
-`98ee47e5dbaf803cf301a545c65300757007630c55a684b005ff28de8ffb2e4e`;
+`dd7da381670944844a46e46ee23bcb540707f7e466120c7dedcf493cd294e637`;
 the summary SHA-256 is
-`7d7887064a5b7c34cd0678f788d380a07bda900b3410e0bbfb45cd94afc27836`.
+`8b9f614655adc5481eb6329a0e9d1ff7d7b757fe6d15ba6f606c5ff92540486d`.
+The v3 `trades.csv`, `pairs.csv`, and `hold-only.json` are byte-identical to
+v2; no retained historical row required an output-value correction. The v3
+summary is substantively identical after excluding schema/source-policy
+lineage fields. The new generation exists to make the arithmetic contract and
+filled-path verification truthful and reproducible.
 The finalized extraction reports zero network requests and
 zero feature/strategy/simulator calls. Historical-as-of universe quality,
 leveraged mechanics, funded portfolio effects, and causal component

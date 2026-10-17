@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Any
 
 PROTOCOL = "RESEARCH_V2_RETAINED_DIAGNOSIS_V1"
-SCHEMA = "research-v2-retained-diagnosis-v2"
-SUPERSEDED_SCHEMA = "research-v2-retained-diagnosis-v1"
-SUPERSEDED_MANIFEST_SHA256 = "5092e2ceac9134f2feb1358dc50170a359dfdd70f9366854b932bda33f2c0526"
+SCHEMA = "research-v2-retained-diagnosis-v3"
+SUPERSEDED_SCHEMA = "research-v2-retained-diagnosis-v2"
+SUPERSEDED_MANIFEST_SHA256 = "98ee47e5dbaf803cf301a545c65300757007630c55a684b005ff28de8ffb2e4e"
+V1_MANIFEST_SHA256 = "5092e2ceac9134f2feb1358dc50170a359dfdd70f9366854b932bda33f2c0526"
 RUN_UUID = "686bd4a1-ffff-4391-8562-f1e4caf7a575"
 EXECUTABLE_SHA = "316744efa9c4b50aa8d999b3c4d11fd874b4c28c"
 SOURCE_ID = "weex-research-v2-last-18912cf7e7f97d518a74551f"
@@ -91,6 +92,7 @@ CONTEXT_STARTS = {
 }
 DESCRIPTIVE_CONTEXT = Context(prec=50, rounding=ROUND_HALF_EVEN)
 ACCEPTED_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
+HISTORICAL_QUANTITY_CONTEXT = Context(prec=28, rounding=ROUND_HALF_EVEN)
 EXPECTED_COSTS = {
     SCENARIOS[0]: (Decimal("2"), Decimal("2"), Decimal("10"), timedelta()),
     SCENARIOS[1]: (
@@ -301,6 +303,19 @@ def _identity_digest(identity_value: object, label: str) -> str:
 def _decimal_sum(values: Iterable[Decimal]) -> Decimal:
     with localcontext(DESCRIPTIVE_CONTEXT):
         return sum(values, Decimal(0))
+
+
+def _lossless_decimal_abs(value: Decimal) -> Decimal:
+    """Return the stored magnitude without applying the ambient Decimal context."""
+
+    return value.copy_abs()
+
+
+def _historical_quantity_abs(value: Decimal) -> Decimal:
+    """Reproduce #187 row serialization's default 28-digit quantity context."""
+
+    with localcontext(HISTORICAL_QUANTITY_CONTEXT):
+        return +value.copy_abs()
 
 
 def _str_decimal(value: object | None) -> str | None:
@@ -578,7 +593,13 @@ def _branch_screen_facts(branch: dict[str, Any] | None) -> tuple[object, ...]:
     if not all(isinstance(value, Decimal) for value in (quantity, fees, gross, net)):
         raise DiagnosisError("branch accounting facts are not exact Decimals")
     assert isinstance(quantity, Decimal)
-    return (branch.get("closed_net_r"), fees, abs(quantity), gross, net)
+    return (
+        branch.get("closed_net_r"),
+        fees,
+        _historical_quantity_abs(quantity),
+        gross,
+        net,
+    )
 
 
 def _validate_screen_result(
@@ -958,7 +979,7 @@ def _trade_row(
         if position is None
         else _str_decimal(position.get("cumulative_net_realized_pnl")),
         "net_approved_risk_r": None if branch is None else _str_decimal(branch.get("closed_net_r")),
-        "remaining_base_quantity": _str_decimal(abs(quantity))
+        "remaining_base_quantity": _str_decimal(_lossless_decimal_abs(quantity))
         if position is not None and isinstance((quantity := position.get("quantity")), Decimal)
         else None,
         "all_fill_result_sha256": result_seal,
@@ -1442,7 +1463,7 @@ def extract(repo: Path, output: Path) -> dict[str, object]:
         "supersedes": {
             "schema_version": SUPERSEDED_SCHEMA,
             "manifest_sha256": SUPERSEDED_MANIFEST_SHA256,
-            "reason": "IDENTITY_BINDING_DECIMAL_RECONCILIATION_AND_COVERAGE_CORRECTION",
+            "reason": "QUANTITY_CONTEXT_AND_FILLED_PATH_COVERAGE_CORRECTION",
         },
         "decimal_policies": {
             "descriptive": {
@@ -1452,6 +1473,12 @@ def extract(repo: Path, output: Path) -> dict[str, object]:
             "accepted_projection": {
                 "precision": ACCEPTED_CONTEXT.prec,
                 "rounding": str(ACCEPTED_CONTEXT.rounding),
+            },
+            "quantity_output": "LOSSLESS_DECIMAL_COPY_ABS",
+            "historical_quantity_compatibility": {
+                "operation": "COPY_ABS_THEN_UNARY_PLUS",
+                "precision": HISTORICAL_QUANTITY_CONTEXT.prec,
+                "rounding": str(HISTORICAL_QUANTITY_CONTEXT.rounding),
             },
         },
         "grouping_rules": ["family", "asset", "P1-P3", "side", "regime", "scenario"],
@@ -1604,6 +1631,7 @@ def extract(repo: Path, output: Path) -> dict[str, object]:
         "schema_version": SCHEMA,
         "superseded_schema_version": SUPERSEDED_SCHEMA,
         "superseded_manifest_sha256": SUPERSEDED_MANIFEST_SHA256,
+        "preserved_v1_manifest_sha256": V1_MANIFEST_SHA256,
         "preserved_input_index_sha256": INDEX_SHA256,
         "preserved_projection_sha256": PROJECTION_SHA256,
         "corrections": [
@@ -1611,6 +1639,7 @@ def extract(repo: Path, output: Path) -> dict[str, object]:
             "CONTEXT_INDEPENDENT_DECIMAL_DERIVATION",
             "ROUNDING_RECONCILIATION_WITHOUT_EXACT_EQUALITY_CLAIM",
             "ENTRY_UNFILLED_OPEN_HOLD_ONLY_AND_ZERO_CELL_COVERAGE",
+            "LOSSLESS_QUANTITY_OUTPUT_WITH_EXPLICIT_HISTORICAL_COMPATIBILITY",
         ],
     }
     summary = {

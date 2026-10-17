@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import csv
 import gzip
 import hashlib
 import json
 import sys
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_DOWN, Context, Decimal, localcontext
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Context, Decimal, localcontext
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -60,14 +63,14 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
         family="trend_pullback",
         context_start=datetime(2026, 7, 21, tzinfo=UTC),
         decision_start=start,
-        decision_end=start + timedelta(minutes=30),
-        follow_up_end=start + timedelta(hours=168, minutes=30),
-        decision_count=2,
-        input_kind="ACCEPTED_C2",
-        source_id=diagnosis.SOURCE_ID,
-        dataset_version=diagnosis.DATASET_VERSION,
-        manifest_sha256=diagnosis.MANIFEST_SHA256,
-        profile="NORMALIZED_BASE_SIGNAL_V1",
+        decision_end=start + timedelta(minutes=75),
+        follow_up_end=start + timedelta(hours=169, minutes=15),
+        decision_count=5,
+        input_kind="SYNTHETIC_RETAINED_FIXTURE",
+        source_id="synthetic-retained-source-v1",
+        dataset_version="synthetic-retained-dataset-v1",
+        manifest_sha256="c" * 64,
+        profile="SYNTHETIC_BASE_SIGNAL_V1",
         protocol_sha256=diagnosis.PROTOCOL_SHA256,
         task_plan_sha256=diagnosis.TASK_PLAN_SHA256,
     )
@@ -101,7 +104,13 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
             "safety_decision": {"disposition": "CLEARED", "reasons": ()},
         }
 
-    decisions = (decision(0, "NO_TRADE"), decision(1, "LONG_CANDIDATE"))
+    decisions = (
+        decision(0, "NO_TRADE"),
+        decision(1, "LONG_CANDIDATE"),
+        decision(2, "LONG_CANDIDATE"),
+        decision(3, "SHORT_CANDIDATE"),
+        decision(4, "LONG_CANDIDATE"),
+    )
     binding = {
         "kind": expected.input_kind,
         "source_id": source,
@@ -140,13 +149,85 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
     }
     population_payload = gzip.compress(diagnosis._canonical(population_raw), mtime=0)
 
+    high_precision_quantity = Decimal("-0.1234567890123456789012345678901234")
+
+    def entry_fill(observed: datetime, scenario: str, *, side: str) -> dict[str, object]:
+        latency = diagnosis.EXPECTED_COSTS[scenario][3]
+        selected = observed if latency == timedelta() else observed + timedelta(minutes=15)
+        return {
+            "created_at": observed,
+            "eligible_at": observed + latency,
+            "execution_candle_open_time": selected,
+            "fill_at": selected,
+            "reference_open_price": Decimal("100"),
+            "fill_price": Decimal("100.1" if side == "BUY" else "99.9"),
+            "fee_quote": Decimal("1"),
+        }
+
+    def branch(
+        observed: datetime,
+        scenario: str,
+        *,
+        status: str,
+        label: str,
+        quantity: Decimal,
+        recovery: bool = False,
+        closed: bool = False,
+        seal_character: str,
+        side: str,
+    ) -> dict[str, object]:
+        entry = entry_fill(observed, scenario, side=side)
+        exit_request = None
+        exit_fill = None
+        fees = Decimal("1")
+        gross = Decimal("0")
+        net = Decimal("-1")
+        closed_r = None
+        if closed:
+            exit_created = observed + timedelta(hours=1)
+            latency = diagnosis.EXPECTED_COSTS[scenario][3]
+            exit_selected = (
+                exit_created if latency == timedelta() else exit_created + timedelta(minutes=15)
+            )
+            exit_request = {"created_at": exit_created}
+            exit_fill = {
+                "created_at": exit_created,
+                "eligible_at": exit_created + latency,
+                "execution_candle_open_time": exit_selected,
+                "fill_at": exit_selected,
+                "reference_open_price": Decimal("101"),
+                "fill_price": Decimal("100.9"),
+                "fee_quote": Decimal("1"),
+            }
+            quantity = Decimal("0")
+            fees = Decimal("2")
+            gross = Decimal("5")
+            net = Decimal("3")
+            closed_r = Decimal("0.3")
+        return {
+            "status": status,
+            "label": label,
+            "entry_fill": entry,
+            "exit_request": exit_request,
+            "exit_fill": exit_fill,
+            "final_position": {
+                "quantity": quantity,
+                "cumulative_fees": fees,
+                "cumulative_gross_realized_pnl": gross,
+                "cumulative_net_realized_pnl": net,
+            },
+            "closed_net_r": closed_r,
+            "recovery": {"reasons": ("STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL",)} if recovery else None,
+            "integrity_seal": seal_character * 64,
+        }
+
     screens: dict[str, object] = {}
     authority_lines: list[bytes] = []
     for scenario_index, scenario in enumerate(diagnosis.SCENARIOS):
         rows: list[dict[str, object]] = []
         for index, item in enumerate(decisions):
-            admitted = index == 1
-            status = "ENTRY_UNFILLED" if admitted else "NO_SIGNAL"
+            admitted = index != 0
+            side = "SELL" if index == 3 else "BUY"
             seal = ("a" if scenario_index == 0 else "b") * 64
             observed = start + timedelta(minutes=15 * (index + 1))
             identity = item["identity"]
@@ -161,7 +242,7 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
                     "observed_at": observed,
                     "strategy_id": expected.family,
                     "strategy_version": "1.0.0",
-                    "side": "BUY",
+                    "side": side,
                     "authorized_for_execution": True,
                     "reference_price": Decimal("100"),
                     "stop_basis": Decimal("99"),
@@ -169,6 +250,63 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
                     "approved_notional_quote": Decimal("1000"),
                     "quantity": Decimal("10"),
                 }
+            branches: tuple[dict[str, object], ...] = ()
+            entry_unfilled: dict[str, object] | None = None
+            status = "NO_SIGNAL"
+            if index == 1:
+                status = "ENTRY_UNFILLED"
+                entry_unfilled = {"reason": "NO_ELIGIBLE_CANDLE"}
+            elif index == 2:
+                status = "ORDINARY_CLOSED"
+                branches = (
+                    branch(
+                        observed,
+                        scenario,
+                        status=status,
+                        label="PRIMARY",
+                        quantity=Decimal(0),
+                        closed=True,
+                        seal_character="d",
+                        side=side,
+                    ),
+                )
+            elif index == 3:
+                status = "RECOVERY_OPEN"
+                branches = (
+                    branch(
+                        observed,
+                        scenario,
+                        status=status,
+                        label="PRIMARY",
+                        quantity=high_precision_quantity,
+                        recovery=True,
+                        seal_character="e",
+                        side=side,
+                    ),
+                )
+            elif index == 4:
+                status = "ORDINARY_CLOSED"
+                branches = (
+                    branch(
+                        observed,
+                        scenario,
+                        status="ORDINARY_OPEN",
+                        label="HOLD_ONLY",
+                        quantity=high_precision_quantity.copy_abs(),
+                        seal_character="f",
+                        side=side,
+                    ),
+                    branch(
+                        observed,
+                        scenario,
+                        status=status,
+                        label="PRIMARY",
+                        quantity=Decimal(0),
+                        closed=True,
+                        seal_character="1",
+                        side=side,
+                    ),
+                )
             result = {
                 "decision": {"__reference__": "decision"},
                 "family": "TREND_PULLBACK",
@@ -188,10 +326,20 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
                 "integrity_seal": seal,
                 "status": status,
                 "entry_intent": intent,
-                "entry_unfilled": {"reason": "NO_ELIGIBLE_CANDLE"} if admitted else None,
-                "branches": (),
-                "legacy_replay": {},
+                "entry_unfilled": entry_unfilled,
+                "branches": branches,
+                "legacy_replay": {
+                    "ema50_candidate": {"winning_exit_cause": "EMA50_THESIS_FAILURE"}
+                    if status == "ORDINARY_CLOSED"
+                    else None
+                },
             }
+            primary = branches[-1] if branches else None
+            primary_r, primary_fees, primary_open, primary_gross, primary_net = (
+                diagnosis._branch_screen_facts(primary)
+            )
+            hold = branches[0] if len(branches) == 2 else None
+            hold_r, hold_fees, hold_open, _, _ = diagnosis._branch_screen_facts(hold)
             row: dict[str, object] = {
                 "identity": diagnosis._identity_digest(identity, "synthetic identity"),
                 "observed_at": diagnosis._iso(observed),
@@ -202,20 +350,22 @@ def synthetic_task_payloads() -> tuple[diagnosis.TaskExpectation, bytes, bytes, 
                 "dataset_version": expected.dataset_version,
                 "manifest_sha256": expected.manifest_sha256,
                 "input_kind": expected.input_kind,
-                "side": "LONG" if admitted else "NONE",
+                "side": "SHORT" if index == 3 else ("LONG" if admitted else "NONE"),
                 "status": status,
                 "research_admissible": admitted,
                 "all_fill_result_sha256": seal,
-                "primary_closed_net_r": None,
-                "primary_fee_quote": "0",
-                "primary_open_quantity": "0",
-                "primary_gross_pnl_quote": None,
-                "primary_net_pnl_quote": None,
-                "hold_only_status": None,
-                "hold_only_closed_net_r": None,
-                "hold_only_fee_quote": None,
-                "hold_only_open_quantity": None,
-                "hold_only_branch_sha256": None,
+                "primary_closed_net_r": diagnosis._str_decimal(primary_r),
+                "primary_fee_quote": diagnosis._str_decimal(primary_fees),
+                "primary_open_quantity": diagnosis._str_decimal(primary_open),
+                "primary_gross_pnl_quote": diagnosis._str_decimal(primary_gross),
+                "primary_net_pnl_quote": diagnosis._str_decimal(primary_net),
+                "hold_only_status": None if hold is None else hold["status"],
+                "hold_only_closed_net_r": None if hold is None else diagnosis._str_decimal(hold_r),
+                "hold_only_fee_quote": None if hold is None else diagnosis._str_decimal(hold_fees),
+                "hold_only_open_quantity": None
+                if hold is None
+                else diagnosis._str_decimal(hold_open),
+                "hold_only_branch_sha256": None if hold is None else hold["integrity_seal"],
                 "block": "P1",
                 "week": "2026-W32",
                 "regime": "NEUTRAL",
@@ -458,24 +608,139 @@ def test_derived_decimal_arithmetic_ignores_ambient_context() -> None:
         assert diagnosis._decimal_stats([Decimal(before), Decimal(after)]) == stats
 
 
-def test_synthetic_positive_round_trip_uses_same_task_core() -> None:
+def test_quantity_absolute_value_has_lossless_and_historical_compatibility_modes() -> None:
+    quantity = Decimal("-0.1234567890123456789012345678901234")
+    with localcontext(Context(prec=6, rounding=ROUND_DOWN)):
+        lossless_low = diagnosis._lossless_decimal_abs(quantity)
+        compatible_low = diagnosis._historical_quantity_abs(quantity)
+    with localcontext(Context(prec=50, rounding=ROUND_HALF_EVEN)):
+        lossless_high = diagnosis._lossless_decimal_abs(quantity)
+        compatible_high = diagnosis._historical_quantity_abs(quantity)
+    assert lossless_low == lossless_high == Decimal("0.1234567890123456789012345678901234")
+    assert compatible_low == compatible_high == Decimal("0.1234567890123456789012345679")
+
+
+def test_synthetic_positive_round_trip_uses_same_task_core(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from adaptive_trading_bot.backtest.accounting import PositionAccountingEngine
+    from adaptive_trading_bot.backtest.execution import BacktestExecutionSimulator
+    from adaptive_trading_bot.strategies.trend_pullback import TrendPullbackStrategy
+
     expected, population, partition, authority = synthetic_task_payloads()
-    result = diagnosis.extract_task_payloads(
-        expected=expected,
-        population_payload=population,
-        partition_payload=partition,
-        authority_payload=authority,
-        authority_path="synthetic.authority.jsonl.gz",
-        authority_sha=hashlib.sha256(authority).hexdigest(),
+    engine_calls: Counter[str] = Counter()
+
+    def prohibited(name: str) -> Any:
+        def call(*args: object, **kwargs: object) -> None:
+            engine_calls[name] += 1
+            raise AssertionError(f"prohibited engine invoked: {name}")
+
+        return call
+
+    monkeypatch.setattr(TrendPullbackStrategy, "evaluate", prohibited("strategy"))
+    monkeypatch.setattr(BacktestExecutionSimulator, "run", prohibited("simulator"))
+    monkeypatch.setattr(PositionAccountingEngine, "process", prohibited("accounting"))
+    original_population = diagnosis._population
+    parser_calls = 0
+
+    def counted_population(
+        payload: bytes, *, expected_count: int = diagnosis.DECISIONS_PER_TASK
+    ) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+        nonlocal parser_calls
+        parser_calls += 1
+        return original_population(payload, expected_count=expected_count)
+
+    monkeypatch.setattr(diagnosis, "_population", counted_population)
+
+    def run(context: Context) -> dict[str, Any]:
+        with localcontext(context):
+            return diagnosis.extract_task_payloads(
+                expected=expected,
+                population_payload=population,
+                partition_payload=partition,
+                authority_payload=authority,
+                authority_path="synthetic.authority.jsonl.gz",
+                authority_sha=hashlib.sha256(authority).hexdigest(),
+            )
+
+    low = run(Context(prec=6, rounding=ROUND_DOWN))
+    high = run(Context(prec=50, rounding=ROUND_HALF_EVEN))
+    assert low["base_counts"] == Counter(
+        {"ORDINARY_CLOSED": 2, "NO_SIGNAL": 1, "ENTRY_UNFILLED": 1, "RECOVERY_OPEN": 1}
     )
-    assert result["base_counts"] == Counter({"NO_SIGNAL": 1, "ENTRY_UNFILLED": 1})
+    assert low["trades"] == high["trades"]
+    assert parser_calls == 2
+    assert engine_calls == Counter()
+
+    result = low
     trades = result["trades"]
-    assert len(trades) == 2
-    assert {row["status"] for row in trades} == {"ENTRY_UNFILLED"}
-    assert all(row["entry_fill_at"] is None for row in trades)
+    assert len(trades) == 8
+    assert {row["status"] for row in trades} == {
+        "ENTRY_UNFILLED",
+        "ORDINARY_CLOSED",
+        "RECOVERY_OPEN",
+    }
+    unfilled = [row for row in trades if row["status"] == "ENTRY_UNFILLED"]
+    recovery = [row for row in trades if row["status"] == "RECOVERY_OPEN"]
+    assert all(row["entry_fill_at"] is None for row in unfilled)
+    assert all(row["exit_fill_at"] is None for row in recovery)
+    assert {row["remaining_base_quantity"] for row in recovery} == {
+        "0.1234567890123456789012345678901234"
+    }
+    assert {row["recovery_reasons"] for row in recovery} == {"STOP_NOT_BEYOND_ACTUAL_ENTRY_FILL"}
+    hold_screen = result["screens"][diagnosis.SCENARIOS[0]][4]
+    assert hold_screen["hold_only_status"] == "ORDINARY_OPEN"
+    assert hold_screen["hold_only_open_quantity"] == "0.1234567890123456789012345679"
     pairs = diagnosis._pair_rows(trades)
-    assert len(pairs) == 1
-    assert pairs[0]["entry_fill_time_delta_seconds"] is None
+    assert len(pairs) == 4
+    assert (
+        next(row for row in pairs if row["decision_index"] == 1)["entry_fill_time_delta_seconds"]
+        is None
+    )
+    assert next(row for row in pairs if row["decision_index"] == 3)["delta_net_quote"] == "0"
+
+    trades_path, pairs_path = tmp_path / "trades.csv", tmp_path / "pairs.csv"
+    diagnosis._write_csv(trades_path, trades)
+    diagnosis._write_csv(pairs_path, pairs)
+    with trades_path.open(newline="", encoding="utf-8") as handle:
+        stored_trades = list(csv.DictReader(handle))
+    with pairs_path.open(newline="", encoding="utf-8") as handle:
+        stored_pairs = list(csv.DictReader(handle))
+    assert len(stored_trades) == 8
+    assert len(stored_pairs) == 4
+    assert any(
+        row["remaining_base_quantity"] == "0.1234567890123456789012345678901234"
+        for row in stored_trades
+    )
+    summary_payload = diagnosis._canonical(
+        {
+            "trade_economics": diagnosis._summarize_trades(trades),
+            "paired_execution": diagnosis._summarize_pairs(pairs),
+        }
+    )
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_bytes(summary_payload)
+    assert diagnosis._canonical(json.loads(summary_path.read_bytes())) == summary_payload
+
+    pinned_expectation = replace(
+        expected,
+        input_kind="ACCEPTED_C2",
+        source_id=diagnosis.SOURCE_ID,
+        dataset_version=diagnosis.DATASET_VERSION,
+        manifest_sha256=diagnosis.MANIFEST_SHA256,
+        profile="NORMALIZED_BASE_SIGNAL_V1",
+    )
+    with pytest.raises(diagnosis.DiagnosisError, match="accepted provenance differs"):
+        diagnosis.extract_task_payloads(
+            expected=pinned_expectation,
+            population_payload=population,
+            partition_payload=partition,
+            authority_payload=authority,
+            authority_path="synthetic.authority.jsonl.gz",
+            authority_sha=hashlib.sha256(authority).hexdigest(),
+        )
+    assert parser_calls == 3
+    assert engine_calls == Counter()
 
 
 def test_same_core_rejects_reordered_partition_identity() -> None:
