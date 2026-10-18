@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\scripts\research\research_v2_execution_factorial.py", line 27, in <module>
+    from adaptive_trading_bot.backtest import ExecutionSeries
+ModuleNotFoundError: No module named 'adaptive_trading_bot'

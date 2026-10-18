@@ -1,0 +1,14 @@
+usage: research_v2_execution_factorial.py [-h]
+                                          {preflight,run-stage-a,continue-stage-b,verify-stage-a,finalize,verify-finalized}
+                                          ...
+
+Prepare/execute the separately granted staged Research V2 factorial study.
+Issue #191 itself authorizes only ``preflight``. ``run-stage-a`` requires a
+future exact-SHA external grant; ``continue-stage-b`` additionally requires a
+checkpoint-bound architect continuation authorization.
+
+positional arguments:
+  {preflight,run-stage-a,continue-stage-b,verify-stage-a,finalize,verify-finalized}
+
+options:
+  -h, --help            show this help message and exit

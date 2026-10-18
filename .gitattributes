@@ -11,3 +11,4 @@ data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/p
 data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/run-output.log -text -diff
 data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/verify-output.log -text -diff
 data/research_evidence/issue-193-factorial-stage-a-7711a871/logs/*.log -text -diff
+data/research_evidence/issue-195-factorial-final-7711a871/logs/*.log -text -diff

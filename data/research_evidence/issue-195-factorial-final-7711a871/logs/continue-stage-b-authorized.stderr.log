@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\scripts\research\research_v2_execution_factorial.py", line 27, in <module>
+    from adaptive_trading_bot.backtest import ExecutionSeries
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\src\adaptive_trading_bot\backtest\__init__.py", line 3, in <module>
+    from adaptive_trading_bot.backtest.accounting import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\src\adaptive_trading_bot\backtest\accounting.py", line 22, in <module>
+    from adaptive_trading_bot.backtest.execution import MarketFill, OrderSide
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\src\adaptive_trading_bot\backtest\execution.py", line 25, in <module>
+    from adaptive_trading_bot.storage import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\src\adaptive_trading_bot\storage\__init__.py", line 3, in <module>
+    from adaptive_trading_bot.storage.historical_candles import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-193-stage-a-exec\src\adaptive_trading_bot\storage\historical_candles.py", line 18, in <module>
+    import pyarrow as pa
+ModuleNotFoundError: No module named 'pyarrow'
