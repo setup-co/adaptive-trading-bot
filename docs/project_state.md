@@ -8,7 +8,12 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Verified Issue-#187 execution base after Issue #185 / PR #186:
+Current trusted `main` after the squash integration of PR #190 / Issue #189:
+
+`fc3fc5096350d08741d664deb4a26e0d57575fa8`
+
+Its tree is `ae5a1bc4136ac7cb60569f0459496feb8d8166f4`. The historical
+Issue-#187 execution base remains distinct:
 
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`
 
@@ -56,7 +61,9 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#187 — the frozen Research V2 exploratory screen completed, verified, and was accepted as immutable evidence. Issue #189 is the active bounded post-result descriptive diagnosis.**
+**#187 and its #189 retained-evidence diagnosis are completed, verified and
+immutable. Issue #191 is the active preparation-only, staged 2x2
+cost/eligibility factorial protocol.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
@@ -77,6 +84,22 @@ records rounding reconciliation without claiming independent replication. Its
 v1 and v2 generations remain immutable and superseded. Five unresolved Trend
 hold-only branches remain explicit and separate from the primary fully closed
 population.
+Issue #191 preparation now uses `RESEARCH_V2_EXECUTION_FACTORIAL_V2` and
+freezes the same 246 admissions into four fixed cells. Its bounded retained
+loader does not reconstruct or re-evaluate the full entry population; shared
+all-fill validation, persisted checkpoint verification and read-only finalized
+verification remain mandatory. The final inert V3 preflight separates raw
+BUY/SELL order provenance from LONG/SHORT position direction, preserves the
+nine-week reporting domain and complete grouped-contrast denominators, and is
+bound to input plan
+`aa1df44692d8cad8aa966c2e23c0c7d3772de8a829451c8a76f0bee89f83c792`.
+Its later
+execution is staged: BTC/ETH first, followed by a mandatory verified technical
+checkpoint and pause; the remaining eight assets require a separate architect
+authorization on the same frozen executable/protocol/UUID/ledger. Continuation
+is never conditioned on favorable PnL. This preparation creates no grant,
+ledger or historical result. See
+`docs/research/research_v2_execution_factorial.md`.
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -367,13 +390,16 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Review Issue #189's bounded retained-evidence diagnosis. Issue #187 is
-   merged, closed, and immutable; the run must not be repeated or tuned on
-   these windows. Its classifications remain
+1. Implement and review Issue #191's preparation-only staged factorial
+   boundary. Issue #187 and #189 are merged, closed, and immutable; neither
+   extraction nor historical run may be repeated or tuned on these windows.
+   The frozen classifications remain
    Trend Pullback `NEGATIVE_EVIDENCE`, Breakout + Retest
    `INSUFFICIENT_EVIDENCE`, and Range Mean Reversion
-   `INSUFFICIENT_EVIDENCE`. The next research gate, if any, requires a new
-   architect-selected protocol after this evidence is accepted. Historical
+   `INSUFFICIENT_EVIDENCE`. Issue #191 supplies that separate fixed protocol,
+   but no execution grant. A later reviewed execution begins only with the
+   fixed BTC/ETH prefix, publishes a technical/resource checkpoint, and pauses
+   before any separately authorized eight-asset suffix. Historical
    context remains: Issue #175's original locked one-shot
    `RANKING_INCOMPLETE` result
    alongside the separate architect-authorized KAS-only completion and
