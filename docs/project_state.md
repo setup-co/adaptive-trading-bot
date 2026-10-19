@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current trusted `main` after the squash integration of PR #196 / Issue #195:
+Current trusted `main` after the squash integration of PR #199 / Issue #197:
 
-`a41b95bc34c492e2743d8a6635e02e909c23a1c9`
+`e6de0844910fa292ce467ef7bfbd5939f6d86ee9`
 
-Its tree is `5b3b1e36ac210c503ea16da4dac314573836b849`. The historical
+Its tree is `62cc5f39b00b9eb9e63c5a307019a1d80c57d9ea`. The historical
 Issue-#187 execution base remains distinct:
 
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`
@@ -51,7 +51,7 @@ mechanics before Live readiness. None is evidence for or against EMA50 performan
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177 and #179 are closed;
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179 and #197 are closed;
 Master Plan v1.8 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
@@ -63,9 +63,10 @@ closed. The active critical path is:
 
 **#187 and its #189 retained-evidence diagnosis are completed, verified and
 immutable. Issues #191, #193 and #195 completed the staged 2x2
-cost/eligibility factorial. Issue #197 is the active synthetic-only Breakout
-retest-zone invalidation hypothesis; it is not a historical-study or trading
-grant.**
+cost/eligibility factorial. Issue #197's opt-in Breakout retest-zone
+invalidation hypothesis is merged without activation. Issue #200 is the
+active synthetic-only preparation of its bounded baseline comparison; it is
+not a historical-study or trading grant.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
@@ -397,11 +398,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete Issue #197's one opt-in, synthetic-only
-   `BREAKOUT_RETEST_ZONE_INVALIDATION_V1` formal rule, implementation and
-   hypothesis card. Keep `breakout_retest` `1.0.0` as the unchanged default.
-   The candidate is not registered for historical research, runtime, Paper,
-   Shadow or Live, and has no economic claim or execution grant.
+1. Complete Issue #200's synthetic-only
+   `BREAKOUT_RETEST_ZONE_COMPARISON_V1` preparation. It compares the unchanged
+   baseline `1.0.0` with the accepted opt-in zone variant `0.1.0` over the
+   complete pinned #187 Breakout population. No historical execution grant or
+   candidate/PnL run exists. The known 29-candidate ceiling makes this window
+   ineligible for promotion regardless of future descriptive differences.
 2. Issues #191, #193 and #195 are complete. Preserve executable
    `7711a871bdf005c72a9033690527fc6920eea737`, UUID
    `01df2c66-92ce-459f-aede-78eaa82a3f52`, all ledgers and evidence. Do not
@@ -421,4 +423,4 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 6. Keep the current BTC/ETH runtime and execution allowlists intact. A target
    of at least ten research assets does not qualify any new instrument for
    Paper, Shadow or Live. No historical strategy study, new runtime symbol
-   admission or trading activation is authorized by Issue #197.
+   admission or trading activation is authorized by Issue #200.

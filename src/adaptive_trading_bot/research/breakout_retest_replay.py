@@ -317,14 +317,63 @@ class BreakoutRetestFixed2RReplayRunner:
         *,
         end: datetime,
     ) -> BreakoutRetestReplayResult:
+        strategy = BreakoutRetestStrategy()
+        return self._run_with_identity(
+            decision,
+            contexts,
+            series,
+            costs,
+            end=end,
+            strategy_id=strategy.strategy_id,
+            strategy_version=strategy.strategy_version,
+        )
+
+    def _run_zone_comparison(
+        self,
+        decision: DecisionJournalEntry[object, object],
+        contexts: tuple[HistoricalStrategyContextObservation, ...],
+        series: ExecutionSeries,
+        costs: ExecutionCostConfiguration,
+        *,
+        end: datetime,
+    ) -> BreakoutRetestReplayResult:
+        """Private exact-identity seam for BREAKOUT_RETEST_ZONE_COMPARISON_V1 only."""
+
+        return self._run_with_identity(
+            decision,
+            contexts,
+            series,
+            costs,
+            end=end,
+            strategy_id="breakout_retest_zone_invalidation",
+            strategy_version="0.1.0",
+        )
+
+    def _run_with_identity(
+        self,
+        decision: DecisionJournalEntry[object, object],
+        contexts: tuple[HistoricalStrategyContextObservation, ...],
+        series: ExecutionSeries,
+        costs: ExecutionCostConfiguration,
+        *,
+        end: datetime,
+        strategy_id: str,
+        strategy_version: str,
+    ) -> BreakoutRetestReplayResult:
         decision = deepcopy(decision)
         decision.validate()
-        strategy = BreakoutRetestStrategy()
         if (
-            decision.identity.strategy_id != strategy.strategy_id
-            or decision.identity.strategy_version != strategy.strategy_version
+            (strategy_id, strategy_version)
+            not in {
+                ("breakout_retest", "1.0.0"),
+                ("breakout_retest_zone_invalidation", "0.1.0"),
+            }
+            or decision.identity.strategy_id != strategy_id
+            or decision.identity.strategy_version != strategy_version
         ):
-            raise BreakoutRetestReplayError("entry is not Breakout + Retest V1")
+            raise BreakoutRetestReplayError(
+                "entry is outside the exact Breakout comparison identity"
+            )
         authorization = EntryOrderIntentAuthorizer().authorize(decision)
         if (
             authorization.status is not OrderIntentAuthorizationStatus.AUTHORIZED
