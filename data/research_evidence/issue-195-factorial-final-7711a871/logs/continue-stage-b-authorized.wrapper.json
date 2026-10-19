@@ -1,0 +1,1 @@
+{"command":"continue-stage-b","attempt":"authorized-after-pre-import-host-launch","started_at":"2026-10-18T20:11:59.3096049Z","ended_at":"2026-10-18T20:11:59.9597489Z","wall_seconds":0.650144,"exit_code":1,"stdout_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","stderr_sha256":"2a2ccde9d20b8690d48f6fba6fa40260c0e962427b5826fe88c8a89e1cb00c0f"}
