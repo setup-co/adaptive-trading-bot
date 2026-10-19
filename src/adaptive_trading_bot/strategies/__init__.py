@@ -11,6 +11,13 @@ from adaptive_trading_bot.strategies.breakout_retest import (
     BreakoutRetestStrategy,
     BreakoutSide,
 )
+from adaptive_trading_bot.strategies.breakout_retest_zone_invalidation import (
+    BREAKOUT_RETEST_ZONE_INVALIDATION_POLICY_ID,
+    BreakoutRetestZoneBoundary,
+    BreakoutRetestZoneInvalidationAudit,
+    BreakoutRetestZoneInvalidationReasonCode,
+    BreakoutRetestZoneInvalidationStrategy,
+)
 from adaptive_trading_bot.strategies.context import assemble_strategy_contexts
 from adaptive_trading_bot.strategies.core import (
     CandidateAction,
@@ -111,12 +118,17 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "BREAKOUT_RETEST_ZONE_INVALIDATION_POLICY_ID",
     "ArmedBreakout",
     "BreakoutRetestConfiguration",
     "BreakoutRetestReasonCode",
     "BreakoutRetestRuleAudit",
     "BreakoutRetestStateError",
     "BreakoutRetestStrategy",
+    "BreakoutRetestZoneBoundary",
+    "BreakoutRetestZoneInvalidationAudit",
+    "BreakoutRetestZoneInvalidationReasonCode",
+    "BreakoutRetestZoneInvalidationStrategy",
     "BreakoutSide",
     "CandidateAction",
     "Ema50ComparisonRelation",

@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-10-17
+**Snapshot date:** 2026-10-19
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current trusted `main` after the squash integration of PR #190 / Issue #189:
+Current trusted `main` after the squash integration of PR #196 / Issue #195:
 
-`fc3fc5096350d08741d664deb4a26e0d57575fa8`
+`a41b95bc34c492e2743d8a6635e02e909c23a1c9`
 
-Its tree is `ae5a1bc4136ac7cb60569f0459496feb8d8166f4`. The historical
+Its tree is `5b3b1e36ac210c503ea16da4dac314573836b849`. The historical
 Issue-#187 execution base remains distinct:
 
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`
@@ -62,8 +62,10 @@ feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
 **#187 and its #189 retained-evidence diagnosis are completed, verified and
-immutable. Issue #191 is the active preparation-only, staged 2x2
-cost/eligibility factorial protocol.**
+immutable. Issues #191, #193 and #195 completed the staged 2x2
+cost/eligibility factorial. Issue #197 is the active synthetic-only Breakout
+retest-zone invalidation hypothesis; it is not a historical-study or trading
+grant.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
@@ -84,22 +86,27 @@ records rounding reconciliation without claiming independent replication. Its
 v1 and v2 generations remain immutable and superseded. Five unresolved Trend
 hold-only branches remain explicit and separate from the primary fully closed
 population.
-Issue #191 preparation now uses `RESEARCH_V2_EXECUTION_FACTORIAL_V2` and
-freezes the same 246 admissions into four fixed cells. Its bounded retained
-loader does not reconstruct or re-evaluate the full entry population; shared
-all-fill validation, persisted checkpoint verification and read-only finalized
-verification remain mandatory. The final inert V3 preflight separates raw
+Issue #191 prepared `RESEARCH_V2_EXECUTION_FACTORIAL_V2` and froze the same
+246 admissions into four fixed cells. Issue #193 completed and verified the
+BTC/ETH Stage-A prefix; Issue #195 then completed the separately authorized
+eight-asset suffix and finalized the same ledger. Its bounded retained loader
+did not reconstruct or re-evaluate the full entry population; shared all-fill
+validation, persisted checkpoint verification and read-only finalized
+verification remained mandatory. The final inert V3 preflight separates raw
 BUY/SELL order provenance from LONG/SHORT position direction, preserves the
 nine-week reporting domain and complete grouped-contrast denominators, and is
 bound to input plan
 `aa1df44692d8cad8aa966c2e23c0c7d3772de8a829451c8a76f0bee89f83c792`.
-Its later
-execution is staged: BTC/ETH first, followed by a mandatory verified technical
-checkpoint and pause; the remaining eight assets require a separate architect
-authorization on the same frozen executable/protocol/UUID/ledger. Continuation
-is never conditioned on favorable PnL. This preparation creates no grant,
-ledger or historical result. See
-`docs/research/research_v2_execution_factorial.md`.
+The completed execution used frozen executable
+`7711a871bdf005c72a9033690527fc6920eea737` and UUID
+`01df2c66-92ce-459f-aede-78eaa82a3f52`; its final projection file SHA-256 is
+`68c3c1e72eecb21fe4cf129e1e731aabcc96a8dc7bb5015877b6c4b1466382a4`.
+These identities remain distinct from current `main` and from the historical
+#187 executable. The original classifications remain Trend Pullback
+`NEGATIVE_EVIDENCE`, Breakout + Retest `INSUFFICIENT_EVIDENCE`, and Range Mean
+Reversion `INSUFFICIENT_EVIDENCE`; no baseline was promoted. See
+`docs/research/research_v2_execution_factorial.md` and the immutable Issue #195
+report.
 The exact frozen 90-day public acquisition stopped after 15 new GET attempts
 (14 HTTP 200, one non-timeout `RemoteDisconnected`, zero retries). The
 separate immutable partial corpus is `PARTIAL_OR_BLOCKED`; no selected member
@@ -390,46 +397,28 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Implement and review Issue #191's preparation-only staged factorial
-   boundary. Issue #187 and #189 are merged, closed, and immutable; neither
-   extraction nor historical run may be repeated or tuned on these windows.
-   The frozen classifications remain
-   Trend Pullback `NEGATIVE_EVIDENCE`, Breakout + Retest
-   `INSUFFICIENT_EVIDENCE`, and Range Mean Reversion
-   `INSUFFICIENT_EVIDENCE`. Issue #191 supplies that separate fixed protocol,
-   but no execution grant. A later reviewed execution begins only with the
-   fixed BTC/ETH prefix, publishes a technical/resource checkpoint, and pauses
-   before any separately authorized eight-asset suffix. Historical
-   context remains: Issue #175's original locked one-shot
-   `RANKING_INCOMPLETE` result
-   alongside the separate architect-authorized KAS-only completion and
-   `SELECTED_FOR_DATA_QUALIFICATION` combined projection. Do not issue another
-   KAS request or infer study readiness from the exploratory panel. The four
-   #173 exact anchor-day reconciliations do not establish historical-as-of
-   population or ten-asset history. Package B's prospective all-fill economics
-   is merged. Issue #179's bounded Package A data/corpus attempt stopped at
-   a non-timeout transport failure and locked a partial, non-admissible
-   artifact. Its separate bounded C1 continuation also stopped on DNS and
-   remains ten-member `PARTIAL_OR_BLOCKED`. Issue #181's separate C2 tail
-   completed 785 never-attempted shapes, preserving both predecessor gaps.
-   The verified data-only projection has eight complete member grids and a
-   bounded ten-member post-warm-up overlap, but remains `PARTIAL_OR_BLOCKED`.
-   Issue #183 adds an isolated normalized-base research admission interface:
-   the accepted C2 binding is data-only in its synthetic integration seam.
-   Issue #185's [versioned annex](research/research_v2_exploratory_screen.md)
-   and guarded runner predeclare the ten-member calendar, 30 tasks, fixed
-   scenarios and screen. Issue #187 supplied the separate reviewed external
-   grant and completed that exact one-shot execution; neither the grant nor
-   this result expands runtime or Live authority.
-2. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
+1. Complete Issue #197's one opt-in, synthetic-only
+   `BREAKOUT_RETEST_ZONE_INVALIDATION_V1` formal rule, implementation and
+   hypothesis card. Keep `breakout_retest` `1.0.0` as the unchanged default.
+   The candidate is not registered for historical research, runtime, Paper,
+   Shadow or Live, and has no economic claim or execution grant.
+2. Issues #191, #193 and #195 are complete. Preserve executable
+   `7711a871bdf005c72a9033690527fc6920eea737`, UUID
+   `01df2c66-92ce-459f-aede-78eaa82a3f52`, all ledgers and evidence. Do not
+   rerun Stage A/B, finalize or verify. The original family classifications
+   remain unchanged and no baseline strategy is promoted.
+3. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
    `ZERO_STRATEGY_CANDIDATES` frozen. Do not rerun or tune them on those windows;
    do not resume #157 or the permanently stopped #118.
-3. The historical WEEX leveraged-mechanics pursuit remains closed. None of
+4. Treat the stopped #179 and C1 capture generations and completed C2 tail as
+   immutable predecessor history, not active acquisition. Do not retry failed
+   shapes or infer runtime eligibility from the data-only overlap.
+5. The historical WEEX leveraged-mechanics pursuit remains closed. None of
    these screens establishes leveraged, liquidation-complete, portfolio, or
    Live readiness.
-4. Keep the current BTC/ETH runtime and execution allowlists intact. A target
+6. Keep the current BTC/ETH runtime and execution allowlists intact. A target
    of at least ten research assets does not qualify any new instrument for
-   Paper, Shadow or Live. No strategy study, new runtime symbol admission or trading
-   activation is authorized by this feasibility gate.
+   Paper, Shadow or Live. No historical strategy study, new runtime symbol
+   admission or trading activation is authorized by Issue #197.
