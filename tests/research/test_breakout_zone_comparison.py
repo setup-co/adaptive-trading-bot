@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import runpy
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from pathlib import Path
 from typing import cast
@@ -21,6 +22,8 @@ from adaptive_trading_bot.backtest import (
     HistoricalExecutionSource,
 )
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
+from adaptive_trading_bot.journal import DecisionJournalEntry
+from adaptive_trading_bot.research import breakout_zone_comparison as comparison_module
 from adaptive_trading_bot.research.all_fill_replay import (
     AllFillReplayError,
     AllFillScenario,
@@ -35,17 +38,25 @@ from adaptive_trading_bot.research.breakout_zone_comparison import (
     ARTIFACT_INDEX_SHA256,
     PROTOCOL_SHA256,
     TASK_PLAN_SHA256,
+    TASKS,
     BreakoutComparisonPopulation,
     BreakoutComparisonReplayResult,
     BreakoutZoneComparisonError,
     BreakoutZoneComparisonRunner,
     ComparisonArm,
     ComparisonExecutionGrant,
+    ComparisonTask,
+    ComparisonTaskProvenance,
     OpportunityKey,
     ResultOrigin,
     _canonical,
+    _digest,
+    _period_week,
     build_comparison_population,
     comparison_result_record,
+    execute_comparison_task_from_retained_authority,
+    load_granted_task_population,
+    project_final_report,
     project_task_report,
     recover_comparison_result,
     reuse_baseline_result,
@@ -63,10 +74,23 @@ from adaptive_trading_bot.research.research_v2_admission import (
     SOURCE_ID,
     ResearchV2AdmissionConfiguration,
     ResearchV2DecisionPopulation,
+    ResearchV2StudyDecisionPopulation,
 )
-from adaptive_trading_bot.risk import RiskManagerConfiguration
+from adaptive_trading_bot.research.research_v2_exploratory_screen import (
+    authority_result_record,
+)
+from adaptive_trading_bot.research.trend_pullback_corpus import _research_health
+from adaptive_trading_bot.risk import (
+    OperationalSafetyGate,
+    RiskManager,
+    RiskManagerConfiguration,
+    RiskPortfolioSnapshot,
+)
 from adaptive_trading_bot.storage import HistoricalCandleStore
 from adaptive_trading_bot.strategies import CandidateAction
+from adaptive_trading_bot.strategies.breakout_retest_zone_invalidation import (
+    BreakoutRetestZoneInvalidationAudit,
+)
 
 _HELPERS = runpy.run_path(str(Path(__file__).with_name("test_research_v2_admission.py")))
 SyntheticEpochStore = cast(type, _HELPERS["SyntheticEpochStore"])
@@ -120,7 +144,25 @@ def _population(
             safety_assumptions=configuration.safety_assumptions,
         )
     baseline = _evaluate(store, configuration)
-    return store, build_comparison_population(baseline, task_id=f"synthetic-{pattern}")
+    task_id = TASKS[0].task_id
+    provenance = ComparisonTaskProvenance(
+        "SYNTHETIC_TEST_GRANT",
+        "5cb5b3d7-288b-44b1-a36f-d783c6f12b58",
+        SYNTHETIC_SHA,
+        PROTOCOL_SHA256,
+        TASK_PLAN_SHA256,
+        configuration.bounds.source_id.value,
+        baseline.dataset_version,
+        baseline.manifest_sha256,
+        "3" * 64,
+        task_id,
+        _digest(TASKS[0].to_record()),
+    )
+    return store, build_comparison_population(
+        baseline,
+        task_id=task_id,
+        provenance=provenance,
+    )
 
 
 def _contexts(
@@ -172,6 +214,8 @@ def _complete_results(
             output.append(
                 reuse_baseline_result(
                     original,
+                    provenance=population.provenance,
+                    population_sha256=population.integrity_seal,
                     authority_sha256="a" * 64,
                     record_sha256=hashlib.sha256(f"{scenario.value}:{index}".encode()).hexdigest(),
                 )
@@ -183,9 +227,57 @@ def _complete_results(
                     series,
                     costs,
                     end=cutoff,
+                    provenance=population.provenance,
+                    population_sha256=population.integrity_seal,
                 )
             )
     return tuple(output)
+
+
+def _write_retained_baseline_authority(
+    path: Path,
+    store: object,
+    population: BreakoutComparisonPopulation,
+) -> str:
+    """Create one genuine retained predecessor artifact before comparison execution."""
+
+    source = HistoricalExecutionSource(cast(HistoricalCandleStore, store))
+    runner = ResearchAllFillReplayRunner(source)
+    bounds = population.baseline_population.configuration.bounds
+    series = ExecutionSeries(bounds.source_id, bounds.symbol, Timeframe.MINUTES_15)
+    candles = tuple(item.context.candle_15m for item in population.baseline_population.contexts)
+    lines: list[bytes] = []
+    for scenario, costs in (
+        (AllFillScenario.BASE, BASE_COSTS),
+        (AllFillScenario.COMBINED_STRESS, STRESS_COSTS),
+    ):
+        for index, decision in enumerate(population.baseline_population.decisions):
+            cutoff = decision.identity.observed_at + timedelta(hours=168)
+            original = runner.run(
+                decision,
+                cast(
+                    tuple[HistoricalStrategyContextObservation, ...],
+                    _contexts(population, decision.identity.observed_at),
+                ),
+                series,
+                costs,
+                start=decision.identity.observed_at,
+                end=cutoff,
+            )
+            lines.append(
+                _canonical(
+                    authority_result_record(
+                        population.baseline_population,
+                        index,
+                        scenario,
+                        original,
+                        candles=candles,
+                    )
+                )
+            )
+    payload = gzip.compress(b"".join(line + b"\n" for line in lines), mtime=0)
+    path.write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
 
 
 @pytest.fixture(scope="module")
@@ -272,6 +364,8 @@ def test_zone_arm_uses_existing_fixed_2r_all_fill_and_accounting(pattern: str) -
         ExecutionSeries(bounds.source_id, bounds.symbol, Timeframe.MINUTES_15),
         BASE_COSTS,
         end=candidate.identity.observed_at + timedelta(hours=168),
+        provenance=population.provenance,
+        population_sha256=population.integrity_seal,
     )
     branch = result.branches[-1]
     assert result.end == candidate.identity.observed_at + timedelta(hours=168)
@@ -360,6 +454,8 @@ def test_zone_recovery_horizon_open_and_unfilled_are_preserved() -> None:
         series,
         BASE_COSTS,
         end=cutoff,
+        provenance=population.provenance,
+        population_sha256=population.integrity_seal,
     )
     assert recovered.status is AllFillStatus.RECOVERY_CLOSED
     assert recovered.branches[-1].recovery is not None
@@ -368,7 +464,15 @@ def test_zone_recovery_horizon_open_and_unfilled_are_preserved() -> None:
 
     unfilled = BreakoutZoneComparisonRunner(
         cast(ExecutionCandleSource, _StaticExecutionSource(()))
-    ).run_zone(candidate, (), series, BASE_COSTS, end=cutoff)
+    ).run_zone(
+        candidate,
+        (),
+        series,
+        BASE_COSTS,
+        end=cutoff,
+        provenance=population.provenance,
+        population_sha256=population.integrity_seal,
+    )
     assert unfilled.status is AllFillStatus.ENTRY_UNFILLED
     assert unfilled.entry_unfilled is not None
 
@@ -384,7 +488,15 @@ def test_zone_recovery_horizon_open_and_unfilled_are_preserved() -> None:
     )
     opened = BreakoutZoneComparisonRunner(
         cast(ExecutionCandleSource, _StaticExecutionSource((entry_candle,)))
-    ).run_zone(candidate, (), series, BASE_COSTS, end=cutoff)
+    ).run_zone(
+        candidate,
+        (),
+        series,
+        BASE_COSTS,
+        end=cutoff,
+        provenance=population.provenance,
+        population_sha256=population.integrity_seal,
+    )
     assert opened.status is AllFillStatus.RECOVERY_OPEN
     assert opened.branches[-1].recovery is not None
     assert opened.branches[-1].final_position.quantity != 0
@@ -408,10 +520,158 @@ def test_constructor_rejects_wrong_key_and_result_replacement(
             population.baseline_population,
             population.zone_decisions,
             tuple(changed),
+            population.provenance,
         )
     zone = next(result for result in results if result.arm is ComparisonArm.ZONE)
     with pytest.raises((BreakoutZoneComparisonError, AllFillReplayError)):
         replace(zone, costs=STRESS_COSTS, scenario=AllFillScenario.COMBINED_STRESS)
+
+
+def test_result_owns_scenario_and_snapshot_identity_before_and_after_storage(
+    long_evidence: tuple[
+        object,
+        BreakoutComparisonPopulation,
+        tuple[BreakoutComparisonReplayResult, ...],
+    ],
+) -> None:
+    _, population, results = long_evidence
+    zone = next(
+        result
+        for result in results
+        if result.arm is ComparisonArm.ZONE and result.scenario is AllFillScenario.BASE
+    )
+    with pytest.raises(BreakoutZoneComparisonError, match="identity/origin"):
+        replace(zone, scenario=AllFillScenario.COMBINED_STRESS)
+    with pytest.raises(BreakoutZoneComparisonError, match="identity/origin"):
+        replace(zone, execution_snapshot_digest="0" * 64)
+
+    candles = tuple(item.context.candle_15m for item in population.baseline_population.contexts)
+    record = json.loads(_canonical(comparison_result_record(zone, population, candles=candles)))
+    record["scenario"] = AllFillScenario.COMBINED_STRESS.value
+    with pytest.raises(BreakoutZoneComparisonError, match="relabeled"):
+        recover_comparison_result(record, population, candles=candles)
+
+    snapshot_record = json.loads(
+        _canonical(comparison_result_record(zone, population, candles=candles))
+    )
+    named = snapshot_record["result"][2]
+    digest_field = next(item for item in named if item[0] == "execution_snapshot_digest")
+    digest_field[1] = "0" * 64
+    with pytest.raises((BreakoutZoneComparisonError, AllFillReplayError, ValueError)):
+        recover_comparison_result(snapshot_record, population, candles=candles)
+
+
+def test_population_reconstructs_zone_policy_risk_and_safety_authority() -> None:
+    _, population = _population()
+    candidate_index = next(
+        index
+        for index, decision in enumerate(population.zone_decisions)
+        if decision.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+    )
+    candidate = population.zone_decisions[candidate_index]
+    audit = cast(
+        BreakoutRetestZoneInvalidationAudit,
+        candidate.strategy_evaluation.rule_audit,
+    )
+    forged_evaluation = replace(
+        candidate.strategy_evaluation,
+        rule_audit=replace(audit, policy_id="FORGED_ZONE_POLICY"),
+    )
+    forged_policy = replace(candidate, strategy_evaluation=forged_evaluation)
+    decisions = list(population.zone_decisions)
+    decisions[candidate_index] = forged_policy
+    with pytest.raises(BreakoutZoneComparisonError, match="Strategy/Risk/Safety"):
+        BreakoutComparisonPopulation(
+            population.task_id,
+            population.baseline_population,
+            tuple(decisions),
+            population.opportunity_keys,
+            population.provenance,
+        )
+
+    configuration = population.baseline_population.configuration
+    changed_risk_configuration = replace(
+        configuration.risk_configuration,
+        risk_per_trade_fraction=Decimal("0.0005"),
+    )
+    context = candidate.context
+    equity = configuration.research_equity_quote
+    portfolio = RiskPortfolioSnapshot(
+        context.observed_at,
+        "USDT",
+        equity,
+        equity,
+        equity,
+        (),
+    )
+    changed_risk = RiskManager(changed_risk_configuration).evaluate(
+        candidate.strategy_evaluation,
+        portfolio,
+    )
+    changed_safety = OperationalSafetyGate(configuration.safety_configuration).evaluate(
+        changed_risk,
+        _research_health(context, configuration.safety_assumptions),
+    )
+    forged_risk = DecisionJournalEntry(
+        context,
+        candidate.strategy_evaluation,
+        changed_risk,
+        changed_safety,
+    )
+    decisions = list(population.zone_decisions)
+    decisions[candidate_index] = forged_risk
+    with pytest.raises(BreakoutZoneComparisonError, match="Strategy/Risk/Safety"):
+        BreakoutComparisonPopulation(
+            population.task_id,
+            population.baseline_population,
+            tuple(decisions),
+            population.opportunity_keys,
+            population.provenance,
+        )
+
+    changed_assumptions = replace(
+        configuration.safety_assumptions,
+        assumed_spread_bps=Decimal("999"),
+    )
+    changed_safety = OperationalSafetyGate(configuration.safety_configuration).evaluate(
+        candidate.risk_decision,
+        _research_health(context, changed_assumptions),
+    )
+    forged_safety = DecisionJournalEntry(
+        context,
+        candidate.strategy_evaluation,
+        candidate.risk_decision,
+        changed_safety,
+    )
+    decisions = list(population.zone_decisions)
+    decisions[candidate_index] = forged_safety
+    with pytest.raises(BreakoutZoneComparisonError, match="Strategy/Risk/Safety"):
+        BreakoutComparisonPopulation(
+            population.task_id,
+            population.baseline_population,
+            tuple(decisions),
+            population.opportunity_keys,
+            population.provenance,
+        )
+
+
+@pytest.mark.parametrize(
+    ("decision_at", "expected"),
+    (
+        (datetime(2026, 8, 3, 0, 15, tzinfo=UTC), ("P1", "W1")),
+        (datetime(2026, 8, 10, 0, 0, tzinfo=UTC), ("P1", "W1")),
+        (datetime(2026, 8, 24, 0, 0, tzinfo=UTC), ("P1", "W3")),
+        (datetime(2026, 8, 24, 0, 15, tzinfo=UTC), ("P2", "W4")),
+        (datetime(2026, 9, 14, 0, 0, tzinfo=UTC), ("P2", "W6")),
+        (datetime(2026, 9, 14, 0, 15, tzinfo=UTC), ("P3", "W7")),
+        (datetime(2026, 10, 5, 0, 0, tzinfo=UTC), ("P3", "W9")),
+    ),
+)
+def test_reporting_calendar_uses_signal_candle_open(
+    decision_at: datetime,
+    expected: tuple[str, str],
+) -> None:
+    assert _period_week(decision_at) == expected
 
 
 def test_legacy_entry_points_still_reject_zone_identity() -> None:
@@ -444,36 +704,68 @@ def test_legacy_entry_points_still_reject_zone_identity() -> None:
         )
 
 
-def test_grant_ledger_and_full_evidence_round_trip_without_rerun(
+def test_retained_import_execution_publication_and_final_verifier_are_one_path(
     tmp_path: Path,
-    long_evidence: tuple[
-        object,
-        BreakoutComparisonPopulation,
-        tuple[BreakoutComparisonReplayResult, ...],
-    ],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, population, results = long_evidence
+    store, population = _population()
+    authority_path = tmp_path / "retained-baseline.jsonl.gz"
+    authority_sha = _write_retained_baseline_authority(
+        authority_path,
+        store,
+        population,
+    )
+
+    baseline_calls = 0
+
+    def reject_baseline_rerun(
+        self: ResearchAllFillReplayRunner,
+        decision: DecisionJournalEntry[object, object],
+        contexts: tuple[HistoricalStrategyContextObservation, ...],
+        series: ExecutionSeries,
+        costs: ExecutionCostConfiguration,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> object:
+        del self, contexts, series, costs, start, end
+        nonlocal baseline_calls
+        baseline_calls += 1
+        raise AssertionError(f"retained baseline was rerun for {decision.identity.strategy_id}")
+
+    monkeypatch.setattr(ResearchAllFillReplayRunner, "run", reject_baseline_rerun)
+    results = execute_comparison_task_from_retained_authority(
+        population,
+        authority_path=authority_path,
+        authority_sha256=authority_sha,
+        source=HistoricalExecutionSource(cast(HistoricalCandleStore, store)),
+    )
+    assert baseline_calls == 0
+    assert {result.origin for result in results if result.arm is ComparisonArm.BASELINE} == {
+        ResultOrigin.REUSED_ISSUE_187
+    }
+
     grant = ComparisonExecutionGrant(
         "SYNTHETIC_TEST_GRANT",
-        "5cb5b3d7-288b-44b1-a36f-d783c6f12b58",
+        population.provenance.run_uuid,
         SYNTHETIC_SHA,
         PROTOCOL_SHA256,
         TASK_PLAN_SHA256,
-        "synthetic-zone-source",
-        "synthetic-zone-dataset",
-        "2" * 64,
-        "3" * 64,
+        population.provenance.source_id,
+        population.provenance.dataset_version,
+        population.provenance.manifest_sha256,
+        population.provenance.artifact_index_sha256,
     )
     ledger = ComparisonLedgerStore.create(
-        tmp_path,
+        tmp_path / "ledger",
         grant,
         actual_sha=SYNTHETIC_SHA,
         synthetic=True,
         synthetic_task_ids=(population.task_id,),
     )
+    with pytest.raises(BreakoutZoneComparisonError, match="partial comparison"):
+        ledger.finalize("0" * 64)
     ledger.start(0)
-    with pytest.raises(BreakoutZoneComparisonError, match=r"cannot start|rerun"):
-        ledger.start(0)
     script = runpy.run_path(
         str(Path(__file__).resolve().parents[2] / "scripts/research/breakout_zone_comparison.py")
     )
@@ -482,42 +774,84 @@ def test_grant_ledger_and_full_evidence_round_trip_without_rerun(
     )
     results_bytes = cast(
         Callable[
-            [
-                BreakoutComparisonPopulation,
-                tuple[BreakoutComparisonReplayResult, ...],
-            ],
+            [BreakoutComparisonPopulation, tuple[BreakoutComparisonReplayResult, ...]],
             bytes,
         ],
         script["_results_bytes"],
     )
     report = project_task_report(population, results)
-    for suffix, payload in (
-        ("population.json.gz", population_bytes(population)),
-        ("results.jsonl.gz", results_bytes(population, results)),
-        ("report.json", _canonical(report)),
-    ):
-        (ledger.directory / f"00.{suffix}").write_bytes(payload)
-    digests = tuple(
-        hashlib.sha256((ledger.directory / f"00.{suffix}").read_bytes()).hexdigest()
-        for suffix in ("population.json.gz", "results.jsonl.gz", "report.json")
+    payloads = (
+        population_bytes(population),
+        results_bytes(population, results),
+        _canonical(report),
     )
+    suffixes = ("population.json.gz", "results.jsonl.gz", "report.json")
+    for suffix, payload in zip(suffixes, payloads, strict=True):
+        (ledger.directory / f"00.{suffix}").write_bytes(payload)
+    digests = tuple(hashlib.sha256(payload).hexdigest() for payload in payloads)
     ledger.complete(
         0,
         population_sha256=digests[0],
         results_sha256=digests[1],
         report_sha256=digests[2],
     )
-    read_task = cast(Callable[..., tuple[object, object, dict[str, object]]], script["_read_task"])
-    rebuilt_population, rebuilt_results, rebuilt_report = read_task(ledger, 0)
-    assert rebuilt_population == population
-    assert rebuilt_results == results
-    assert rebuilt_report == report
-    projection = b"projection"
-    (ledger.directory / "projection.json").write_bytes(projection)
-    ledger.finalize(hashlib.sha256(projection).hexdigest())
-    assert ledger.load().task_states == ("COMPLETED",)
-    with pytest.raises(BreakoutZoneComparisonError, match=r"cannot start|rerun"):
-        ledger.start(0)
+    projection = project_final_report(
+        ((population, results, report),),
+        tasks=(TASKS[0],),
+        enforce_real_candidate_bound=False,
+    )
+    projection_bytes = _canonical(projection)
+    (ledger.directory / "projection.json").write_bytes(projection_bytes)
+    ledger.finalize(hashlib.sha256(projection_bytes).hexdigest())
+    verify_synthetic = cast(Callable[..., dict[str, object]], script["_verify_synthetic"])
+    authority_reconstructions = 0
+    original_reconstruct = comparison_module._reconstruct_zone_decisions
+
+    def counted_reconstruct(
+        baseline_population: ResearchV2DecisionPopulation,
+    ) -> tuple[DecisionJournalEntry[object, object], ...]:
+        nonlocal authority_reconstructions
+        authority_reconstructions += 1
+        return original_reconstruct(baseline_population)
+
+    monkeypatch.setattr(
+        comparison_module,
+        "_reconstruct_zone_decisions",
+        counted_reconstruct,
+    )
+    assert (
+        verify_synthetic(
+            tmp_path,
+            ledger.directory,
+            tasks=(TASKS[0],),
+            retained_authorities=((authority_path, authority_sha),),
+        )
+        == projection
+    )
+    assert authority_reconstructions == 1
+    assert cast(dict[str, object], projection["run_identity"])["input_kind"] == (
+        "SYNTHETIC_TEST_GRANT"
+    )
+    panel_cells = cast(dict[str, dict[str, object]], projection["cells"])
+    assert all(
+        {"full", "masked", "grouped_full", "grouped_masked"} <= cell.keys()
+        for cell in panel_cells.values()
+    )
+    paired = cast(dict[str, dict[str, object]], projection["paired"])
+    assert all({"full", "intersection_mask"} == set(cell) for cell in paired.values())
+    results_path = ledger.directory / "00.results.jsonl.gz"
+    original_results = results_path.read_bytes()
+    results_path.write_bytes(original_results + b"tamper")
+    with pytest.raises(BreakoutZoneComparisonError, match="artifact changed"):
+        verify_synthetic(
+            tmp_path,
+            ledger.directory,
+            tasks=(TASKS[0],),
+            retained_authorities=((authority_path, authority_sha),),
+        )
+    results_path.write_bytes(original_results)
+    with pytest.raises(BreakoutZoneComparisonError, match="cannot finalize more than once"):
+        ledger.finalize(hashlib.sha256(projection_bytes).hexdigest())
 
 
 def test_real_grant_cannot_be_replaced_by_old_or_synthetic_identity() -> None:
@@ -541,6 +875,43 @@ def test_real_grant_cannot_be_replaced_by_old_or_synthetic_identity() -> None:
     )
     with pytest.raises(BreakoutZoneComparisonError, match="impersonates"):
         synthetic.validate(actual_sha=SYNTHETIC_SHA, synthetic=True)
+
+
+def test_invalid_grant_fails_before_population_or_strategy_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def forbidden_loader(
+        repo: Path,
+        task: ComparisonTask,
+    ) -> ResearchV2StudyDecisionPopulation:
+        del repo, task
+        nonlocal calls
+        calls += 1
+        raise AssertionError("population loader must not run before grant validation")
+
+    monkeypatch.setattr(comparison_module, "_load_population", forbidden_loader)
+    invalid = ComparisonExecutionGrant(
+        "EXTERNAL_REVIEWED_EXECUTION_GRANT",
+        "5cb5b3d7-288b-44b1-a36f-d783c6f12b58",
+        SYNTHETIC_SHA,
+        "0" * 64,
+        TASK_PLAN_SHA256,
+        SOURCE_ID.value,
+        DATASET_VERSION,
+        MANIFEST_SHA256,
+        ARTIFACT_INDEX_SHA256,
+    )
+    with pytest.raises(BreakoutZoneComparisonError, match="code/protocol/tasks"):
+        load_granted_task_population(
+            tmp_path,
+            TASKS[0],
+            invalid,
+            actual_sha=SYNTHETIC_SHA,
+        )
+    assert calls == 0
 
 
 def test_spacing_masks_use_cross_arm_opportunity_identity() -> None:

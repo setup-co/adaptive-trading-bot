@@ -12,26 +12,31 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
 from unittest.mock import patch
 
 from adaptive_trading_bot.research.breakout_zone_comparison import (
-    PROTOCOL_SHA256,
-    SCHEMA_VERSION,
-    TASK_PLAN_SHA256,
+    DECISION_END,
+    DECISION_START,
+    FOLLOW_UP_END,
     TASKS,
     BreakoutComparisonPopulation,
     BreakoutComparisonReplayResult,
     BreakoutZoneComparisonError,
+    ComparisonArm,
     ComparisonExecutionGrant,
+    ComparisonTask,
     _canonical,
     comparison_result_record,
     data_only_preflight,
     execute_granted_task,
+    project_final_report,
     project_task_report,
     recover_comparison_result,
+    verify_imported_baseline_authority,
+    verify_retained_baseline_authority,
 )
 from adaptive_trading_bot.research.breakout_zone_comparison_ledger import (
+    ComparisonLedgerState,
     ComparisonLedgerStore,
 )
 from adaptive_trading_bot.research.research_v2_screen_evidence import (
@@ -106,6 +111,17 @@ def _results_bytes(
 ) -> bytes:
     candles = tuple(item.context.candle_15m for item in population.baseline_population.contexts)
     candle_opens = tuple(candle.open_time for candle in candles)
+    decision_indexes = {
+        arm: {
+            decision.identity.observed_at: index
+            for index, decision in enumerate(
+                population.baseline_population.decisions
+                if arm.value == "BASELINE_1_0_0"
+                else population.zone_decisions
+            )
+        }
+        for arm in ComparisonArm
+    }
     lines = tuple(
         _canonical(
             comparison_result_record(
@@ -113,46 +129,12 @@ def _results_bytes(
                 population,
                 candles=candles,
                 candle_opens=candle_opens,
+                decision_indexes=decision_indexes,
             )
         )
         for result in results
     )
     return gzip.compress(b"".join(line + b"\n" for line in lines), mtime=0)
-
-
-def _final_projection(task_reports: tuple[dict[str, object], ...]) -> dict[str, object]:
-    if len(task_reports) != len(TASKS) or tuple(
-        report.get("task_id") for report in task_reports
-    ) != tuple(task.task_id for task in TASKS):
-        raise BreakoutZoneComparisonError("final comparison omits or reorders tasks")
-    if sum(_required_int(report, "observation_count") for report in task_reports) != 60480:
-        raise BreakoutZoneComparisonError("final comparison observation denominator changed")
-    baseline_candidates = sum(
-        _required_int(cast(dict[str, object], report["candidate_counts"]), "BASELINE_1_0_0")
-        for report in task_reports
-    )
-    zone_candidates = sum(
-        _required_int(cast(dict[str, object], report["candidate_counts"]), "ZONE_0_1_0")
-        for report in task_reports
-    )
-    if baseline_candidates != 29 or zone_candidates > baseline_candidates:
-        raise BreakoutZoneComparisonError("known candidate bound/reconciliation failed")
-    result: dict[str, object] = {
-        "schema_version": SCHEMA_VERSION,
-        "protocol_sha256": PROTOCOL_SHA256,
-        "task_plan_sha256": TASK_PLAN_SHA256,
-        "status": "DESCRIPTIVE_COMPLETE_PROMOTION_INELIGIBLE",
-        "baseline_candidate_count": baseline_candidates,
-        "zone_candidate_count": zone_candidates,
-        "task_reports": tuple(task_reports),
-        "interpretation": (
-            "post-result selection-informed and insufficient for promotion",
-            "technical completion is not strategy eligibility",
-            "no automatic rerun, rescue subset, tuning, or significance claim",
-        ),
-    }
-    result["projection_sha256"] = hashlib.sha256(_canonical(result)).hexdigest()
-    return result
 
 
 def _run(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
@@ -166,7 +148,13 @@ def _run(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
     grant.validate(actual_sha=actual_sha)
     data_only_preflight(repo)
     ledger = ComparisonLedgerStore.create(ledger_root, grant, actual_sha=actual_sha)
-    reports: list[dict[str, object]] = []
+    evidence: list[
+        tuple[
+            BreakoutComparisonPopulation,
+            tuple[BreakoutComparisonReplayResult, ...],
+            dict[str, object],
+        ]
+    ] = []
     with _no_network():
         for task in TASKS:
             ledger.start(task.index)
@@ -190,11 +178,11 @@ def _run(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
                     results_sha256=results_sha,
                     report_sha256=report_sha,
                 )
-                reports.append(report)
+                evidence.append((population, results, report))
             except Exception:
                 ledger.fail(task.index)
                 raise
-        projection = _final_projection(tuple(reports))
+        projection = project_final_report(tuple(evidence))
         projection_sha = _immutable_write(
             ledger.directory / "projection.json", _canonical(projection)
         )
@@ -203,7 +191,13 @@ def _run(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
 
 
 def _read_task(
-    ledger: ComparisonLedgerStore, index: int
+    repo: Path,
+    ledger: ComparisonLedgerStore,
+    state: ComparisonLedgerState,
+    index: int,
+    *,
+    task: ComparisonTask | None = None,
+    retained_authority: tuple[Path, str] | None = None,
 ) -> tuple[
     BreakoutComparisonPopulation,
     tuple[BreakoutComparisonReplayResult, ...],
@@ -220,6 +214,39 @@ def _read_task(
         if not isinstance(population, BreakoutComparisonPopulation):
             raise ValueError("population type")
         population.validate()
+        expected_task = (
+            TASKS[index] if state.input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT" else task
+        )
+        population.provenance.validate(task=expected_task)
+        if (
+            population.provenance.input_kind != state.input_kind
+            or population.provenance.run_uuid != state.run_uuid
+            or population.provenance.executable_sha != state.executable_sha
+            or population.provenance.protocol_sha256 != state.protocol_sha256
+            or population.provenance.task_plan_sha256 != state.task_plan_sha256
+            or population.provenance.source_id != state.source_id
+            or population.provenance.dataset_version != state.dataset_version
+            or population.provenance.manifest_sha256 != state.manifest_sha256
+            or population.provenance.artifact_index_sha256 != state.artifact_index_sha256
+            or population.task_id != state.task_ids[index]
+            or (
+                state.input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT"
+                and expected_task is not None
+                and (
+                    population.baseline_population.configuration.bounds.symbol
+                    != expected_task.symbol
+                    or population.baseline_population.configuration.bounds.context_start
+                    != expected_task.context_start
+                    or population.baseline_population.configuration.bounds.decision_start
+                    != DECISION_START
+                    or population.baseline_population.configuration.bounds.decision_end
+                    != DECISION_END
+                    or population.baseline_population.configuration.bounds.follow_up_end
+                    != FOLLOW_UP_END
+                )
+            )
+        ):
+            raise ValueError("task provenance")
         candles = tuple(item.context.candle_15m for item in population.baseline_population.contexts)
         results: list[BreakoutComparisonReplayResult] = []
         with gzip.open(ledger.directory / f"{index:02d}.results.jsonl.gz", "rb") as handle:
@@ -241,10 +268,24 @@ def _read_task(
     rebuilt = project_task_report(population, result_tuple)
     if _canonical(rebuilt) != report_raw:
         raise BreakoutZoneComparisonError("stored report differs from retained authority")
+    if state.input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT":
+        verify_imported_baseline_authority(
+            repo,
+            TASKS[index],
+            population,
+            result_tuple,
+        )
+    elif retained_authority is not None:
+        verify_retained_baseline_authority(
+            retained_authority[0],
+            retained_authority[1],
+            population,
+            result_tuple,
+        )
     return population, result_tuple, rebuilt
 
 
-def _verify(ledger_dir: Path) -> dict[str, object]:
+def _verify(repo: Path, ledger_dir: Path) -> dict[str, object]:
     ledger = ComparisonLedgerStore(ledger_dir.resolve(strict=True))
     state = ledger.load()
     if (
@@ -253,8 +294,8 @@ def _verify(ledger_dir: Path) -> dict[str, object]:
         or state.finalized_sha256 is None
     ):
         raise BreakoutZoneComparisonError("comparison ledger is not finalized authority")
-    reports = tuple(_read_task(ledger, task.index)[2] for task in TASKS)
-    projection = _final_projection(reports)
+    evidence = tuple(_read_task(repo, ledger, state, task.index) for task in TASKS)
+    projection = project_final_report(evidence)
     projection_path = ledger.directory / "projection.json"
     stored_raw = projection_path.read_bytes()
     stored = json.loads(stored_raw)
@@ -264,6 +305,52 @@ def _verify(ledger_dir: Path) -> dict[str, object]:
         or _file_sha(projection_path) != state.finalized_sha256
     ):
         raise BreakoutZoneComparisonError("final comparison projection changed")
+    return projection
+
+
+def _verify_synthetic(
+    repo: Path,
+    ledger_dir: Path,
+    *,
+    tasks: tuple[ComparisonTask, ...],
+    retained_authorities: tuple[tuple[Path, str], ...],
+) -> dict[str, object]:
+    """Exercise the production persistence boundary with explicit synthetic authority."""
+
+    ledger = ComparisonLedgerStore(ledger_dir.resolve(strict=True))
+    state = ledger.load()
+    if (
+        state.input_kind != "SYNTHETIC_TEST_GRANT"
+        or len(tasks) != len(retained_authorities)
+        or len(tasks) != len(state.task_states)
+        or any(value != "COMPLETED" for value in state.task_states)
+        or state.finalized_sha256 is None
+    ):
+        raise BreakoutZoneComparisonError("synthetic comparison ledger is not finalized authority")
+    evidence = tuple(
+        _read_task(
+            repo,
+            ledger,
+            state,
+            index,
+            task=task,
+            retained_authority=retained_authorities[index],
+        )
+        for index, task in enumerate(tasks)
+    )
+    projection = project_final_report(
+        evidence,
+        tasks=tasks,
+        enforce_real_candidate_bound=False,
+    )
+    projection_path = ledger.directory / "projection.json"
+    stored_raw = projection_path.read_bytes()
+    if (
+        _canonical(json.loads(stored_raw)) != stored_raw
+        or _canonical(projection) != stored_raw
+        or _file_sha(projection_path) != state.finalized_sha256
+    ):
+        raise BreakoutZoneComparisonError("synthetic final comparison projection changed")
     return projection
 
 
@@ -283,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "run":
         result = _run(args.repo, args.grant, args.ledger_root)
     else:
-        result = _verify(args.ledger)
+        result = _verify(args.repo.resolve(strict=True), args.ledger)
     print(_canonical(result).decode())
     return 0
 

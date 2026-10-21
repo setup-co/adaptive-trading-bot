@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Self
 
 from adaptive_trading_bot.research.breakout_zone_comparison import (
+    ARTIFACT_INDEX_SHA256,
     LEDGER_SCHEMA_VERSION,
     PROTOCOL_SHA256,
     TASK_PLAN_SHA256,
@@ -19,6 +20,11 @@ from adaptive_trading_bot.research.breakout_zone_comparison import (
     ComparisonExecutionGrant,
     _canonical,
     _iso,
+)
+from adaptive_trading_bot.research.research_v2_admission import (
+    DATASET_VERSION,
+    MANIFEST_SHA256,
+    SOURCE_ID,
 )
 
 
@@ -36,6 +42,12 @@ class ComparisonLedgerState:
     run_uuid: str
     executable_sha: str
     input_kind: str
+    protocol_sha256: str
+    task_plan_sha256: str
+    source_id: str
+    dataset_version: str
+    manifest_sha256: str
+    artifact_index_sha256: str
     task_ids: tuple[str, ...]
     revision: int
     task_states: tuple[str, ...]
@@ -133,6 +145,7 @@ class ComparisonLedgerStore:
         results: list[str | None] = []
         reports: list[str | None] = []
         run_uuid = executable = input_kind = ""
+        protocol = task_plan = source_id = dataset_version = manifest = artifact_index = ""
         final: str | None = None
         for index, path in enumerate(files):
             raw = path.read_bytes()
@@ -159,11 +172,27 @@ class ComparisonLedgerStore:
                 run_uuid = str(event["run_uuid"])
                 executable = str(event["executable_sha"])
                 input_kind = str(event["input_kind"])
+                protocol = str(event["protocol_sha256"])
+                task_plan = str(event["task_plan_sha256"])
+                source_id = str(event["source_id"])
+                dataset_version = str(event["dataset_version"])
+                manifest = str(event["manifest_sha256"])
+                artifact_index = str(event["artifact_index_sha256"])
                 task_ids = tuple(event.get("task_ids", ()))
-                if not task_ids:
+                if (
+                    not task_ids
+                    or input_kind
+                    not in {"EXTERNAL_REVIEWED_EXECUTION_GRANT", "SYNTHETIC_TEST_GRANT"}
+                    or protocol != PROTOCOL_SHA256
+                    or task_plan != TASK_PLAN_SHA256
+                ):
                     raise BreakoutZoneComparisonError("comparison ledger has no tasks")
-                if input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT" and task_ids != tuple(
-                    task.task_id for task in TASKS
+                if input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT" and (
+                    task_ids != tuple(task.task_id for task in TASKS)
+                    or source_id != SOURCE_ID.value
+                    or dataset_version != DATASET_VERSION
+                    or manifest != MANIFEST_SHA256
+                    or artifact_index != ARTIFACT_INDEX_SHA256
                 ):
                     raise BreakoutZoneComparisonError(
                         "reviewed comparison ledger task inventory changed"
@@ -231,6 +260,12 @@ class ComparisonLedgerStore:
             run_uuid,
             executable,
             input_kind,
+            protocol,
+            task_plan,
+            source_id,
+            dataset_version,
+            manifest,
+            artifact_index,
             task_ids,
             len(files) - 1,
             tuple(states),
@@ -305,6 +340,9 @@ class ComparisonLedgerStore:
             character not in "0123456789abcdef" for character in projection_sha256
         ):
             raise BreakoutZoneComparisonError("projection digest is malformed")
-        if any(value != "COMPLETED" for value in self.load().task_states):
+        state = self.load()
+        if state.finalized_sha256 is not None:
+            raise BreakoutZoneComparisonError("comparison cannot finalize more than once")
+        if any(value != "COMPLETED" for value in state.task_states):
             raise BreakoutZoneComparisonError("partial comparison cannot finalize")
         self._append("FINALIZED", projection_sha256=projection_sha256)

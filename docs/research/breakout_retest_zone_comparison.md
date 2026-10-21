@@ -2,9 +2,9 @@
 
 **Protocol:** `BREAKOUT_RETEST_ZONE_COMPARISON_V1`
 **Protocol SHA-256:**
-`36ff9d5161a5c9f336a28f8aa20c8e4c5ca118f8988a63801cc7dd495c2a3ffa`
+`bc3b4972f83d20f67967778816674e85e525d495e37e5586995ba13fbcf8e80f`
 **Task-plan SHA-256:**
-`0991483c4390cd2a80e0fa969ba158365096c92a286d7db98fd3bf223aaac4c1`
+`664cf4189def82392bd86d85879970bd6266c1bbd8217fd7e609620fc66e1a55`
 **Status:** frozen preparation; no historical execution grant
 **Question:** descriptive effect of one accepted initial-stop hypothesis
 
@@ -62,8 +62,9 @@ touches keep protective-stop precedence, and recovery is causal and strictly
 post-fill. Entry-unfilled, ordinary open/closed and recovery open/closed facts,
 fees and residual quantities remain evidence. No position is force-closed.
 
-During a separately authorized run, fresh baseline Strategy/Risk/Safety facts
-must reconcile with the retained population. Baseline economic results are
+During a separately authorized run, the complete zone Strategy/Risk/Safety
+chain is re-derived once per immutable task with the accepted stateful strategy
+and fixed Risk/Safety engines. Baseline economic results are
 then reconstructed from the exact retained #187 authority rows and labeled
 `REUSED_ISSUE_187_BASELINE`; they are not simulated again or described as an
 independent replication. Only the zone arm is executable through the narrow
@@ -77,9 +78,17 @@ outcome is inspected. Blocks do not reset spacing, and unfilled/open selected
 opportunities are not replaced. A paired-mask view is only the intersection
 of those independently frozen masks.
 
-Reports retain full arm denominators, candidates, admissions, common and
+Reports attribute each decision to the week containing its signal candle
+**open**, including exact weekly and P1/P2/P3 boundaries. Directional
+Risk/Safety rejections retain their audited LONG/SHORT candidate direction;
+genuine NO_SIGNAL direction remains unavailable. Reports retain full arm
+denominators, candidates, admissions, common and
 arm-only admission identities, complete terminal statuses, admitted trade
 details, full/masked outcomes and asset/block/week/side/regime zero cells.
+The final projection also rebuilds whole-panel full and arm-specific masked
+summaries plus paired full and exact mask-intersection views from retained
+individual rows; it never averages asset means or treats unavailable outcomes
+as zero.
 Paired closed deltas require the same opportunity and both closed authorities;
 missing, rejected, unfilled and open identities remain unavailable rather than
 receiving zero R. Decimal metrics use a local precision-34 half-even context.
@@ -106,7 +115,13 @@ before retained population construction. Old grants, synthetic grants and
 unknown evidence fail closed. The one-shot append-only ledger prevents a
 STARTED, FAILED or COMPLETED task from running again. Finalization requires all
 ten complete tasks; verification reconstructs every stored population/result
-and report before accepting the projection.
+and report before accepting the projection. Version-2 population, result and
+ledger envelopes bind the run/executable/input/task identity, declared
+scenario costs and latency, execution snapshot digest, and exact predecessor
+row. Verification resolves every imported baseline outcome against the pinned
+#187 bytes. A compact synthetic route exercises the same import, task,
+publication, finalization and read-only verifier boundaries without granting a
+historical run.
 
 No grant or UUID is issued by this annex. It authorizes no historical
 candidate/PnL execution, data acquisition, Paper, Shadow, Live, exchange,

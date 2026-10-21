@@ -43,7 +43,11 @@ from adaptive_trading_bot.research.all_fill_replay import (
     AllFillScenario,
     AllFillStatus,
     ResearchAllFillReplayRunner,
+    _snapshot_digest,
     validate_shared_all_fill_relations,
+)
+from adaptive_trading_bot.research.all_fill_replay import (
+    _scenario as _all_fill_scenario,
 )
 from adaptive_trading_bot.research.breakout_retest_replay import BreakoutRetestReplayResult
 from adaptive_trading_bot.research.paired_exit_replay import (
@@ -88,9 +92,9 @@ from adaptive_trading_bot.strategies import (
 )
 
 PROTOCOL_VERSION = "BREAKOUT_RETEST_ZONE_COMPARISON_V1"
-SCHEMA_VERSION = "breakout-retest-zone-comparison-v1"
-RESULT_SCHEMA_VERSION = "breakout-retest-zone-comparison-result-v1"
-LEDGER_SCHEMA_VERSION = "breakout-retest-zone-comparison-ledger-v1"
+SCHEMA_VERSION = "breakout-retest-zone-comparison-v2"
+RESULT_SCHEMA_VERSION = "breakout-retest-zone-comparison-result-v2"
+LEDGER_SCHEMA_VERSION = "breakout-retest-zone-comparison-ledger-v2"
 BASELINE_IDENTITY = ("breakout_retest", "1.0.0")
 ZONE_IDENTITY = ("breakout_retest_zone_invalidation", "0.1.0")
 ZONE_POLICY = "BREAKOUT_RETEST_ZONE_INVALIDATION_V1"
@@ -159,6 +163,8 @@ class ComparisonTask:
             "decision_slots": 6048,
             "arm_observations": 12096,
             "arm_scenario_cells": 24192,
+            "population_schema": SCHEMA_VERSION,
+            "result_schema": RESULT_SCHEMA_VERSION,
             "population": _artifact_record(self.population),
             "partition": _artifact_record(self.partition),
             "authority": _artifact_record(self.authority),
@@ -320,7 +326,11 @@ def _artifact_record(value: PinnedArtifact) -> dict[str, object]:
 def protocol_facts() -> dict[str, object]:
     return {
         "protocol": PROTOCOL_VERSION,
-        "schema": SCHEMA_VERSION,
+        "schemas": {
+            "population": SCHEMA_VERSION,
+            "result": RESULT_SCHEMA_VERSION,
+            "ledger": LEDGER_SCHEMA_VERSION,
+        },
         "baseline": {"strategy_id": BASELINE_IDENTITY[0], "version": BASELINE_IDENTITY[1]},
         "zone": {
             "strategy_id": ZONE_IDENTITY[0],
@@ -354,6 +364,12 @@ def protocol_facts() -> dict[str, object]:
             "promotion_eligible": False,
             "selection_informed": True,
             "scenarios_are_independent_samples": False,
+        },
+        "reporting": {
+            "calendar_basis": "SIGNAL_CANDLE_OPEN",
+            "direction_basis": "CANDIDATE_OR_UNDERLYING_ACTION",
+            "panel_views": ("FULL", "ARM_MASKED", "PAIRED_FULL", "PAIRED_INTERSECTION"),
+            "unavailable_is_zero": False,
         },
     }
 
@@ -496,6 +512,88 @@ class ComparisonExecutionGrant:
 
 
 @dataclass(frozen=True, slots=True)
+class ComparisonTaskProvenance:
+    """Exact execution/input/task identity retained by every task authority."""
+
+    input_kind: str
+    run_uuid: str
+    executable_sha: str
+    protocol_sha256: str
+    task_plan_sha256: str
+    source_id: str
+    dataset_version: str
+    manifest_sha256: str
+    artifact_index_sha256: str
+    task_id: str
+    task_sha256: str
+
+    @classmethod
+    def from_grant(
+        cls,
+        grant: ComparisonExecutionGrant,
+        task: ComparisonTask,
+    ) -> ComparisonTaskProvenance:
+        return cls(
+            grant.kind,
+            grant.run_uuid,
+            grant.executable_sha,
+            grant.protocol_sha256,
+            grant.task_plan_sha256,
+            grant.source_id,
+            grant.dataset_version,
+            grant.manifest_sha256,
+            grant.artifact_index_sha256,
+            task.task_id,
+            _digest(task.to_record()),
+        )
+
+    def validate(self, *, task: ComparisonTask | None = None) -> None:
+        if (
+            self.input_kind not in {"EXTERNAL_REVIEWED_EXECUTION_GRANT", "SYNTHETIC_TEST_GRANT"}
+            or len(self.executable_sha) != 40
+            or any(character not in _HEX40 for character in self.executable_sha)
+            or len(self.protocol_sha256) != 64
+            or len(self.task_plan_sha256) != 64
+            or len(self.manifest_sha256) != 64
+            or len(self.artifact_index_sha256) != 64
+            or len(self.task_sha256) != 64
+            or any(
+                character not in _HEX40
+                for value in (
+                    self.protocol_sha256,
+                    self.task_plan_sha256,
+                    self.manifest_sha256,
+                    self.artifact_index_sha256,
+                    self.task_sha256,
+                )
+                for character in value
+            )
+            or not self.source_id
+            or not self.dataset_version
+            or not self.task_id
+        ):
+            raise BreakoutZoneComparisonError("comparison task provenance is malformed")
+        try:
+            if str(uuid.UUID(self.run_uuid)) != self.run_uuid:
+                raise ValueError("noncanonical UUID")
+        except ValueError as exc:
+            raise BreakoutZoneComparisonError("comparison task provenance UUID is invalid") from exc
+        if task is not None and (
+            self.task_id != task.task_id or self.task_sha256 != _digest(task.to_record())
+        ):
+            raise BreakoutZoneComparisonError("comparison provenance differs from exact task")
+        if self.input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT" and (
+            self.protocol_sha256 != PROTOCOL_SHA256
+            or self.task_plan_sha256 != TASK_PLAN_SHA256
+            or self.source_id != SOURCE_ID.value
+            or self.dataset_version != DATASET_VERSION
+            or self.manifest_sha256 != MANIFEST_SHA256
+            or self.artifact_index_sha256 != ARTIFACT_INDEX_SHA256
+        ):
+            raise BreakoutZoneComparisonError("reviewed provenance differs from pinned input")
+
+
+@dataclass(frozen=True, slots=True)
 class OpportunityKey:
     source_id: str
     dataset_version: str
@@ -558,11 +656,12 @@ class BreakoutComparisonPopulation:
     baseline_population: ResearchV2DecisionPopulation
     zone_decisions: tuple[DecisionJournalEntry[object, object], ...]
     opportunity_keys: tuple[OpportunityKey | None, ...]
+    provenance: ComparisonTaskProvenance
     schema_version: str = field(init=False, default=SCHEMA_VERSION)
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._validate_facts()
+        self._validate_facts(reconstruct_authority=True)
         object.__setattr__(
             self,
             "integrity_seal",
@@ -583,19 +682,36 @@ class BreakoutComparisonPopulation:
             ),
         ):
             raise BreakoutZoneComparisonError("comparison population integrity mismatch")
-        self._validate_facts()
+        self._validate_facts(reconstruct_authority=False)
 
-    def _validate_facts(self) -> None:
+    def validate_authority(self) -> None:
+        """Reconstruct the complete zone journal once at a task boundary."""
+
+        self.validate()
+        self._validate_facts(reconstruct_authority=True)
+
+    def _validate_facts(self, *, reconstruct_authority: bool) -> None:
         self.baseline_population.validate()
+        self.provenance.validate()
         config = self.baseline_population.configuration
         if (
             self.schema_version != SCHEMA_VERSION
             or config.family != "breakout_retest"
             or len(self.baseline_population.decisions) != len(self.zone_decisions)
             or len(self.zone_decisions) != len(self.opportunity_keys)
-            or not self.task_id
+            or self.task_id != self.provenance.task_id
+            or config.bounds.source_id.value != self.provenance.source_id
+            or self.baseline_population.dataset_version != self.provenance.dataset_version
+            or self.baseline_population.manifest_sha256 != self.provenance.manifest_sha256
         ):
             raise BreakoutZoneComparisonError("comparison population shape is invalid")
+        if (
+            reconstruct_authority
+            and _reconstruct_zone_decisions(self.baseline_population) != self.zone_decisions
+        ):
+            raise BreakoutZoneComparisonError(
+                "zone Strategy/Risk/Safety authority differs from accepted evaluation"
+            )
         seen: set[datetime] = set()
         for baseline, zone, key in zip(
             self.baseline_population.decisions,
@@ -649,8 +765,39 @@ def build_comparison_population(
     baseline_population: ResearchV2DecisionPopulation,
     *,
     task_id: str,
+    provenance: ComparisonTaskProvenance,
 ) -> BreakoutComparisonPopulation:
     """Evaluate only the accepted zone strategy over the same retained contexts."""
+
+    baseline_population.validate()
+    configuration = baseline_population.configuration
+    if configuration.family != "breakout_retest":
+        raise BreakoutZoneComparisonError("comparison input is not a Breakout population")
+    decisions = _reconstruct_zone_decisions(baseline_population)
+    keys = tuple(
+        _opportunity_key(
+            decision,
+            dataset_version=baseline_population.dataset_version,
+            manifest_sha256=baseline_population.manifest_sha256,
+            epoch_start=configuration.bounds.context_start,
+        )
+        for decision in baseline_population.decisions
+    )
+    result = BreakoutComparisonPopulation(
+        task_id,
+        baseline_population,
+        decisions,
+        keys,
+        provenance,
+    )
+    result.validate()
+    return result
+
+
+def _reconstruct_zone_decisions(
+    baseline_population: ResearchV2DecisionPopulation,
+) -> tuple[DecisionJournalEntry[object, object], ...]:
+    """Re-run the accepted stateful strategy and sovereign gates once per task."""
 
     baseline_population.validate()
     configuration = baseline_population.configuration
@@ -692,18 +839,7 @@ def build_comparison_population(
         raise BreakoutZoneComparisonError("zone arm omits retained decision slots")
     if tuple(decisions) != journal.snapshot().entries:
         raise BreakoutZoneComparisonError("zone journal differs from evaluated decisions")
-    keys = tuple(
-        _opportunity_key(
-            decision,
-            dataset_version=baseline_population.dataset_version,
-            manifest_sha256=baseline_population.manifest_sha256,
-            epoch_start=configuration.bounds.context_start,
-        )
-        for decision in baseline_population.decisions
-    )
-    result = BreakoutComparisonPopulation(task_id, baseline_population, tuple(decisions), keys)
-    result.validate()
-    return result
+    return tuple(decisions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -724,6 +860,8 @@ class BreakoutComparisonReplayResult:
     legacy_replay: BreakoutRetestReplayResult | None
     arm: ComparisonArm
     origin: ResultOrigin
+    provenance: ComparisonTaskProvenance
+    population_sha256: str
     original_authority_sha256: str | None = None
     original_record_sha256: str | None = None
     schema_version: str = field(init=False, default=RESULT_SCHEMA_VERSION)
@@ -755,6 +893,9 @@ class BreakoutComparisonReplayResult:
         self._validate_facts()
 
     def _validate_facts(self) -> None:
+        self.decision.validate()
+        self.costs.validate()
+        self.provenance.validate()
         expected_identity = (
             BASELINE_IDENTITY if self.arm is ComparisonArm.BASELINE else ZONE_IDENTITY
         )
@@ -775,6 +916,17 @@ class BreakoutComparisonReplayResult:
             or (self.decision.identity.strategy_id, self.decision.identity.strategy_version)
             != expected_identity
             or self.origin is not expected_origin
+            or self.provenance.source_id != self.series.source_id.value
+            or self.provenance.task_id == ""
+            or len(self.population_sha256) != 64
+            or any(character not in _HEX40 for character in self.population_sha256)
+            or self.scenario is not _all_fill_scenario(self.costs)
+            or self.costs != _scenario_costs(self.scenario)
+            or not isinstance(self.execution_snapshot, tuple)
+            or not compare_digest(
+                self.execution_snapshot_digest,
+                _snapshot_digest(self.execution_snapshot),
+            )
             or (self.arm is ComparisonArm.BASELINE)
             != (
                 self.original_authority_sha256 is not None
@@ -806,6 +958,8 @@ class BreakoutComparisonReplayResult:
 def reuse_baseline_result(
     result: AllFillReplayResult,
     *,
+    provenance: ComparisonTaskProvenance,
+    population_sha256: str,
     authority_sha256: str,
     record_sha256: str,
 ) -> BreakoutComparisonReplayResult:
@@ -829,6 +983,8 @@ def reuse_baseline_result(
         cast(BreakoutRetestReplayResult | None, result.legacy_replay),
         ComparisonArm.BASELINE,
         ResultOrigin.REUSED_ISSUE_187,
+        provenance,
+        population_sha256,
         authority_sha256,
         record_sha256,
     )
@@ -848,6 +1004,8 @@ class BreakoutZoneComparisonRunner:
         costs: ExecutionCostConfiguration,
         *,
         end: datetime,
+        provenance: ComparisonTaskProvenance,
+        population_sha256: str,
     ) -> BreakoutComparisonReplayResult:
         scenario_facts = (
             costs.spread_bps,
@@ -878,6 +1036,8 @@ class BreakoutZoneComparisonRunner:
                 BreakoutComparisonReplayResult,
                 arm=ComparisonArm.ZONE,
                 origin=ResultOrigin.NEW_ZONE_SIMULATION,
+                provenance=provenance,
+                population_sha256=population_sha256,
             ),
         )
         if not isinstance(result, BreakoutComparisonReplayResult):
@@ -1015,20 +1175,39 @@ def _result_detail(
 
 
 def _period_week(observed_at: datetime) -> tuple[str, str]:
+    candle_open = observed_at - Timeframe.MINUTES_15.duration
     for block, start, end in BLOCKS:
-        if start < observed_at <= end:
-            week = int((observed_at - DECISION_START).total_seconds() // (7 * 86400)) + 1
+        if start <= candle_open < end:
+            week = int((candle_open - DECISION_START).total_seconds() // (7 * 86400)) + 1
             return block, f"W{min(week, 9)}"
     raise BreakoutZoneComparisonError("decision falls outside the reporting calendar")
+
+
+def _decision_side(decision: DecisionJournalEntry[object, object]) -> str | None:
+    action = decision.strategy_evaluation.action
+    if action is CandidateAction.LONG_CANDIDATE:
+        return "LONG"
+    if action is CandidateAction.SHORT_CANDIDATE:
+        return "SHORT"
+    audit = decision.strategy_evaluation.rule_audit
+    if isinstance(audit, BreakoutRetestZoneInvalidationAudit):
+        if audit.underlying_action is CandidateAction.LONG_CANDIDATE:
+            return "LONG"
+        if audit.underlying_action is CandidateAction.SHORT_CANDIDATE:
+            return "SHORT"
+    return None
 
 
 def _grouped_metrics(
     results: tuple[BreakoutComparisonReplayResult, ...],
     *,
-    symbol: TradingSymbol,
+    symbols: tuple[TradingSymbol, ...],
 ) -> dict[str, object]:
     groups: dict[str, tuple[BreakoutComparisonReplayResult, ...]] = {}
-    groups[f"ASSET:{symbol}"] = results
+    for symbol in symbols:
+        groups[f"ASSET:{symbol}"] = tuple(
+            item for item in results if item.decision.identity.symbol == symbol
+        )
     for block, _, _ in BLOCKS:
         groups[f"BLOCK:{block}"] = tuple(
             item for item in results if _period_week(item.decision.identity.observed_at)[0] == block
@@ -1039,11 +1218,9 @@ def _grouped_metrics(
             for item in results
             if _period_week(item.decision.identity.observed_at)[1] == f"W{week}"
         )
-    for side, entry_side in (("LONG", "BUY"), ("SHORT", "SELL")):
+    for side in ("LONG", "SHORT"):
         groups[f"SIDE:{side}"] = tuple(
-            item
-            for item in results
-            if item.entry_intent is not None and item.entry_intent.side.value == entry_side
+            item for item in results if _decision_side(item.decision) == side
         )
     for regime in RegimeLabel:
         groups[f"REGIME:{regime.value}"] = tuple(
@@ -1111,6 +1288,83 @@ def _paired_closed_summary(
     }
 
 
+def _panel_paired_summary(
+    evidence: tuple[
+        tuple[
+            BreakoutComparisonPopulation,
+            tuple[BreakoutComparisonReplayResult, ...],
+            dict[str, object],
+        ],
+        ...,
+    ],
+    scenario: AllFillScenario,
+    *,
+    masked: bool,
+) -> dict[str, object]:
+    differences: list[Decimal] = []
+    unavailable: list[str] = []
+    details: list[dict[str, object]] = []
+    with localcontext(_DECIMAL_CONTEXT):
+        for population, results, _report in evidence:
+            keyed = {
+                (result.arm, result.scenario, result.decision.identity.observed_at): result
+                for result in results
+            }
+            allowed = (
+                set(spacing_mask(population, ComparisonArm.BASELINE))
+                & set(spacing_mask(population, ComparisonArm.ZONE))
+                if masked
+                else None
+            )
+            for index, opportunity in enumerate(population.opportunity_keys):
+                if opportunity is None:
+                    continue
+                opportunity_id = _opportunity_id(opportunity)
+                if allowed is not None and opportunity_id not in allowed:
+                    continue
+                baseline = keyed[
+                    (
+                        ComparisonArm.BASELINE,
+                        scenario,
+                        population.baseline_population.decisions[index].identity.observed_at,
+                    )
+                ]
+                zone = keyed[
+                    (
+                        ComparisonArm.ZONE,
+                        scenario,
+                        population.zone_decisions[index].identity.observed_at,
+                    )
+                ]
+                baseline_r = baseline.branches[-1].closed_net_r if baseline.branches else None
+                zone_r = zone.branches[-1].closed_net_r if zone.branches else None
+                if (
+                    not _admitted(baseline.decision)
+                    or not _admitted(zone.decision)
+                    or baseline_r is None
+                    or zone_r is None
+                ):
+                    unavailable.append(opportunity_id)
+                    continue
+                delta = zone_r - baseline_r
+                differences.append(delta)
+                details.append(
+                    {
+                        "opportunity_id": opportunity_id,
+                        "baseline_net_r": str(baseline_r),
+                        "zone_net_r": str(zone_r),
+                        "zone_minus_baseline_net_r": str(delta),
+                    }
+                )
+        mean = None if not differences else sum(differences, Decimal(0)) / Decimal(len(differences))
+    return {
+        "common_closed_denominator": len(differences),
+        "unavailable_or_unclosed_opportunity_ids": tuple(unavailable),
+        "mean_zone_minus_baseline_net_r": None if mean is None else str(mean),
+        "pairs": tuple(details),
+    }
+
+
 def project_task_report(
     population: BreakoutComparisonPopulation,
     results: tuple[BreakoutComparisonReplayResult, ...],
@@ -1126,6 +1380,13 @@ def project_task_report(
     ] = {}
     for result in results:
         result.validate()
+        if (
+            result.provenance != population.provenance
+            or result.population_sha256 != population.integrity_seal
+        ):
+            raise BreakoutZoneComparisonError(
+                "comparison result differs from task population provenance"
+            )
         key = (result.arm, result.scenario, result.decision.identity.observed_at)
         if key in keyed:
             raise BreakoutZoneComparisonError("comparison result slot is duplicated")
@@ -1157,6 +1418,7 @@ def project_task_report(
         "schema_version": SCHEMA_VERSION,
         "protocol_sha256": PROTOCOL_SHA256,
         "task_id": population.task_id,
+        "provenance": encode_authority(population.provenance),
         "population_sha256": population.integrity_seal,
         "observation_count": len(baseline),
         "candidate_counts": {
@@ -1213,11 +1475,11 @@ def project_task_report(
                 "masked": _result_metrics(masked_results),
                 "grouped_full": _grouped_metrics(
                     cell_results,
-                    symbol=population.baseline_population.configuration.bounds.symbol,
+                    symbols=(population.baseline_population.configuration.bounds.symbol,),
                 ),
                 "grouped_masked": _grouped_metrics(
                     masked_results,
-                    symbol=population.baseline_population.configuration.bounds.symbol,
+                    symbols=(population.baseline_population.configuration.bounds.symbol,),
                 ),
             }
             details[cell_key] = tuple(
@@ -1234,6 +1496,136 @@ def project_task_report(
     }
     output["report_sha256"] = _digest(output)
     return output
+
+
+def project_final_report(
+    evidence: tuple[
+        tuple[
+            BreakoutComparisonPopulation,
+            tuple[BreakoutComparisonReplayResult, ...],
+            dict[str, object],
+        ],
+        ...,
+    ],
+    *,
+    tasks: tuple[ComparisonTask, ...] = TASKS,
+    enforce_real_candidate_bound: bool = True,
+) -> dict[str, object]:
+    """Rebuild the whole-panel report from retained per-result authority."""
+
+    if len(evidence) != len(tasks) or tuple(item[0].task_id for item in evidence) != tuple(
+        task.task_id for task in tasks
+    ):
+        raise BreakoutZoneComparisonError("final comparison omits or reorders exact tasks")
+    for (population, results, report), task in zip(evidence, tasks, strict=True):
+        population.provenance.validate(task=task)
+        if project_task_report(population, results) != report:
+            raise BreakoutZoneComparisonError("final comparison task report is not authoritative")
+    first = evidence[0][0].provenance
+    run_facts = (
+        first.input_kind,
+        first.run_uuid,
+        first.executable_sha,
+        first.protocol_sha256,
+        first.task_plan_sha256,
+        first.source_id,
+        first.dataset_version,
+        first.manifest_sha256,
+        first.artifact_index_sha256,
+    )
+    if any(
+        (
+            item[0].provenance.input_kind,
+            item[0].provenance.run_uuid,
+            item[0].provenance.executable_sha,
+            item[0].provenance.protocol_sha256,
+            item[0].provenance.task_plan_sha256,
+            item[0].provenance.source_id,
+            item[0].provenance.dataset_version,
+            item[0].provenance.manifest_sha256,
+            item[0].provenance.artifact_index_sha256,
+        )
+        != run_facts
+        for item in evidence
+    ):
+        raise BreakoutZoneComparisonError("final comparison mixes execution/input identities")
+    baseline_candidates = sum(
+        sum(
+            decision.strategy_evaluation.action is not CandidateAction.NO_TRADE
+            for decision in population.baseline_population.decisions
+        )
+        for population, _results, _report in evidence
+    )
+    zone_candidates = sum(
+        sum(
+            decision.strategy_evaluation.action is not CandidateAction.NO_TRADE
+            for decision in population.zone_decisions
+        )
+        for population, _results, _report in evidence
+    )
+    if zone_candidates > baseline_candidates or (
+        enforce_real_candidate_bound and baseline_candidates != 29
+    ):
+        raise BreakoutZoneComparisonError("known candidate bound/reconciliation failed")
+    symbols = tuple(task.symbol for task in tasks)
+    cells: dict[str, object] = {}
+    for arm in ComparisonArm:
+        for scenario in AllFillScenario:
+            full: list[BreakoutComparisonReplayResult] = []
+            masked: list[BreakoutComparisonReplayResult] = []
+            for population, results, _report in evidence:
+                selected = set(spacing_mask(population, arm))
+                arm_results = tuple(
+                    result
+                    for result in results
+                    if result.arm is arm and result.scenario is scenario
+                )
+                full.extend(arm_results)
+                for row, opportunity in zip(arm_results, population.opportunity_keys, strict=True):
+                    if opportunity is not None and _opportunity_id(opportunity) in selected:
+                        masked.append(row)
+            full_tuple = tuple(full)
+            masked_tuple = tuple(masked)
+            cells[f"{arm.value}:{scenario.value}"] = {
+                "full": _result_metrics(full_tuple),
+                "masked": _result_metrics(masked_tuple),
+                "grouped_full": _grouped_metrics(full_tuple, symbols=symbols),
+                "grouped_masked": _grouped_metrics(masked_tuple, symbols=symbols),
+            }
+    result: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "protocol_sha256": PROTOCOL_SHA256,
+        "task_plan_sha256": first.task_plan_sha256,
+        "run_identity": {
+            "input_kind": first.input_kind,
+            "run_uuid": first.run_uuid,
+            "executable_sha": first.executable_sha,
+            "source_id": first.source_id,
+            "dataset_version": first.dataset_version,
+            "manifest_sha256": first.manifest_sha256,
+            "artifact_index_sha256": first.artifact_index_sha256,
+        },
+        "status": "DESCRIPTIVE_COMPLETE_PROMOTION_INELIGIBLE",
+        "observation_count": sum(len(item[0].zone_decisions) for item in evidence),
+        "baseline_candidate_count": baseline_candidates,
+        "zone_candidate_count": zone_candidates,
+        "cells": cells,
+        "paired": {
+            scenario.value: {
+                "full": _panel_paired_summary(evidence, scenario, masked=False),
+                "intersection_mask": _panel_paired_summary(evidence, scenario, masked=True),
+            }
+            for scenario in AllFillScenario
+        },
+        "task_reports": tuple(item[2] for item in evidence),
+        "interpretation": (
+            "post-result selection-informed and insufficient for promotion",
+            "technical completion is not strategy eligibility",
+            "no automatic rerun, rescue subset, tuning, or significance claim",
+        ),
+    }
+    result["projection_sha256"] = _digest(result)
+    return result
 
 
 def _load_population(repo: Path, task: ComparisonTask) -> ResearchV2StudyDecisionPopulation:
@@ -1264,6 +1656,75 @@ def _load_population(repo: Path, task: ComparisonTask) -> ResearchV2StudyDecisio
     return population
 
 
+def verify_imported_baseline_authority(
+    repo: Path,
+    task: ComparisonTask,
+    population: BreakoutComparisonPopulation,
+    results: tuple[BreakoutComparisonReplayResult, ...],
+) -> None:
+    """Resolve every reused baseline row against the pinned predecessor bytes."""
+
+    population.provenance.validate(task=task)
+    root = repo.resolve(strict=True) / EVIDENCE_ROOT
+    _verify_artifact(root, task.authority)
+    verify_retained_baseline_authority(
+        root / task.authority.path,
+        task.authority.sha256,
+        population,
+        results,
+    )
+
+
+def verify_retained_baseline_authority(
+    authority_path: Path,
+    authority_sha256: str,
+    population: BreakoutComparisonPopulation,
+    results: tuple[BreakoutComparisonReplayResult, ...],
+) -> None:
+    """Resolve reused rows against one exact retained authority artifact."""
+
+    population.validate()
+    if not compare_digest(_file_sha(authority_path), authority_sha256):
+        raise BreakoutZoneComparisonError("retained baseline authority bytes changed")
+    candles = tuple(item.context.candle_15m for item in population.baseline_population.contexts)
+    keyed = {
+        (result.arm, result.scenario, result.decision.identity.observed_at): result
+        for result in results
+    }
+    with gzip.open(authority_path, "rb") as handle:
+        for scenario in AllFillScenario:
+            for index, decision in enumerate(population.baseline_population.decisions):
+                line = handle.readline()
+                if not line.endswith(b"\n"):
+                    raise BreakoutZoneComparisonError("baseline authority evidence is incomplete")
+                record = json.loads(line)
+                if _canonical(record) + b"\n" != line:
+                    raise BreakoutZoneComparisonError("baseline authority row is noncanonical")
+                retained = recover_authority_result(
+                    record,
+                    population.baseline_population,
+                    index,
+                    scenario,
+                    candles=candles,
+                )
+                expected = reuse_baseline_result(
+                    retained,
+                    provenance=population.provenance,
+                    population_sha256=population.integrity_seal,
+                    authority_sha256=authority_sha256,
+                    record_sha256=hashlib.sha256(line[:-1]).hexdigest(),
+                )
+                actual = keyed.get(
+                    (ComparisonArm.BASELINE, scenario, decision.identity.observed_at)
+                )
+                if actual != expected:
+                    raise BreakoutZoneComparisonError(
+                        "reused baseline result differs from pinned predecessor authority"
+                    )
+        if handle.read(1):
+            raise BreakoutZoneComparisonError("baseline authority contains undeclared rows")
+
+
 def load_granted_task_population(
     repo: Path,
     task: ComparisonTask,
@@ -1275,7 +1736,13 @@ def load_granted_task_population(
 
     grant.validate(actual_sha=actual_sha)
     baseline = _load_population(repo.resolve(strict=True), task)
-    return build_comparison_population(baseline, task_id=task.task_id)
+    provenance = ComparisonTaskProvenance.from_grant(grant, task)
+    provenance.validate(task=task)
+    return build_comparison_population(
+        baseline,
+        task_id=task.task_id,
+        provenance=provenance,
+    )
 
 
 def _scenario_costs(scenario: AllFillScenario) -> ExecutionCostConfiguration:
@@ -1296,12 +1763,33 @@ def execute_granted_task(
     """Future one-shot task route; this preparation issues no real grant."""
 
     population = load_granted_task_population(repo, task, grant, actual_sha=actual_sha)
+    root = repo / EVIDENCE_ROOT
+    _verify_artifact(root, task.authority)
+    source = HistoricalExecutionSource(LockedResearchV2CandleStore(repo))
+    return population, execute_comparison_task_from_retained_authority(
+        population,
+        authority_path=root / task.authority.path,
+        authority_sha256=task.authority.sha256,
+        source=source,
+    )
+
+
+def execute_comparison_task_from_retained_authority(
+    population: BreakoutComparisonPopulation,
+    *,
+    authority_path: Path,
+    authority_sha256: str,
+    source: ExecutionCandleSource,
+) -> tuple[BreakoutComparisonReplayResult, ...]:
+    """Import baseline rows once and simulate only the zone arm."""
+
+    population.validate_authority()
+    if not compare_digest(_file_sha(authority_path), authority_sha256):
+        raise BreakoutZoneComparisonError("retained baseline authority bytes changed")
     candles = tuple(item.context.candle_15m for item in population.baseline_population.contexts)
     baseline_by_scenario: dict[AllFillScenario, list[AllFillReplayResult]] = {
         scenario: [] for scenario in AllFillScenario
     }
-    _verify_artifact(repo / EVIDENCE_ROOT, task.authority)
-    authority_path = repo / EVIDENCE_ROOT / task.authority.path
     record_sha256: dict[AllFillScenario, list[str]] = {scenario: [] for scenario in AllFillScenario}
     with gzip.open(authority_path, "rb") as handle:
         for scenario in AllFillScenario:
@@ -1325,10 +1813,13 @@ def execute_granted_task(
 
         if handle.read(1):
             raise BreakoutZoneComparisonError("baseline authority contains undeclared rows")
-    source = HistoricalExecutionSource(LockedResearchV2CandleStore(repo))
     zone_runner = BreakoutZoneComparisonRunner(source)
-    series = ExecutionSeries(SOURCE_ID, task.symbol, Timeframe.MINUTES_15)
+    bounds = population.baseline_population.configuration.bounds
+    series = ExecutionSeries(bounds.source_id, bounds.symbol, Timeframe.MINUTES_15)
     output: list[BreakoutComparisonReplayResult] = []
+    context_times = tuple(
+        item.context.observed_at for item in population.baseline_population.contexts
+    )
     for scenario in AllFillScenario:
         for index, (_baseline_decision, zone_decision) in enumerate(
             zip(
@@ -1351,16 +1842,21 @@ def execute_granted_task(
             output.append(
                 reuse_baseline_result(
                     baseline_by_scenario[scenario][index],
-                    authority_sha256=task.authority.sha256,
+                    provenance=population.provenance,
+                    population_sha256=population.integrity_seal,
+                    authority_sha256=authority_sha256,
                     record_sha256=record_sha256[scenario][index],
                 )
             )
             cutoff = zone_decision.identity.observed_at + FOLLOW_UP
-            contexts = tuple(
-                item
-                for item in population.baseline_population.contexts
-                if zone_decision.identity.observed_at < item.context.observed_at < cutoff
-            )
+            first_context = bisect_left(context_times, zone_decision.identity.observed_at)
+            while (
+                first_context < len(context_times)
+                and context_times[first_context] <= zone_decision.identity.observed_at
+            ):
+                first_context += 1
+            final_context = bisect_left(context_times, cutoff)
+            contexts = population.baseline_population.contexts[first_context:final_context]
             output.append(
                 zone_runner.run_zone(
                     zone_decision,
@@ -1368,9 +1864,11 @@ def execute_granted_task(
                     series,
                     _scenario_costs(scenario),
                     end=cutoff,
+                    provenance=population.provenance,
+                    population_sha256=population.integrity_seal,
                 )
             )
-    return population, tuple(output)
+    return tuple(output)
 
 
 def comparison_result_record(
@@ -1379,6 +1877,7 @@ def comparison_result_record(
     *,
     candles: tuple[Candle, ...],
     candle_opens: tuple[datetime, ...] | None = None,
+    decision_indexes: dict[ComparisonArm, dict[datetime, int]] | None = None,
 ) -> dict[str, object]:
     result.validate()
     decisions = (
@@ -1386,10 +1885,21 @@ def comparison_result_record(
         if result.arm is ComparisonArm.BASELINE
         else population.zone_decisions
     )
-    try:
-        index = decisions.index(result.decision)
-    except ValueError as exc:
-        raise BreakoutZoneComparisonError("result decision is absent from its arm") from exc
+    if decision_indexes is None:
+        decision_indexes = {
+            current_arm: {
+                decision.identity.observed_at: index
+                for index, decision in enumerate(
+                    population.baseline_population.decisions
+                    if current_arm is ComparisonArm.BASELINE
+                    else population.zone_decisions
+                )
+            }
+            for current_arm in ComparisonArm
+        }
+    index = decision_indexes.get(result.arm, {}).get(result.decision.identity.observed_at)
+    if index is None or decisions[index] != result.decision:
+        raise BreakoutZoneComparisonError("result decision is absent from its arm")
     snapshot = result.execution_snapshot
     if candle_opens is None:
         candle_opens = tuple(candle.open_time for candle in candles)
