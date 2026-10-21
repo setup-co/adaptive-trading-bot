@@ -368,6 +368,8 @@ def protocol_facts() -> dict[str, object]:
         "reporting": {
             "calendar_basis": "SIGNAL_CANDLE_OPEN",
             "direction_basis": "CANDIDATE_OR_UNDERLYING_ACTION",
+            "direction_groups": ("LONG", "SHORT", "UNAVAILABLE"),
+            "masked_membership_basis": "DECISION_AND_OPPORTUNITY_IDENTITY",
             "panel_views": ("FULL", "ARM_MASKED", "PAIRED_FULL", "PAIRED_INTERSECTION"),
             "unavailable_is_zero": False,
         },
@@ -1218,9 +1220,9 @@ def _grouped_metrics(
             for item in results
             if _period_week(item.decision.identity.observed_at)[1] == f"W{week}"
         )
-    for side in ("LONG", "SHORT"):
+    for side in ("LONG", "SHORT", "UNAVAILABLE"):
         groups[f"SIDE:{side}"] = tuple(
-            item for item in results if _decision_side(item.decision) == side
+            item for item in results if (_decision_side(item.decision) or "UNAVAILABLE") == side
         )
     for regime in RegimeLabel:
         groups[f"REGIME:{regime.value}"] = tuple(
@@ -1575,13 +1577,26 @@ def project_final_report(
             masked: list[BreakoutComparisonReplayResult] = []
             for population, results, _report in evidence:
                 selected = set(spacing_mask(population, arm))
-                arm_results = tuple(
-                    result
+                decisions = (
+                    population.baseline_population.decisions
+                    if arm is ComparisonArm.BASELINE
+                    else population.zone_decisions
+                )
+                arm_index = {
+                    result.decision.identity: result
                     for result in results
                     if result.arm is arm and result.scenario is scenario
-                )
+                }
+                arm_results = tuple(arm_index[decision.identity] for decision in decisions)
                 full.extend(arm_results)
-                for row, opportunity in zip(arm_results, population.opportunity_keys, strict=True):
+                opportunity_by_identity = {
+                    decision.identity: opportunity
+                    for decision, opportunity in zip(
+                        decisions, population.opportunity_keys, strict=True
+                    )
+                }
+                for row in arm_results:
+                    opportunity = opportunity_by_identity[row.decision.identity]
                     if opportunity is not None and _opportunity_id(opportunity) in selected:
                         masked.append(row)
             full_tuple = tuple(full)

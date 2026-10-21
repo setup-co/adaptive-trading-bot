@@ -472,6 +472,13 @@ def test_complete_report_round_trip_masks_pairs_and_zero_cells(
     groups = cast(dict[str, dict[str, object]], cell["grouped_full"])
     assert "BLOCK:P1" in groups and "WEEK:W9" in groups
     assert cast(dict[str, int], groups["SIDE:SHORT"]["terminal_counts"])
+    assert "SIDE:UNAVAILABLE" in groups
+    full_counts = cast(dict[str, int], cast(dict[str, object], cell["full"])["terminal_counts"])
+    side_denominator = sum(
+        sum(cast(dict[str, int], groups[f"SIDE:{side}"]["terminal_counts"]).values())
+        for side in ("LONG", "SHORT", "UNAVAILABLE")
+    )
+    assert side_denominator == sum(full_counts.values())
     paired = cast(dict[str, dict[str, object]], report["paired_closed"])
     assert "common_closed_denominator" in paired[AllFillScenario.BASE.value]
     base_zone = next(
@@ -493,6 +500,52 @@ def test_complete_report_round_trip_masks_pairs_and_zero_cells(
     tampered["scenario"] = AllFillScenario.COMBINED_STRESS.value
     with pytest.raises(BreakoutZoneComparisonError, match="relabeled"):
         recover_comparison_result(json.loads(_canonical(tampered)), population, candles=candles)
+
+
+def test_panel_projection_is_permutation_invariant_and_reconciles_task_mask(
+    long_evidence: tuple[
+        object,
+        BreakoutComparisonPopulation,
+        tuple[BreakoutComparisonReplayResult, ...],
+    ],
+) -> None:
+    _, population, results = long_evidence
+    permutations = (
+        results,
+        tuple(reversed(results)),
+        tuple(
+            sorted(
+                results,
+                key=lambda item: (
+                    item.decision.identity.observed_at,
+                    item.scenario.value,
+                    item.arm.value,
+                ),
+            )
+        ),
+    )
+    projections: list[dict[str, object]] = []
+    for permutation in permutations:
+        report = project_task_report(population, permutation)
+        projection = project_final_report(
+            ((population, permutation, report),),
+            tasks=(TASKS[0],),
+            enforce_real_candidate_bound=False,
+        )
+        projections.append(projection)
+        task_cells = cast(dict[str, dict[str, object]], report["cells"])
+        panel_cells = cast(dict[str, dict[str, object]], projection["cells"])
+        for cell_key, task_cell in task_cells.items():
+            panel_masked = cast(dict[str, object], panel_cells[cell_key]["masked"])
+            task_masked = cast(dict[str, object], task_cell["masked"])
+            for field in (
+                "closed_denominator",
+                "incurred_fees_quote",
+                "terminal_counts",
+                "residual_quantity_by_asset",
+            ):
+                assert panel_masked[field] == task_masked[field]
+    assert projections[0] == projections[1] == projections[2]
 
 
 def test_zone_recovery_horizon_open_and_unfilled_are_preserved() -> None:
@@ -766,29 +819,37 @@ def test_legacy_entry_points_still_reject_zone_identity() -> None:
         )
 
 
+@pytest.mark.parametrize("zone_rejected", (True, False), ids=("baseline-only", "filled-zone"))
 def test_retained_import_execution_publication_and_final_verifier_are_one_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    zone_rejected: bool,
 ) -> None:
-    store, population = _population_with_zone_geometry_rejection()
+    store, population = (
+        _population_with_zone_geometry_rejection() if zone_rejected else _population()
+    )
     baseline_mask = spacing_mask(population, ComparisonArm.BASELINE)
     zone_mask = spacing_mask(population, ComparisonArm.ZONE)
     assert len(baseline_mask) == 1
-    assert zone_mask == ()
-    rejected_index = next(
+    candidate_index = next(
         index
         for index, decision in enumerate(population.baseline_population.decisions)
         if decision.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
     )
-    rejected = population.zone_decisions[rejected_index]
-    assert rejected.strategy_evaluation.action is CandidateAction.NO_TRADE
-    assert rejected.strategy_evaluation.reasons_against == (
-        BreakoutRetestZoneInvalidationReasonCode.ZONE_INVALIDATION_TOO_WIDE,
-    )
-    assert all(
-        decision.strategy_evaluation.action is CandidateAction.NO_TRADE
-        for decision in population.zone_decisions[rejected_index:]
-    )
+    candidate_or_rejection = population.zone_decisions[candidate_index]
+    if zone_rejected:
+        assert zone_mask == ()
+        assert candidate_or_rejection.strategy_evaluation.action is CandidateAction.NO_TRADE
+        assert candidate_or_rejection.strategy_evaluation.reasons_against == (
+            BreakoutRetestZoneInvalidationReasonCode.ZONE_INVALIDATION_TOO_WIDE,
+        )
+        assert all(
+            decision.strategy_evaluation.action is CandidateAction.NO_TRADE
+            for decision in population.zone_decisions[candidate_index:]
+        )
+    else:
+        assert zone_mask == baseline_mask
+        assert candidate_or_rejection.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
     authority_path = tmp_path / "retained-baseline.jsonl.gz"
     authority_sha = _write_retained_baseline_authority(
         authority_path,
@@ -862,10 +923,15 @@ def test_retained_import_execution_publication_and_final_verifier_are_one_path(
     report = project_task_report(population, results)
     admissions = cast(dict[str, tuple[str, ...]], report["admission_sets"])
     masks = cast(dict[str, tuple[str, ...]], report["pre_outcome_masks"])
-    assert len(admissions["baseline_only"]) == 1
-    assert admissions["zone_only"] == ()
-    assert masks["baseline"] != masks["zone"]
-    assert masks["paired_intersection"] == ()
+    if zone_rejected:
+        assert len(admissions["baseline_only"]) == 1
+        assert admissions["zone_only"] == ()
+        assert masks["baseline"] != masks["zone"]
+        assert masks["paired_intersection"] == ()
+    else:
+        assert admissions["baseline"] == admissions["zone"]
+        assert masks["baseline"] == masks["zone"] == masks["paired_intersection"]
+        assert any(result.arm is ComparisonArm.ZONE and result.branches for result in results)
     payloads = (
         population_bytes(population),
         results_bytes(population, results),
@@ -905,15 +971,13 @@ def test_retained_import_execution_publication_and_final_verifier_are_one_path(
         "_reconstruct_zone_decisions",
         counted_reconstruct,
     )
-    assert (
-        verify_synthetic(
-            tmp_path,
-            ledger.directory,
-            tasks=(TASKS[0],),
-            retained_authorities=((authority_path, authority_sha),),
-        )
-        == projection
+    verified = verify_synthetic(
+        tmp_path,
+        ledger.directory,
+        tasks=(TASKS[0],),
+        retained_authorities=((authority_path, authority_sha),),
     )
+    assert verified == projection
     assert authority_reconstructions == 1
     assert cast(dict[str, object], projection["run_identity"])["input_kind"] == (
         "SYNTHETIC_TEST_GRANT"
@@ -925,6 +989,20 @@ def test_retained_import_execution_publication_and_final_verifier_are_one_path(
     )
     paired = cast(dict[str, dict[str, object]], projection["paired"])
     assert all({"full", "intersection_mask"} == set(cell) for cell in paired.values())
+    zone_base = panel_cells[f"{ComparisonArm.ZONE.value}:{AllFillScenario.BASE.value}"]
+    zone_groups = cast(dict[str, dict[str, object]], zone_base["grouped_full"])
+    zone_counts = cast(
+        dict[str, int], cast(dict[str, object], zone_base["full"])["terminal_counts"]
+    )
+    assert sum(
+        sum(cast(dict[str, int], zone_groups[f"SIDE:{side}"]["terminal_counts"]).values())
+        for side in ("LONG", "SHORT", "UNAVAILABLE")
+    ) == sum(zone_counts.values())
+    # A candidate rejected by the zone geometry remains directionally LONG.
+    if zone_rejected:
+        assert sum(cast(dict[str, int], zone_groups["SIDE:LONG"]["terminal_counts"]).values()) == 1
+    else:
+        assert cast(int, cast(dict[str, object], zone_base["full"])["closed_denominator"]) > 0
     results_path = ledger.directory / "00.results.jsonl.gz"
     original_results = results_path.read_bytes()
     results_path.write_bytes(original_results + b"tamper")

@@ -2,7 +2,7 @@
 
 **Protocol:** `BREAKOUT_RETEST_ZONE_COMPARISON_V1`
 **Protocol SHA-256:**
-`bc3b4972f83d20f67967778816674e85e525d495e37e5586995ba13fbcf8e80f`
+`1a6c0ca3c82aec8d88fcfef367d34a65731acbf134cc7b727209327f8127c119`
 **Task-plan SHA-256:**
 `664cf4189def82392bd86d85879970bd6266c1bbd8217fd7e609620fc66e1a55`
 **Status:** frozen preparation; no historical execution grant
@@ -81,14 +81,19 @@ of those independently frozen masks.
 Reports attribute each decision to the week containing its signal candle
 **open**, including exact weekly and P1/P2/P3 boundaries. Directional
 Risk/Safety rejections retain their audited LONG/SHORT candidate direction;
-genuine NO_SIGNAL direction remains unavailable. Reports retain full arm
+genuine NO_SIGNAL direction is retained in an explicit `SIDE:UNAVAILABLE`
+zero-capable group, and LONG + SHORT + UNAVAILABLE reconcile to each complete
+status denominator. Reports retain full arm
 denominators, candidates, admissions, common and
 arm-only admission identities, complete terminal statuses, admitted trade
 details, full/masked outcomes and asset/block/week/side/regime zero cells.
 The final projection also rebuilds whole-panel full and arm-specific masked
 summaries plus paired full and exact mask-intersection views from retained
-individual rows; it never averages asset means or treats unavailable outcomes
-as zero.
+individual rows. Masked membership is joined by each retained result's exact
+decision/opportunity identity, never by tuple position, and panel masked
+status, closure, fee and per-asset residual facts reconcile to the retained
+task rows. The projection never averages asset means or treats unavailable
+outcomes as zero.
 Paired closed deltas require the same opportunity and both closed authorities;
 missing, rejected, unfilled and open identities remain unavailable rather than
 receiving zero R. Decimal metrics use a local precision-34 half-even context.
