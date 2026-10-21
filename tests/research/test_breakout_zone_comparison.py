@@ -87,9 +87,10 @@ from adaptive_trading_bot.risk import (
     RiskPortfolioSnapshot,
 )
 from adaptive_trading_bot.storage import HistoricalCandleStore
-from adaptive_trading_bot.strategies import CandidateAction
+from adaptive_trading_bot.strategies import BreakoutRetestStrategy, CandidateAction
 from adaptive_trading_bot.strategies.breakout_retest_zone_invalidation import (
     BreakoutRetestZoneInvalidationAudit,
+    BreakoutRetestZoneInvalidationReasonCode,
 )
 
 _HELPERS = runpy.run_path(str(Path(__file__).with_name("test_research_v2_admission.py")))
@@ -278,6 +279,67 @@ def _write_retained_baseline_authority(
     payload = gzip.compress(b"".join(line + b"\n" for line in lines), mtime=0)
     path.write_bytes(payload)
     return hashlib.sha256(payload).hexdigest()
+
+
+def _population_with_zone_geometry_rejection() -> tuple[object, BreakoutComparisonPopulation]:
+    """Create a sealed causal population whose baseline-only admission changes the mask."""
+
+    store, original = _population()
+    baseline = original.baseline_population
+    candidate_at = next(
+        decision.identity.observed_at
+        for decision in baseline.decisions
+        if decision.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+    )
+    observations: list[HistoricalStrategyContextObservation] = []
+    strategy = BreakoutRetestStrategy()
+    risk = RiskManager(baseline.configuration.risk_configuration)
+    safety = OperationalSafetyGate(baseline.configuration.safety_configuration)
+    decisions: list[DecisionJournalEntry[object, object]] = []
+    bounds = baseline.configuration.bounds
+    for observation in baseline.contexts:
+        context = observation.context
+        if context.observed_at == candidate_at:
+            candle = replace(
+                context.candle_15m,
+                open=Decimal(902),
+                high=Decimal("911.2"),
+                close=Decimal("911.2"),
+            )
+            context = replace(context, candle_15m=candle)
+        observations.append(HistoricalStrategyContextObservation(context))
+        evaluation = strategy.evaluate(context)
+        if not bounds.decision_start < context.observed_at <= bounds.decision_end:
+            continue
+        equity = baseline.configuration.research_equity_quote
+        portfolio = RiskPortfolioSnapshot(
+            context.observed_at,
+            "USDT",
+            equity,
+            equity,
+            equity,
+            (),
+        )
+        risk_decision = risk.evaluate(evaluation, portfolio)
+        safety_decision = safety.evaluate(
+            risk_decision,
+            _research_health(context, baseline.configuration.safety_assumptions),
+        )
+        decisions.append(DecisionJournalEntry(context, evaluation, risk_decision, safety_decision))
+    rebuilt = ResearchV2DecisionPopulation(
+        baseline.configuration,
+        tuple(decisions),
+        tuple(observations),
+        baseline.source_id,
+        baseline.dataset_version,
+        baseline.manifest_sha256,
+    )
+    rebuilt.validate()
+    return store, build_comparison_population(
+        rebuilt,
+        task_id=original.task_id,
+        provenance=original.provenance,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -708,7 +770,25 @@ def test_retained_import_execution_publication_and_final_verifier_are_one_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, population = _population()
+    store, population = _population_with_zone_geometry_rejection()
+    baseline_mask = spacing_mask(population, ComparisonArm.BASELINE)
+    zone_mask = spacing_mask(population, ComparisonArm.ZONE)
+    assert len(baseline_mask) == 1
+    assert zone_mask == ()
+    rejected_index = next(
+        index
+        for index, decision in enumerate(population.baseline_population.decisions)
+        if decision.strategy_evaluation.action is CandidateAction.LONG_CANDIDATE
+    )
+    rejected = population.zone_decisions[rejected_index]
+    assert rejected.strategy_evaluation.action is CandidateAction.NO_TRADE
+    assert rejected.strategy_evaluation.reasons_against == (
+        BreakoutRetestZoneInvalidationReasonCode.ZONE_INVALIDATION_TOO_WIDE,
+    )
+    assert all(
+        decision.strategy_evaluation.action is CandidateAction.NO_TRADE
+        for decision in population.zone_decisions[rejected_index:]
+    )
     authority_path = tmp_path / "retained-baseline.jsonl.gz"
     authority_sha = _write_retained_baseline_authority(
         authority_path,
@@ -780,6 +860,12 @@ def test_retained_import_execution_publication_and_final_verifier_are_one_path(
         script["_results_bytes"],
     )
     report = project_task_report(population, results)
+    admissions = cast(dict[str, tuple[str, ...]], report["admission_sets"])
+    masks = cast(dict[str, tuple[str, ...]], report["pre_outcome_masks"])
+    assert len(admissions["baseline_only"]) == 1
+    assert admissions["zone_only"] == ()
+    assert masks["baseline"] != masks["zone"]
+    assert masks["paired_intersection"] == ()
     payloads = (
         population_bytes(population),
         results_bytes(population, results),
