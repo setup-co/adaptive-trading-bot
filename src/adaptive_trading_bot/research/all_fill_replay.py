@@ -681,6 +681,7 @@ class ResearchAllFillReplayRunner:
         end: datetime,
         result_label: object | None,
         result_factory: Callable[..., Any],
+        _zone_comparison: bool = False,
     ) -> Any:
         """Private shared orchestration seam for separately versioned research results."""
 
@@ -690,7 +691,15 @@ class ResearchAllFillReplayRunner:
         end = require_utc(end, field="all-fill end")
         costs.validate()
         scenario = _scenario(costs) if result_label is None else result_label
-        family = _family(owned)
+        if _zone_comparison:
+            if (
+                owned.identity.strategy_id,
+                owned.identity.strategy_version,
+            ) != ("breakout_retest_zone_invalidation", "0.1.0"):
+                raise AllFillReplayError("zone comparison received a foreign strategy identity")
+            family = AllFillFamily.BREAKOUT_RETEST
+        else:
+            family = _family(owned)
         if (
             start >= end
             or not start <= owned.identity.observed_at < end
@@ -768,8 +777,11 @@ class ResearchAllFillReplayRunner:
             ) = paired
             entry_request = paired.entry_order
         elif family is AllFillFamily.BREAKOUT_RETEST:
-            legacy = BreakoutRetestFixed2RReplayRunner(bound).run(
-                owned, contexts, series, costs, end=end
+            breakout = BreakoutRetestFixed2RReplayRunner(bound)
+            legacy = (
+                breakout._run_zone_comparison(owned, contexts, series, costs, end=end)
+                if _zone_comparison
+                else breakout.run(owned, contexts, series, costs, end=end)
             )
             entry_request = legacy.entry_request
         else:
@@ -902,6 +914,32 @@ class ResearchAllFillReplayRunner:
             bound.candles,
             _snapshot_digest(bound.candles),
             legacy,
+        )
+
+    def _run_breakout_zone_comparison(
+        self,
+        decision: DecisionJournalEntry[object, object],
+        contexts: tuple[HistoricalStrategyContextObservation, ...],
+        series: ExecutionSeries,
+        costs: ExecutionCostConfiguration,
+        *,
+        start: datetime,
+        end: datetime,
+        result_label: object,
+        result_factory: Callable[..., Any],
+    ) -> Any:
+        """Exact private bridge used only by BREAKOUT_RETEST_ZONE_COMPARISON_V1."""
+
+        return self._run_with_result_factory(
+            decision,
+            contexts,
+            series,
+            costs,
+            start=start,
+            end=end,
+            result_label=result_label,
+            result_factory=result_factory,
+            _zone_comparison=True,
         )
 
 
