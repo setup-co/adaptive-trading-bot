@@ -12,3 +12,9 @@ data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/r
 data/research_evidence/issue-187-exploratory-screen-316744efa9c4b50a/execution/verify-output.log -text -diff
 data/research_evidence/issue-193-factorial-stage-a-7711a871/logs/*.log -text -diff
 data/research_evidence/issue-195-factorial-final-7711a871/logs/*.log -text -diff
+data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/**/*.population.json.gz filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/**/*.results.jsonl.gz filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/**/*.log -text -diff
+data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/original-attempt/logs/* -text -diff
+data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/recovery-attempt/logs/* -text -diff
+data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/lineage/* -text -diff
