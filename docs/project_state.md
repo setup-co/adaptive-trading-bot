@@ -407,8 +407,12 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    non-promotion interpretation are unchanged. The recovery simulation exit is
    `UNKNOWN_NOT_RECORDED`, while the separate read-only finalized-artifact
    verifier passed. The earlier raw-hash observation discrepancy remains
-   explicitly unresolved. Do not rerun either attempt or tune either Breakout
-   strategy on these windows.
+   explicitly unresolved. The retained quantitative comparison is documented
+   in `docs/research/breakout_retest_zone_comparison_result.md`: admissions are
+   28 baseline versus 26 zone, and the stored paired result is unfavorable to
+   zone under BASE but favorable under STRESS. This mixed result remains
+   ineligible for promotion under the 29-candidate ceiling. Do not rerun either
+   attempt or tune either Breakout strategy on these windows.
 2. Issues #191, #193 and #195 are complete. Preserve executable
    `7711a871bdf005c72a9033690527fc6920eea737`, UUID
    `01df2c66-92ce-459f-aede-78eaa82a3f52`, all ledgers and evidence. Do not
