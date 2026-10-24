@@ -53,6 +53,10 @@ target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
 
+[tool.ruff.format]
+# Exact captured diagnostic source: preserve its original bytes and recorded hash.
+exclude = ["data/research_evidence/issue-206-weex-history-probe-3884cf7/probe.py"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
