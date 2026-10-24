@@ -1,0 +1,1 @@
+{"at":"2026-10-24T21:05:34.521835Z","empty_array_status":"VALID_EMPTY","inventory_count":30,"malformed_status":"REJECTED","network_attempts":0,"out_of_window_status":"REJECTED","plan_sha256":"3884cf7dd8b643d97dc4cdbcb90f7f4617b76cfee85da18194b8ac140c36a058","rejected_policy_mutations":["extra_symbol","changed_date","changed_host","extra_query_key"]}
