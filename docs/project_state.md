@@ -1,6 +1,6 @@
 # Adaptive Trading Bot — Current Project State
 
-**Snapshot date:** 2026-10-19
+**Snapshot date:** 2026-10-25
 **Purpose:** Concise handoff for fresh ChatGPT/Codex sessions.  
 **Important:** This file is a snapshot, not an authority over current GitHub state. Always verify `main`, active Issues/PRs and latest architect comments before acting.
 
@@ -8,11 +8,14 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current trusted `main` after the squash integration of PR #199 / Issue #197:
+Current trusted `main` after the squash integration of PR #204 / Issue #203:
 
-`e6de0844910fa292ce467ef7bfbd5939f6d86ee9`
+`270be3d5d0d95112fa28cf31a2f14e3349db9062`
 
-Its tree is `62cc5f39b00b9eb9e63c5a307019a1d80c57d9ea`. The historical
+Its tree is `d27a11efe9cae5079d9a1eb310ad0ed723352c10`. This integration preserves
+Issue #203's qualified recovery evidence: simulation exit
+`UNKNOWN_NOT_RECORDED`, historical raw-hash discrepancy `UNRESOLVED`, mixed
+comparison result, 29-candidate ceiling and non-promotion status. The historical
 Issue-#187 execution base remains distinct:
 
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`
@@ -51,7 +54,7 @@ mechanics before Live readiness. None is evidence for or against EMA50 performan
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179 and #197 are closed;
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179, #197, #203 and #205 are closed;
 Master Plan v1.8 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
@@ -61,12 +64,12 @@ Issue #130 locked current public evidence while truthfully retaining
 feed mapping. The historical WEEX leveraged-mechanics evidence pursuit is
 closed. The active critical path is:
 
-**#187 and its #189 retained-evidence diagnosis are completed, verified and
-immutable. Issues #191, #193 and #195 completed the staged 2x2
-cost/eligibility factorial. Issue #197's opt-in Breakout retest-zone
-invalidation hypothesis is merged without activation. Issue #200 is the
-active synthetic-only preparation of its bounded baseline comparison; it is
-not a historical-study or trading grant.**
+**#187/#189 and the #191/#193/#195 factorial are completed and immutable.
+Issue #203 completed only the qualified recovery evidence/report for the
+frozen #200 comparison; neither Breakout arm was promoted. Issue #205 then
+established `BLOCKED_DATA` for a retained same-panel 180-day comparison.
+Issue #206 is the bounded public availability probe: 30 fixed samples only,
+not a strategy study, full acquisition or prospective scheduler.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
