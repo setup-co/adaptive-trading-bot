@@ -398,12 +398,21 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Complete Issue #200's synthetic-only
-   `BREAKOUT_RETEST_ZONE_COMPARISON_V1` preparation. It compares the unchanged
-   baseline `1.0.0` with the accepted opt-in zone variant `0.1.0` over the
-   complete pinned #187 Breakout population. No historical execution grant or
-   candidate/PnL run exists. The known 29-candidate ceiling makes this window
-   ineligible for promotion regardless of future descriptive differences.
+1. Issue #200's `BREAKOUT_RETEST_ZONE_COMPARISON_V1` preparation and the
+   authorized Issue #203 recovery execution are complete. Preserve frozen
+   executable `b332eb83f392819365f3b667496fb6b01a3810ef`, recovery UUID
+   `1bce148f-e5d0-4706-b440-85ee25d3ced2` and interrupted UUID
+   `4d8cabd6-bd43-480c-a5dd-ab1ccf83b2bf`. The retained result is
+   `DESCRIPTIVE_COMPLETE_PROMOTION_INELIGIBLE`; the 29-candidate ceiling and
+   non-promotion interpretation are unchanged. The recovery simulation exit is
+   `UNKNOWN_NOT_RECORDED`, while the separate read-only finalized-artifact
+   verifier passed. The earlier raw-hash observation discrepancy remains
+   explicitly unresolved. The retained quantitative comparison is documented
+   in `docs/research/breakout_retest_zone_comparison_result.md`: admissions are
+   28 baseline versus 26 zone, and the stored paired result is unfavorable to
+   zone under BASE but favorable under STRESS. This mixed result remains
+   ineligible for promotion under the 29-candidate ceiling. Do not rerun either
+   attempt or tune either Breakout strategy on these windows.
 2. Issues #191, #193 and #195 are complete. Preserve executable
    `7711a871bdf005c72a9033690527fc6920eea737`, UUID
    `01df2c66-92ce-459f-aede-78eaa82a3f52`, all ledgers and evidence. Do not

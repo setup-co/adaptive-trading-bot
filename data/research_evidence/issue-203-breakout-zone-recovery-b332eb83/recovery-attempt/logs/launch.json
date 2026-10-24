@@ -1,0 +1,8 @@
+{
+  "schema_version": "issue-203-launch-v1",
+  "launched_at": "2026-10-22T20:29:48.5433600+00:00",
+  "launcher_pid": 21052,
+  "run_uuid": "1bce148f-e5d0-4706-b440-85ee25d3ced2",
+  "executable_sha": "b332eb83f392819365f3b667496fb6b01a3810ef",
+  "command": "python -m scripts.research.breakout_zone_comparison --repo <frozen-checkout> run --grant <issue-203-grant> --ledger-root <issue-203-ledgers>"
+}

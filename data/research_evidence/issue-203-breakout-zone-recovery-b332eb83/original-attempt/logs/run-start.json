@@ -1,0 +1,8 @@
+{
+  "operation": "run",
+  "command": "python -m scripts.research.breakout_zone_comparison --repo <frozen> run --grant <external> --ledger-root <external>",
+  "started_at_utc": "2026-10-21T22:45:01.5436166Z",
+  "executable_sha": "b332eb83f392819365f3b667496fb6b01a3810ef",
+  "run_uuid": "4d8cabd6-bd43-480c-a5dd-ab1ccf83b2bf",
+  "python": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-202-run\\venv\\Scripts\\python.exe"
+}

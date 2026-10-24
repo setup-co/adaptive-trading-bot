@@ -1,0 +1,11 @@
+usage: breakout_zone_comparison.py [-h] [--repo REPO]
+                                   {preflight,run,verify} ...
+
+Data-only plan plus externally granted Breakout zone comparison execution.
+
+positional arguments:
+  {preflight,run,verify}
+
+options:
+  -h, --help            show this help message and exit
+  --repo REPO

@@ -1,0 +1,21 @@
+{
+  "checked_at_utc": "2026-10-21T22:44:38.3159276Z",
+  "head": "b332eb83f392819365f3b667496fb6b01a3810ef",
+  "tree": "94a074615ff296208d177ae832dfd101d0031bbe",
+  "clean": true,
+  "grant_field_count": 9,
+  "grant_fields": [
+    "kind",
+    "run_uuid",
+    "executable_sha",
+    "protocol_sha256",
+    "task_plan_sha256",
+    "source_id",
+    "dataset_version",
+    "manifest_sha256",
+    "artifact_index_sha256"
+  ],
+  "grant_sha256": "ff5ecd99ea9071c7d5c6d3ad2c27215d6d276dd70de4f690bf6d3a32cdcb28ff",
+  "ledger_uuid_exists": false,
+  "duplicate_process_count": 0
+}
