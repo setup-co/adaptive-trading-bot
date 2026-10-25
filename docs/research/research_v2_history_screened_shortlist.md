@@ -146,11 +146,50 @@ The fixed shortlist is therefore `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`,
 BTC/ETH passed the same criterion as every other member; BTW was not replaced
 manually, and ranks after LINK entered only through the frozen rank order.
 
+### Overlap-label erratum and offline reconciliation
+
 For each candidate, the 30 overlapping daily opens exactly matched the saved
-Issue #175 numeric candle values (600/600 matches, zero mismatches). The
-retained per-candidate qualification string remains
-`REVISION_OR_COVERAGE_DIFFERENCE` because the new evidence has a different,
-larger coverage authority; this is not a claim that overlapping values differ.
+Issue #175 numeric candle values (600 expected, 600 compared, 600 matching,
+zero different, zero unavailable). However, the captured launcher's label is
+wrong: its `EXACT_NUMERIC_MATCH` branch requires
+`len(overlap_points) == 16`, even though `old_daily_rows` requires the full
+30-day `[2026-09-14,2026-10-14)` authority. The stored
+`REVISION_OR_COVERAGE_DIFFERENCE` labels are therefore artifacts of that
+erroneous 16-row condition, not intentional coverage-extent qualifications.
+They remain byte-preserved but are non-authoritative for downstream identity
+decisions. A separate corrected annotation reconstructs the declared 30
+expected timestamps and classifies all twenty as `COMPLETE_EXACT_MATCH`.
+
+The supplement also directly compared the original panel's retained
+`*-earlier-daily/0.raw` archive entries against the saved new/reused daily rows
+over `[2026-07-16,2026-09-14)`. It did not infer equality from the C2 report or
+reconstruct daily candles from 5m data.
+
+| Symbol | Earlier source | Archive SHA-256 | Raw-entry SHA-256 | Compared / matching / different / unavailable |
+| --- | --- | --- | --- | ---: |
+| BTCUSDT | Issue #179 C1 | `c1e1b95d7534944614affeea21bffcc6706a4fb39d7ef058c5f2ab86812d9aad` | `1bba9f175f2b2720c228595baaaaa970de9c72c6f0bedd98ae427b42fb920819` | 60 / 60 / 0 / 0 |
+| ETHUSDT | Issue #179 C1 | `31aaaec2492a22f85af9ef0ebf3e581b063cb16e6dae4eda0280a0017bef34de` | `72fd15e21c76ad8af28b9cd82ebb81d87c4561ecbddc9604d38e8753dd43b355` | 60 / 60 / 0 / 0 |
+| SOLUSDT | Issue #179 C1 | `76cd488e036c0d9257bcdc519dc0a7806967fac2ed05bf69e4256c9c7facbc69` | `c80e843c95e3bea95f3b107ea1577a5a8c1676e5532a27e218006f7265d40534` | 60 / 60 / 0 / 0 |
+| XRPUSDT | Issue #179 C1 | `a6ee34ee9fbf54f33c4fa162582588ba67e702e4c4e599fee4e6cb050f0d8843` | `c2cf4c19e2af0469e060ec44cbcca6460a2f03aa95c11332f295b50bbfee697d` | 60 / 60 / 0 / 0 |
+| ZECUSDT | Issue #179 C1 | `9f950885f821022260a7d2d662d8410c13503d50a5adfb1bf993eaf875c92ff0` | `16be76e092a9a7bb1aa3e905c88ee983e3345dacf1a7938ba25a694a3bb15efb` | 60 / 60 / 0 / 0 |
+| ZAMAUSDT | Issue #179 C1 | `94b3befe9f839d259504b09690e69e2b0e8301e1e8503a7fe94e1a7df3215a53` | `ddd80522ba42d93732e02aaebb627554eb5927cf3260b8e500868802ab0497e0` | 60 / 60 / 0 / 0 |
+| BCHUSDT | Issue #179 C1 | `071ec33fae288b91e4340a85b83a03935fa07e4290117b967430931d055c8a73` | `97b806b4f81f655bd51b1b6e21f984daaa61c709af656e2ae4ae77727b9a3c7b` | 60 / 60 / 0 / 0 |
+| BTWUSDT | Issue #181 C2 | `c06a802e0d630a9ff0210e0cfb18362210db5a387863b183677fe2740cd1222e` | `7259a37b12cee797d7c1347bfe9721086c6ab958731f2a95b14dc9aa848d845c` | 60 / 60 / 0 / 0 |
+| AVAXUSDT | Issue #181 C2 | `4e968c53bd3ab47eeac43de91e918f96ccdd7fdf12bb6b2e3ab20b6e9b948d51` | `375ca204f078c8db5db8fe09e03440e4f884bfc30bfb0db3eeac792907b4150f` | 60 / 60 / 0 / 0 |
+| DOGEUSDT | Issue #181 C2 | `f0d54e0bab2a9ef122188e721b3ccf9ede9ba3cbce02d94421ae86c88a231327` | `fe550ab628988dd464a54a7ca9b155d239771cbdd0853ef0e9bdb18c4f800770` | 60 / 60 / 0 / 0 |
+
+The earlier-daily aggregate is 600 expected, 600 compared, 600 matching, zero
+different and zero unavailable. Full archive/entry paths, both later raw-page
+identities, exact field-level comparison output, the C1/C2 manifest bindings,
+and the C2 report binding are retained in
+`data/research_evidence/issue-212-overlap-reconciliation-v1/reconciliation.json`
+(SHA-256
+`82faa7c6d78391ea43491ccf3f38b034aa4974b0864614b70ce00ad887ad6edf`).
+The supplement manifest SHA-256 is
+`609c5ed0b006ac1512739813818a9f299a916f5e7e231f15c8b38d5649d48d50`.
+These exact daily matches do not qualify 5m continuity, historical contract
+units, economics, or strategy results; coverage/ranking/shortlist facts remain
+unchanged.
 
 This shortlist is ready only for a separately authorized canonical fine-grid
 data-qualification step. That later step must still freeze source identity,

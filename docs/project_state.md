@@ -92,7 +92,13 @@ returned valid arrays; 19 candidates passed, while reused BTWUSDT remained
 shortlist is BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, ZECUSDT, ZAMAUSDT, BCHUSDT,
 AVAXUSDT, DOGEUSDT and LINKUSDT. This is only
 `SELECTED_FOR_FINE_GRID_DATA_QUALIFICATION`; it does not qualify 5m history,
-authorize acquisition or a study, or change runtime/trading allowlists.
+authorize acquisition or a study, or change runtime/trading allowlists. The
+captured 16-row overlap-label condition is documented as erroneous and its
+stored labels are non-authoritative. A separate no-network reconciliation
+found 600/600 exact matches against #175's 30-day authorities and another
+600/600 exact matches against the original panel's retained July 16–September
+14 earlier-daily authorities, with zero differences or unavailable rows in
+either comparison. Neither finding changes the frozen coverage or shortlist.
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
