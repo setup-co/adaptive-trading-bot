@@ -8,12 +8,17 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current trusted `main` after the squash integration of PR #204 / Issue #203:
+Current trusted `main` after the squash integration of PR #207 / Issue #206:
 
-`270be3d5d0d95112fa28cf31a2f14e3349db9062`
+`7fde39838fb16f0fac223239c865bc58d9060057`
 
-Its tree is `d27a11efe9cae5079d9a1eb310ad0ed723352c10`. This integration preserves
-Issue #203's qualified recovery evidence: simulation exit
+Its tree is `dee9d11a5b3e4b554e561158e90776d9f3cc845d`. The original Issue #206
+capture base remains `270be3d5d0d95112fa28cf31a2f14e3349db9062`. The integrated bounded
+availability result is `OLDER_SAMPLES_MISSING_OR_PARTIAL`: nine members have
+complete sampled April/June `5m` intervals, while BTWUSDT has two retained
+valid empty arrays. This is not a complete historical corpus or study
+authorization. The integration also preserves Issue #203's qualified recovery
+evidence: simulation exit
 `UNKNOWN_NOT_RECORDED`, historical raw-hash discrepancy `UNRESOLVED`, mixed
 comparison result, 29-candidate ceiling and non-promotion status. The historical
 Issue-#187 execution base remains distinct:
@@ -54,7 +59,7 @@ mechanics before Live readiness. None is evidence for or against EMA50 performan
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179, #197, #203 and #205 are closed;
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179, #197, #203, #205 and #206 are closed;
 Master Plan v1.8 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
@@ -68,8 +73,13 @@ closed. The active critical path is:
 Issue #203 completed only the qualified recovery evidence/report for the
 frozen #200 comparison; neither Breakout arm was promoted. Issue #205 then
 established `BLOCKED_DATA` for a retained same-panel 180-day comparison.
-Issue #206 is the bounded public availability probe: 30 fixed samples only,
-not a strategy study, full acquisition or prospective scheduler.**
+Issue #206's bounded public availability probe is complete and immutable.
+Issue #208 then authorized only two coarse BTWUSDT daily reads. Its first and
+only transmitted request received HTTP 400 with venue code `-1170` (`Time
+range cannot exceed 90 days.`); the required stop rule left the second request
+unattempted. The result is `TRANSPORT_OR_SCHEMA_BLOCKED`, so exact daily
+coverage and missing historical intervals remain unavailable. This is not a
+strategy study, full acquisition or prospective scheduler.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
