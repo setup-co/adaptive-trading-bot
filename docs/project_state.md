@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current trusted `main` after the squash integration of PR #209 / Issue #208:
+Current trusted `main` after the squash integration of PR #211 / Issue #210:
 
-`0856a4faa972fe1bcfdfcdd5bf21bd91842def86`
+`a82f1461991e52c26d25ee37b0de46beb7605d21`
 
-Its tree is `d77b07b960e8d609b49cfad08c72ea3c0eb6b34b`. The original Issue #206
+Its tree is `5dcf108d62e2b253b8b1e1fac4d3031ff94ace45`. The original Issue #206
 capture base remains `270be3d5d0d95112fa28cf31a2f14e3349db9062`. The integrated bounded
 availability result is `OLDER_SAMPLES_MISSING_OR_PARTIAL`: nine members have
 complete sampled April/June `5m` intervals, while BTWUSDT has two retained
@@ -59,8 +59,8 @@ mechanics before Live readiness. None is evidence for or against EMA50 performan
 
 ## 2. Current critical-path objective
 
-Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179, #197, #203, #205 and #206 are closed;
-Master Plan v1.8 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
+Issues #123, #124, #128, #130, #132, #134, #136, #138, #140, #142, #169, #171, #173, #175, #177, #179, #197, #203, #205, #206, #208 and #210 are closed;
+Master Plan v1.9 and `RESEARCH_V2_CHARTER_V1` are merged design authority.
 Issue #128 completed with the truthful result `PARTIAL`/`BLOCKED`: historical
 liquidation replay and representative leveraged research remain unqualified.
 Issue #130 locked current public evidence while truthfully retaining
@@ -85,6 +85,14 @@ arrays: 132 of 196 daily opens were present, while the successful first page
 did not return 64 opens in `[2026-04-01, 2026-06-04)`. No page was unobserved.
 The result is `DAILY_HISTORY_MISSING_OR_PARTIAL`; it is not a listing date,
 complete `5m` coverage, strategy study, full acquisition or scheduler.**
+Issue #212 then applied one frozen, uniform 196-day daily grid to the exact
+top 20 of the accepted complete #175 ranking. All 57 authorized new requests
+returned valid arrays; 19 candidates passed, while reused BTWUSDT remained
+132/196 with 64 missing and zero unobserved days. The resulting selection-only
+shortlist is BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, ZECUSDT, ZAMAUSDT, BCHUSDT,
+AVAXUSDT, DOGEUSDT and LINKUSDT. This is only
+`SELECTED_FOR_FINE_GRID_DATA_QUALIFICATION`; it does not qualify 5m history,
+authorize acquisition or a study, or change runtime/trading allowlists.
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data

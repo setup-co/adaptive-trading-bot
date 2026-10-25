@@ -108,5 +108,56 @@ evaluation still requires separately frozen protected future data.
 
 The pre-I/O plan bundle is retained under
 `data/research_evidence/issue-212-history-screened-shortlist-plan-adbf3af/`.
-The result section is intentionally deferred until the one authorized fixed
-batch completes.
+## Retained result
+
+The one authorized batch completed with 57/57 new attempts returning valid
+HTTP-200 arrays. Together with the three reused Issue #210 BTWUSDT pages, the
+offline verifier reconciled all 60 page authorities and returned
+`SELECTED_FOR_FINE_GRID_DATA_QUALIFICATION`. The result artifact SHA-256 is
+`3dc81c33d3d12983973c69474e376561524b4dce1ef75723f1117851f88f1c81`;
+the enclosing evidence-manifest SHA-256 is
+`9259da6973e5c910912c6da1b69942a3f7a0edbffd583e5b4cd9ea0395301bbb`.
+
+| Rank | Symbol | Received / expected daily opens | Missing | Unobserved | Result |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 1 | BTCUSDT | 196 / 196 | 0 | 0 | selected |
+| 2 | ETHUSDT | 196 / 196 | 0 | 0 | selected |
+| 3 | SOLUSDT | 196 / 196 | 0 | 0 | selected |
+| 4 | XRPUSDT | 196 / 196 | 0 | 0 | selected |
+| 5 | ZECUSDT | 196 / 196 | 0 | 0 | selected |
+| 6 | ZAMAUSDT | 196 / 196 | 0 | 0 | selected |
+| 7 | BCHUSDT | 196 / 196 | 0 | 0 | selected |
+| 8 | BTWUSDT | 132 / 196 | 64 | 0 | coverage-ineligible |
+| 9 | AVAXUSDT | 196 / 196 | 0 | 0 | selected |
+| 10 | DOGEUSDT | 196 / 196 | 0 | 0 | selected |
+| 11 | LINKUSDT | 196 / 196 | 0 | 0 | selected |
+| 12 | LTCUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 13 | BNBUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 14 | UNIUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 15 | SUIUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 16 | ARBUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 17 | DOTUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 18 | XLMUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 19 | TRXUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+| 20 | HYPEUSDT | 196 / 196 | 0 | 0 | eligible, not selected |
+
+The fixed shortlist is therefore `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`,
+`ZECUSDT`, `ZAMAUSDT`, `BCHUSDT`, `AVAXUSDT`, `DOGEUSDT`, and `LINKUSDT`.
+BTC/ETH passed the same criterion as every other member; BTW was not replaced
+manually, and ranks after LINK entered only through the frozen rank order.
+
+For each candidate, the 30 overlapping daily opens exactly matched the saved
+Issue #175 numeric candle values (600/600 matches, zero mismatches). The
+retained per-candidate qualification string remains
+`REVISION_OR_COVERAGE_DIFFERENCE` because the new evidence has a different,
+larger coverage authority; this is not a claim that overlapping values differ.
+
+This shortlist is ready only for a separately authorized canonical fine-grid
+data-qualification step. That later step must still freeze source identity,
+units, complete 5m coverage, gaps/epochs, warm-up and outcome follow-up,
+selection-informed use, and acquisition budgets before traffic. It is not a
+strategy-study panel, a runtime allowlist, or trading eligibility.
+
+The complete retained evidence is under
+`data/research_evidence/issue-212-history-screened-shortlist-adbf3af/`; the
+pre-I/O plan bundle remains separately preserved.
