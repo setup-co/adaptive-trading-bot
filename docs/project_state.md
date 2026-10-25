@@ -8,11 +8,11 @@
 
 ## 1. Trusted repository state at this snapshot
 
-Current trusted `main` after the squash integration of PR #207 / Issue #206:
+Current trusted `main` after the squash integration of PR #209 / Issue #208:
 
-`7fde39838fb16f0fac223239c865bc58d9060057`
+`0856a4faa972fe1bcfdfcdd5bf21bd91842def86`
 
-Its tree is `dee9d11a5b3e4b554e561158e90776d9f3cc845d`. The original Issue #206
+Its tree is `d77b07b960e8d609b49cfad08c72ea3c0eb6b34b`. The original Issue #206
 capture base remains `270be3d5d0d95112fa28cf31a2f14e3349db9062`. The integrated bounded
 availability result is `OLDER_SAMPLES_MISSING_OR_PARTIAL`: nine members have
 complete sampled April/June `5m` intervals, while BTWUSDT has two retained
@@ -78,8 +78,13 @@ Issue #208 then authorized only two coarse BTWUSDT daily reads. Its first and
 only transmitted request received HTTP 400 with venue code `-1170` (`Time
 range cannot exceed 90 days.`); the required stop rule left the second request
 unattempted. The result is `TRANSPORT_OR_SCHEMA_BLOCKED`, so exact daily
-coverage and missing historical intervals remain unavailable. This is not a
-strategy study, full acquisition or prospective scheduler.**
+coverage and missing historical intervals remain unavailable from #208. Issue
+#210 separately corrected only the partition to three fixed 90/90/16-day
+requests over the same outer calendar. All three returned valid HTTP-200
+arrays: 132 of 196 daily opens were present, while the successful first page
+did not return 64 opens in `[2026-04-01, 2026-06-04)`. No page was unobserved.
+The result is `DAILY_HISTORY_MISSING_OR_PARTIAL`; it is not a listing date,
+complete `5m` coverage, strategy study, full acquisition or scheduler.**
 The single external-grant run used UUID
 `686bd4a1-ffff-4391-8562-f1e4caf7a575`, executable
 `316744efa9c4b50aa8d999b3c4d11fd874b4c28c`, and the accepted C2 data
