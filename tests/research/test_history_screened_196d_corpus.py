@@ -118,7 +118,11 @@ def test_terminal_route_stop_is_durable_and_has_zero_retry(tmp_path: Path) -> No
     plan = _capture_plan()
     core.durable_new(tmp_path / "plan.json", core.canonical(plan))
     result = subject.capture(tmp_path, plan, _Terminal(), sleep=lambda _: None)
-    assert result == {"status": "ROUTE_STOPPED", "new_attempts": 1, "outcome": "DENIED"}
+    assert result == {
+        "status": "ROUTE_STOPPED",
+        "new_attempts": 1,
+        "outcome": "HTTP_TERMINAL",
+    }
     assert (tmp_path / "route_stop.json").is_file()
     assert core.attempt_state(tmp_path, "BTCUSDT-0000", 1) is None
 
