@@ -1,0 +1,11 @@
+# History-screened 196-day LAST corpus
+
+`HISTORY_SCREENED_196D_LAST_CORPUS_V1` is a research-data qualification protocol. It does not admit any symbol to runtime, select or rank assets, or run a strategy.
+
+The fixed ordered panel is BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, ZECUSDT, ZAMAUSDT, BCHUSDT, AVAXUSDT, DOGEUSDT, and LINKUSDT. The half-open 5-minute grid is `2026-04-01T00:00:00Z` through `2026-10-14T00:00:00Z`: 196 UTC days, 56,448 positions per member and 564,480 total positions. The intended signal interval is `2026-04-10T00:00:00Z` through `2026-10-07T00:00:00Z`; later rows are outcome follow-up only.
+
+The plan must first verify and bind the accepted C2 raw-backed corpus, the #206 April/June prefix samples (excluding its October control pages), and the complete #212 daily authorities. Those sources contribute exactly 234,956 distinct 5-minute positions: 26,028 BTC positions and 26,116 for each of the other eight shared members. LINK contributes none. The complement is exactly 329,524 positions and 3,433 public GET requests: 317 for BTC, 316 for each other shared member, and 588 for LINK. Requests are chronological within the fixed member order, never cross a UTC day, and contain at most 100 rows.
+
+Only unauthenticated `GET https://api-contract.weex.com/capi/v3/market/historyKlines` requests with `interval=5m`, `priceType=LAST`, and the literal frozen plan are allowed. Attempts are serial and separated by at least two seconds. Timeout and 5xx outcomes may be retried once. Empty, partial, malformed, off-grid, denied, ambiguous, storage, or provenance failures are terminal; three consecutive terminal transport/server failures stop the route. A request-start record is durably committed before transmission. A STARTED attempt without a result is ambiguous and cannot be resumed or replaced.
+
+Qualification preserves raw response bytes, validates exact numeric fields with `Decimal`, retains gaps as separate epochs, derives 15m/1h/4h only from complete aligned buckets, and compares every complete UTC day with the accepted #212 daily authority. Warm-up requires 50 complete 4h observations inside an epoch and excludes the boundary observation. Canonical shards and the report remain research-only and do not alter runtime symbol allowlists.
