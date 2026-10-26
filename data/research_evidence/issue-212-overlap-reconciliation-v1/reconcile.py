@@ -146,6 +146,10 @@ def row_fields(row: Any) -> dict[str, int | str]:
     return {field: record[field] for field in FIELDS}
 
 
+def typed_fields(row: Any) -> dict[str, Any]:
+    return {field: getattr(row, field) for field in FIELDS}
+
+
 def compare_rows(
     expected: tuple[int, ...], earlier: dict[int, Any] | None, later: dict[int, Any]
 ) -> dict[str, Any]:
@@ -168,15 +172,21 @@ def compare_rows(
     differences: list[dict[str, Any]] = []
     matching = 0
     for opened in compared:
-        left = row_fields(earlier[opened])
-        right = row_fields(later[opened])
-        changed = [field for field in FIELDS if left[field] != right[field]]
+        left_values = typed_fields(earlier[opened])
+        right_values = typed_fields(later[opened])
+        changed = [field for field in FIELDS if left_values[field] != right_values[field]]
         if changed:
+            left_record = row_fields(earlier[opened])
+            right_record = row_fields(later[opened])
             differences.append(
                 {
                     "open_time_ms": opened,
                     "fields": [
-                        {"field": field, "earlier": left[field], "later": right[field]}
+                        {
+                            "field": field,
+                            "earlier": left_record[field],
+                            "later": right_record[field],
+                        }
                         for field in changed
                     ],
                 }
@@ -451,44 +461,78 @@ def reconcile(repo: Path) -> dict[str, Any]:
     }
 
 
-def synthetic() -> dict[str, Any]:
-    class FakeRow:
-        def __init__(self, opened: int, close: str = "1") -> None:
-            self.opened = opened
-            self.close = close
-
-        def record(self) -> dict[str, int | str]:
-            return {
-                "open_time_ms": self.opened,
-                "open": "1",
-                "high": "1",
-                "low": "1",
-                "close": self.close,
-                "base_volume": "0",
-                "close_time_ms": self.opened + DAY_MS,
-                "quote_volume": "0",
-                "trade_count": 0,
-                "taker_buy_base_volume": "0",
-                "taker_buy_quote_volume": "0",
-            }
-
+def synthetic(repo: Path) -> dict[str, Any]:
+    helpers, _ = load_helpers(repo)
     expected = expected_times(SEP14_MS, 30)
-    full = {opened: FakeRow(opened) for opened in expected}
-    sixteen = {opened: FakeRow(opened) for opened in expected[:16]}
-    changed = dict(full)
-    changed[expected[5]] = FakeRow(expected[5], close="2")
+
+    def body(representations: tuple[str, ...], changed_index: int | None = None) -> bytes:
+        rows: list[list[int | str]] = []
+        for index, opened in enumerate(expected):
+            close = representations[3]
+            if index == changed_index:
+                close = "1.0000000000000000000000000001"
+            rows.append(
+                [
+                    opened,
+                    representations[0],
+                    representations[1],
+                    representations[2],
+                    close,
+                    representations[4],
+                    opened + DAY_MS,
+                    representations[5],
+                    0,
+                    representations[6],
+                    representations[7],
+                ]
+            )
+        return json.dumps(rows, separators=(",", ":")).encode()
+
+    exact_rows = parse(
+        helpers,
+        body(("1", "2.0", "0.5", "1.00", "0", "0.0", "0E-8", "0")),
+        "BTCUSDT",
+        SEP14_MS,
+        OCT14_MS,
+    )
+    equivalent_rows = parse(
+        helpers,
+        body(("1.00", "2", "0.5000", "1E+0", "0.000", "0E+4", "0.0", "0.0000")),
+        "BTCUSDT",
+        SEP14_MS,
+        OCT14_MS,
+    )
+    changed_rows = parse(
+        helpers,
+        body(
+            ("1.00", "2", "0.5000", "1E+0", "0.000", "0E+4", "0.0", "0.0000"),
+            changed_index=5,
+        ),
+        "BTCUSDT",
+        SEP14_MS,
+        OCT14_MS,
+    )
+    sixteen = {opened: exact_rows[opened] for opened in expected[:16]}
     cases = {
-        "complete_equal": compare_rows(expected, full, full),
-        "sixteen_equal_fourteen_absent": compare_rows(expected, sixteen, full),
-        "full_one_field_changed": compare_rows(expected, full, changed),
-        "authority_unavailable": compare_rows(expected, None, full),
+        "complete_equal": compare_rows(expected, exact_rows, exact_rows),
+        "equivalent_numeric_representations": compare_rows(expected, exact_rows, equivalent_rows),
+        "sixteen_equal_fourteen_absent": compare_rows(expected, sixteen, exact_rows),
+        "full_one_high_precision_field_changed": compare_rows(expected, exact_rows, changed_rows),
+        "authority_unavailable": compare_rows(expected, None, exact_rows),
     }
     if (
         cases["complete_equal"]["status"] != "COMPLETE_EXACT_MATCH"
+        or cases["equivalent_numeric_representations"]["status"] != "COMPLETE_EXACT_MATCH"
+        or cases["equivalent_numeric_representations"]["matching"] != 30
         or cases["sixteen_equal_fourteen_absent"]["status"] != "INCOMPLETE_OR_UNAVAILABLE"
         or cases["sixteen_equal_fourteen_absent"]["unavailable"] != 14
-        or cases["full_one_field_changed"]["status"] != "NUMERIC_DIFFERENCE"
-        or cases["full_one_field_changed"]["differences"][0]["fields"][0]["field"] != "close"
+        or cases["full_one_high_precision_field_changed"]["status"] != "NUMERIC_DIFFERENCE"
+        or cases["full_one_high_precision_field_changed"]["differences"][0]["fields"][0]["field"]
+        != "close"
+        or cases["full_one_high_precision_field_changed"]["differences"][0]["fields"][0]["earlier"]
+        != "1.00"
+        or cases["full_one_high_precision_field_changed"]["differences"][0]["fields"][0]["later"]
+        != "1.0000000000000000000000000001"
         or cases["authority_unavailable"]["status"] != "AUTHORITY_UNAVAILABLE"
     ):
         raise ReconciliationError("synthetic reconciliation regression failed")
@@ -505,7 +549,11 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    value = synthetic() if args.command == "synthetic" else reconcile(args.repo.resolve())
+    value = (
+        synthetic(args.repo.resolve())
+        if args.command == "synthetic"
+        else reconcile(args.repo.resolve())
+    )
     body = canonical(value)
     if args.command in {"run", "synthetic"}:
         if args.output is None or args.output.exists():

@@ -159,6 +159,12 @@ erroneous 16-row condition, not intentional coverage-extent qualifications.
 They remain byte-preserved but are non-authoritative for downstream identity
 decisions. A separate corrected annotation reconstructs the declared 30
 expected timestamps and classifies all twenty as `COMPLETE_EXACT_MATCH`.
+The corrected comparator evaluates the validated Decimal and integer fields
+directly: numerically equivalent wire representations such as `1`, `1.0`,
+`1.00`, exponent forms, and differently formatted zero volumes compare equal.
+Original `Row.record()` strings are retained only when reporting a genuine
+field difference; no float conversion, rounding, tolerance, or normalization
+context is used.
 
 The supplement also directly compared the original panel's retained
 `*-earlier-daily/0.raw` archive entries against the saved new/reused daily rows
@@ -186,7 +192,7 @@ and the C2 report binding are retained in
 (SHA-256
 `82faa7c6d78391ea43491ccf3f38b034aa4974b0864614b70ce00ad887ad6edf`).
 The supplement manifest SHA-256 is
-`609c5ed0b006ac1512739813818a9f299a916f5e7e231f15c8b38d5649d48d50`.
+`09407c83bcec9b11a8bbb751674f85bdd7aa459d3cc4165a246b4a55f64b8e22`.
 These exact daily matches do not qualify 5m continuity, historical contract
 units, economics, or strategy results; coverage/ranking/shortlist facts remain
 unchanged.
