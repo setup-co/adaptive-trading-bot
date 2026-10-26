@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.8
+**Document version:** 1.9
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -125,6 +125,14 @@ ranking cutoff are selection-informed. A later confirmatory evaluation needs
 separately predeclared protected data after population, strategy and protocol
 decisions are frozen; no dates are assigned here. See the
 [exploratory-panel annex](research/research_v2_current_snapshot_panel.md).
+
+`HISTORY_SCREENED_SNAPSHOT_SHORTLIST_V1` is a successor selection-only
+generation built from the frozen top twenty of that accepted ranking. It
+applies one uniform 196-day daily-presence screen, then requires passing
+BTC/ETH anchors plus the eight highest-ranked other passing members. It does
+not replace the historical panel or qualify 5m data, research execution,
+runtime symbols, strategy economics, or trading. See the
+[history-screened shortlist annex](research/research_v2_history_screened_shortlist.md).
 
 ## Timeframes
 
@@ -1733,6 +1741,19 @@ Approved:
 - Affected Modules: Master Plan, Research V2 charter pointer, new selection annex, project state, standalone public-data script/tests/evidence only. No application/runtime/Risk/Safety/execution/accounting changes.
 - Target Version: Research V2 design / Master Plan v1.8
 - Approved: Architect instruction in Issue #175; selection-only. Any study activation requires separate review and prerequisites.
+
+### 2026-10-25 — History-screened current-snapshot shortlist route
+
+- Date: 2026-10-25
+- Change ID: Issue #212 / `HISTORY_SCREENED_SNAPSHOT_SHORTLIST_V1` / Master Plan v1.9
+- Old Decision: The fixed Issue #175 ten-member exploratory panel remained the only current-snapshot-selected candidate generation even after its uniform April–October daily coverage was shown not to qualify.
+- New Decision: Preserve that generation and derive a separate top-20 pool from its accepted complete ranking. Apply the same 196-day daily-presence criterion to all twenty, then select passing BTC/ETH anchors plus the eight highest-ranked other passing members, or emit a blocker.
+- Reason: Stop ticker-by-ticker date probing and make one bounded, reproducible data-eligibility decision before any fine-grid acquisition.
+- Expected Benefit: A fixed ten-member shortlist for later 5m data qualification without post-result replacement or manual symbol choice.
+- Risk: The population remains current-snapshot survivor/selection-biased, earlier data/results informed the design, and daily presence does not qualify 5m history, units, economics, or edge.
+- Affected Modules: Master Plan, new selection annex, standalone retained diagnostic/evidence, and project-state documentation only. No application/runtime/strategy/Risk/Safety/execution/accounting change.
+- Target Version: Research V2 design / Master Plan v1.9
+- Approved: Architect instruction in Issue #212; selection and coarse data screening only. Fine-grid acquisition and any study require separate authorization.
 
 ---
 
