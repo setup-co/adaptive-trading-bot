@@ -1,0 +1,40 @@
+Traceback (most recent call last):
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\issue-214-run\partial-audit.py", line 22, in <module>
+    from adaptive_trading_bot.research import history_screened_196d_corpus as subject  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\research\__init__.py", line 3, in <module>
+    from adaptive_trading_bot.research.experience_shadow_replay import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\research\experience_shadow_replay.py", line 18, in <module>
+    from adaptive_trading_bot.experience import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\experience\__init__.py", line 3, in <module>
+    from adaptive_trading_bot.experience.aggregation import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\experience\aggregation.py", line 11, in <module>
+    from adaptive_trading_bot.experience.core import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\experience\core.py", line 21, in <module>
+    from adaptive_trading_bot.features import FeatureSnapshot, StructureSnapshot
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\features\__init__.py", line 14, in <module>
+    from adaptive_trading_bot.features.live_adapter import observed_candles_from_live
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\features\live_adapter.py", line 13, in <module>
+    from adaptive_trading_bot.market_data.live import LiveMarketFeedSnapshot
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\market_data\__init__.py", line 20, in <module>
+    from adaptive_trading_bot.market_data.ccxt_public import (
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-214-history-screened-196d-corpus\src\adaptive_trading_bot\market_data\ccxt_public.py", line 14, in <module>
+    import ccxt
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\site-packages\ccxt\__init__.py", line 29, in <module>
+    from ccxt.base.exchange import Exchange                     # noqa: F401
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\site-packages\ccxt\base\__init__.py", line 24, in <module>
+    from ccxt.base import exchange
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\site-packages\ccxt\base\exchange.py", line 91, in <module>
+    from requests import Session
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\site-packages\requests\__init__.py", line 45, in <module>
+    import urllib3
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\site-packages\urllib3\__init__.py", line 14, in <module>
+    from . import exceptions
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\site-packages\urllib3\exceptions.py", line 7, in <module>
+    from http.client import IncompleteRead as httplib_IncompleteRead
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\http\client.py", line 1498, in <module>
+    import ssl
+  File "C:\Users\elect\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\ssl.py", line 947, in <module>
+    class SSLSocket(socket):
+TypeError: function() argument 'code' must be code, not str

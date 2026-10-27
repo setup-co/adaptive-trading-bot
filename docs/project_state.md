@@ -430,7 +430,16 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-1. Issue #200's `BREAKOUT_RETEST_ZONE_COMPARISON_V1` preparation and the
+1. Issue #214's fixed history-screened 196-day public acquisition stopped
+   correctly after 1,648 successful requests when `ZAMAUSDT-0068` recorded a
+   non-retryable `URLError` / `gaierror`. Preserve executable
+   `3cc2f475cddc0466d28edd5f11587b7e8321e17a`, plan
+   `0a9f48d8da7bb3af6054daa3cc565b93641c5e57a3a0e62dd2c954de9c101713`,
+   all raw evidence, the one failed request and 1,784 unattempted requests.
+   Capture exit remains `CAPTURE_EXIT_UNKNOWN_NOT_RECORDED`; dataset
+   qualification and full-panel 180-day readiness are
+   `BLOCKED_NOT_ESTABLISHED`. Do not reopen or replace the stopped ledger.
+2. Issue #200's `BREAKOUT_RETEST_ZONE_COMPARISON_V1` preparation and the
    authorized Issue #203 recovery execution are complete. Preserve frozen
    executable `b332eb83f392819365f3b667496fb6b01a3810ef`, recovery UUID
    `1bce148f-e5d0-4706-b440-85ee25d3ced2` and interrupted UUID
@@ -445,23 +454,23 @@ See `docs/architect_workflow.md` for the durable complete workflow.
    zone under BASE but favorable under STRESS. This mixed result remains
    ineligible for promotion under the 29-candidate ceiling. Do not rerun either
    attempt or tune either Breakout strategy on these windows.
-2. Issues #191, #193 and #195 are complete. Preserve executable
+3. Issues #191, #193 and #195 are complete. Preserve executable
    `7711a871bdf005c72a9033690527fc6920eea737`, UUID
    `01df2c66-92ce-459f-aede-78eaa82a3f52`, all ledgers and evidence. Do not
    rerun Stage A/B, finalize or verify. The original family classifications
    remain unchanged and no baseline strategy is promoted.
-3. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
+4. Keep #144 `SIGNAL_EDGE_SCREEN_NEGATIVE`, #149
    `BREAKOUT_RETEST_SIGNAL_EDGE_SCREEN_NEGATIVE`, #153
    `RANGE_MEAN_REVERSION_SIGNAL_EDGE_SCREEN_INSUFFICIENT`, and #161
    `ZERO_STRATEGY_CANDIDATES` frozen. Do not rerun or tune them on those windows;
    do not resume #157 or the permanently stopped #118.
-4. Treat the stopped #179 and C1 capture generations and completed C2 tail as
+5. Treat the stopped #179 and C1 capture generations and completed C2 tail as
    immutable predecessor history, not active acquisition. Do not retry failed
    shapes or infer runtime eligibility from the data-only overlap.
-5. The historical WEEX leveraged-mechanics pursuit remains closed. None of
+6. The historical WEEX leveraged-mechanics pursuit remains closed. None of
    these screens establishes leveraged, liquidation-complete, portfolio, or
    Live readiness.
-6. Keep the current BTC/ETH runtime and execution allowlists intact. A target
+7. Keep the current BTC/ETH runtime and execution allowlists intact. A target
    of at least ten research assets does not qualify any new instrument for
    Paper, Shadow or Live. No historical strategy study, new runtime symbol
    admission or trading activation is authorized by Issue #200.

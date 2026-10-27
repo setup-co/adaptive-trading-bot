@@ -54,11 +54,23 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.format]
-# Exact captured diagnostic source: preserve its original bytes and recorded hash.
-exclude = ["data/research_evidence/issue-206-weex-history-probe-3884cf7/probe.py"]
+# Exact captured diagnostic sources: preserve their original bytes and recorded hashes.
+exclude = [
+  "data/research_evidence/issue-206-weex-history-probe-3884cf7/probe.py",
+  "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit.py",
+  "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit-v2.py",
+  "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit-v1.py",
+  "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Retained external diagnostics are immutable evidence; keep all other lint rules active.
+"data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit*.py" = ["E501"]
+"data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit.py" = ["F841"]
+"data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
