@@ -1,0 +1,1 @@
+{'status': 'QUALIFIED', 'capture_status': 'CAPTURE_COMPLETE', 'manifest_sha256': '756659f6700a2ae48b5c5aa58972f037c709116ca73b9c5c23571617d24d4e9d', 'ledger': {'attempts': 1785, 'distinct': 1785, 'retries': 0}}

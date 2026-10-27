@@ -1,0 +1,1 @@
+{"attempt":0,"plan_sha256":"dc51e06df9c4b40935cbb705b25d4683ff63094f5b475f6fbf82f1a085e3a23f","query":{"endTime":"1789084799999","interval":"5m","limit":"100","priceType":"LAST","startTime":"1789058400000","symbol":"LINKUSDT"},"request_id":"LINKUSDT-0489","started_at":"2026-10-27T03:04:41.161363Z"}
