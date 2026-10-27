@@ -13,7 +13,9 @@ from typing import Self
 from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     DATASET_VERSION,
     MANIFEST_SHA256,
+    PLAN_SHA256,
     PROTOCOL_SHA256,
+    REPORT_SHA256,
     SOURCE_ID,
     TASK_PLAN_SHA256,
     TASKS,
@@ -22,7 +24,7 @@ from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     _canonical,
 )
 
-LEDGER_SCHEMA_VERSION = "history-screened-180d-ledger-v1"
+LEDGER_SCHEMA_VERSION = "history-screened-180d-ledger-v2"
 _ARTIFACT_SUFFIXES = ("population.json.gz", "results.jsonl.gz", "report.json")
 
 
@@ -40,6 +42,13 @@ class HistoryScreenedLedgerState:
     run_uuid: str
     executable_sha: str
     input_kind: str
+    protocol_sha256: str
+    task_plan_sha256: str
+    source_id: str
+    dataset_version: str
+    manifest_sha256: str
+    input_report_sha256: str
+    input_plan_sha256: str
     revision: int
     task_states: tuple[str, ...]
     task_ids: tuple[str, ...]
@@ -92,6 +101,16 @@ class HistoryScreenedLedgerStore:
                 "source_id": grant.source_id,
                 "dataset_version": grant.dataset_version,
                 "manifest_sha256": grant.manifest_sha256,
+                "report_sha256": (
+                    REPORT_SHA256
+                    if grant.kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT"
+                    else grant.manifest_sha256
+                ),
+                "plan_sha256": (
+                    PLAN_SHA256
+                    if grant.kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT"
+                    else grant.manifest_sha256
+                ),
                 "task_ids": list(task_ids),
             }
         )
@@ -139,6 +158,8 @@ class HistoryScreenedLedgerStore:
         reports: list[str | None] = []
         task_ids: tuple[str, ...] = ()
         run_uuid = executable_sha = input_kind = ""
+        protocol_sha256 = task_plan_sha256 = source_id = dataset_version = ""
+        manifest_sha256 = report_sha256 = plan_sha256 = ""
         projection: str | None = None
         for revision, path in enumerate(files):
             raw = path.read_bytes()
@@ -165,12 +186,21 @@ class HistoryScreenedLedgerStore:
                 run_uuid = str(event["run_uuid"])
                 executable_sha = str(event["executable_sha"])
                 input_kind = str(event["input_kind"])
+                protocol_sha256 = str(event["protocol_sha256"])
+                task_plan_sha256 = str(event["task_plan_sha256"])
+                source_id = str(event["source_id"])
+                dataset_version = str(event["dataset_version"])
+                manifest_sha256 = str(event["manifest_sha256"])
+                report_sha256 = str(event["report_sha256"])
+                plan_sha256 = str(event["plan_sha256"])
                 task_ids = tuple(event.get("task_ids", ()))
                 if input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT" and (
                     task_ids != tuple(task.task_id for task in TASKS)
                     or event.get("source_id") != SOURCE_ID.value
                     or event.get("dataset_version") != DATASET_VERSION
                     or event.get("manifest_sha256") != MANIFEST_SHA256
+                    or event.get("report_sha256") != REPORT_SHA256
+                    or event.get("plan_sha256") != PLAN_SHA256
                 ):
                     raise HistoryScreenedComparisonError("reviewed ledger inventory changed")
                 if (
@@ -228,6 +258,13 @@ class HistoryScreenedLedgerStore:
             run_uuid,
             executable_sha,
             input_kind,
+            protocol_sha256,
+            task_plan_sha256,
+            source_id,
+            dataset_version,
+            manifest_sha256,
+            report_sha256,
+            plan_sha256,
             len(files) - 1,
             tuple(states),
             task_ids,

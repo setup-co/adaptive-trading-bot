@@ -22,6 +22,7 @@ from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     preflight,
 )
 from adaptive_trading_bot.research.breakout_history_screened_execution import (
+    HistoryScreenedRunAssociation,
     _write_once,
     execute_task,
     final_projection,
@@ -74,6 +75,9 @@ def run(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
     actual_sha = _clean_sha(repo)
     grant = HistoryScreenedExecutionGrant.from_file(grant_path)
     grant.validate(actual_sha=actual_sha)
+    run_association = HistoryScreenedRunAssociation.from_grant(
+        grant, ACCEPTED_BINDING, actual_sha=actual_sha
+    )
     preflight(repo)
     store = LockedHistoryScreenedCandleStore(repo)
     ledger = HistoryScreenedLedgerStore.create(ledger_root, grant, actual_sha=actual_sha)
@@ -98,7 +102,7 @@ def run(repo: Path, grant_path: Path, ledger_root: Path) -> dict[str, object]:
             except Exception:
                 ledger.fail(task.index)
                 raise
-        projection = final_projection(ledger.directory)
+        projection = final_projection(ledger.directory, run=run_association)
         projection_sha = _write_once(ledger.directory / "projection.json", _canonical(projection))
         ledger.finalize(projection_sha)
     return projection
@@ -113,15 +117,36 @@ def verify(ledger_directory: Path) -> dict[str, object]:
         or state.projection_sha256 is None
     ):
         raise HistoryScreenedComparisonError("ledger is not finalized reviewed authority")
+    run_association = HistoryScreenedRunAssociation(
+        state.input_kind,
+        state.run_uuid,
+        state.executable_sha,
+        state.protocol_sha256,
+        state.task_plan_sha256,
+        state.source_id,
+        state.dataset_version,
+        state.manifest_sha256,
+        state.input_report_sha256,
+        state.input_plan_sha256,
+    )
+    run_association.validate(ACCEPTED_BINDING, actual_sha=state.executable_sha)
     for task in TASKS:
-        facts = verify_task(ledger.directory, task.index)
+        facts = verify_task(
+            ledger.directory,
+            task.index,
+            expected_task=task,
+            run=run_association,
+        )
         if (
-            facts["population_sha256"] != state.population_sha256[task.index]
+            facts["task_id"] != task.task_id
+            or facts["task_index"] != task.index
+            or state.task_ids[task.index] != task.task_id
+            or facts["population_sha256"] != state.population_sha256[task.index]
             or facts["results_sha256"] != state.results_sha256[task.index]
             or facts["report_sha256"] != state.report_sha256[task.index]
         ):
             raise HistoryScreenedComparisonError("ledger task digest changed")
-    projection = final_projection(ledger.directory)
+    projection = final_projection(ledger.directory, run=run_association)
     raw = (ledger.directory / "projection.json").read_bytes()
     if _canonical(projection) != raw:
         raise HistoryScreenedComparisonError("final projection differs from authorities")

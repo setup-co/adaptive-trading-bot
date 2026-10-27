@@ -22,6 +22,7 @@ from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     PANEL,
     PROTOCOL_SHA256,
     TASK_PLAN_SHA256,
+    TASKS,
     ComparisonArm,
     ComparisonScenario,
     HistoryScreenedAllFillRunner,
@@ -29,21 +30,104 @@ from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     HistoryScreenedConfiguration,
     HistoryScreenedDecisionPopulation,
     HistoryScreenedExecutionGrant,
+    HistoryScreenedInputBinding,
     HistoryScreenedReplayResult,
+    HistoryScreenedTask,
     LockedHistoryScreenedCandleStore,
     _canonical,
     evaluate_granted_task,
     evaluate_synthetic_task,
     report_block,
     report_week,
-    spacing_mask,
 )
+from adaptive_trading_bot.research.breakout_zone_comparison import OpportunityKey
 from adaptive_trading_bot.research.research_v2_screen_evidence import decode, encode
+from adaptive_trading_bot.strategies.core import CandidateAction
 
 _CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-RESULT_SCHEMA = "history-screened-180d-task-evidence-v1"
-REPORT_SCHEMA = "history-screened-180d-task-report-v1"
-PROJECTION_SCHEMA = "history-screened-180d-projection-v1"
+RESULT_SCHEMA = "history-screened-180d-task-evidence-v2"
+REPORT_SCHEMA = "history-screened-180d-task-report-v2"
+PROJECTION_SCHEMA = "history-screened-180d-projection-v2"
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryScreenedRunAssociation:
+    input_kind: str
+    run_uuid: str
+    executable_sha: str
+    protocol_sha256: str
+    task_plan_sha256: str
+    source_id: str
+    dataset_version: str
+    manifest_sha256: str
+    report_sha256: str
+    plan_sha256: str
+
+    @classmethod
+    def from_grant(
+        cls,
+        grant: HistoryScreenedExecutionGrant,
+        binding: HistoryScreenedInputBinding,
+        *,
+        actual_sha: str,
+    ) -> HistoryScreenedRunAssociation:
+        expected_kind = (
+            "EXTERNAL_REVIEWED_EXECUTION_GRANT"
+            if binding.kind == "ACCEPTED_HISTORY_SCREENED_196D"
+            else "SYNTHETIC_TEST_GRANT"
+        )
+        value = cls(
+            grant.kind,
+            grant.run_uuid,
+            grant.executable_sha,
+            grant.protocol_sha256,
+            grant.task_plan_sha256,
+            grant.source_id,
+            grant.dataset_version,
+            grant.manifest_sha256,
+            binding.report_sha256,
+            binding.plan_sha256,
+        )
+        value.validate(binding, actual_sha=actual_sha)
+        if value.input_kind != expected_kind:
+            raise HistoryScreenedComparisonError("run input kind differs from binding")
+        return value
+
+    def validate(self, binding: HistoryScreenedInputBinding, *, actual_sha: str) -> None:
+        binding.validate()
+        expected_kind = (
+            "EXTERNAL_REVIEWED_EXECUTION_GRANT"
+            if binding.kind == "ACCEPTED_HISTORY_SCREENED_196D"
+            else "SYNTHETIC_TEST_GRANT"
+        )
+        if (
+            self.input_kind != expected_kind
+            or not self.run_uuid
+            or self.executable_sha != actual_sha
+            or len(actual_sha) != 40
+            or self.protocol_sha256 != PROTOCOL_SHA256
+            or self.task_plan_sha256 != TASK_PLAN_SHA256
+            or self.source_id != binding.source_id.value
+            or self.dataset_version != binding.dataset_version
+            or self.manifest_sha256 != binding.manifest_sha256
+            or self.report_sha256 != binding.report_sha256
+            or self.plan_sha256 != binding.plan_sha256
+        ):
+            raise HistoryScreenedComparisonError("run association differs from exact input")
+
+    def record(self) -> dict[str, str]:
+        return {
+            "input_kind": self.input_kind,
+            "run_uuid": self.run_uuid,
+            "executable_sha": self.executable_sha,
+            "protocol_sha256": self.protocol_sha256,
+            "task_plan_sha256": self.task_plan_sha256,
+            "source_id": self.source_id,
+            "dataset_version": self.dataset_version,
+            "manifest_sha256": self.manifest_sha256,
+            "report_sha256": self.report_sha256,
+            "plan_sha256": self.plan_sha256,
+        }
 
 
 def _sha(payload: bytes) -> str:
@@ -113,7 +197,18 @@ def read_results(payload: bytes) -> tuple[HistoryScreenedReplayResult, ...]:
     return tuple(values)
 
 
+def _actual_side(decision: DecisionJournalEntry[object, object]) -> str:
+    action = decision.strategy_evaluation.action
+    if action is CandidateAction.LONG_CANDIDATE:
+        return "LONG"
+    if action is CandidateAction.SHORT_CANDIDATE:
+        return "SHORT"
+    return "UNAVAILABLE"
+
+
 def _decision_side(decision: DecisionJournalEntry[object, object]) -> str:
+    """Directional audit side; actual candidate counting uses _actual_side()."""
+
     evaluation = decision.strategy_evaluation
     action = evaluation.action.value
     if action == "NO_TRADE" and hasattr(evaluation.rule_audit, "underlying_action"):
@@ -125,10 +220,97 @@ def _decision_side(decision: DecisionJournalEntry[object, object]) -> str:
     return "UNAVAILABLE"
 
 
-def _opportunity(decision: DecisionJournalEntry[object, object]) -> str:
-    identity = decision.identity
-    side = _decision_side(decision)
-    return "|".join((str(identity.symbol), identity.observed_at.isoformat(), side))
+def _opportunity_record(key: OpportunityKey) -> dict[str, object]:
+    return {
+        "source_id": key.source_id,
+        "dataset_version": key.dataset_version,
+        "manifest_sha256": key.manifest_sha256,
+        "symbol": key.symbol,
+        "epoch_start": key.epoch_start.isoformat(),
+        "decision_at": key.decision_at.isoformat(),
+        "side": key.side,
+        "pivot_kind": key.pivot_kind,
+        "pivot_open_time": key.pivot_open_time.isoformat(),
+        "pivot_confirmed_at": key.pivot_confirmed_at.isoformat(),
+        "pivot_price": str(key.pivot_price),
+    }
+
+
+def _opportunity_id(key: OpportunityKey) -> str:
+    return _sha(_canonical(_opportunity_record(key)))
+
+
+def _key_by_identity(
+    population: HistoryScreenedDecisionPopulation,
+    arm: ComparisonArm,
+) -> dict[object, OpportunityKey | None]:
+    decisions = (
+        population.baseline_decisions
+        if arm is ComparisonArm.BASELINE
+        else population.zone_decisions
+    )
+    return {
+        decision.identity: key
+        for decision, key in zip(decisions, population.opportunity_keys, strict=True)
+    }
+
+
+def _decision_bytes(decision: DecisionJournalEntry[object, object]) -> bytes:
+    return _canonical(encode(decision))
+
+
+def validate_task_associations(
+    population: HistoryScreenedDecisionPopulation,
+    results: tuple[HistoryScreenedReplayResult, ...],
+    *,
+    expected_task: HistoryScreenedTask,
+    population_sha256: str,
+) -> dict[tuple[ComparisonArm, ComparisonScenario], tuple[HistoryScreenedReplayResult, ...]]:
+    """Bind every result cell to the exact reviewed task and sealed population."""
+
+    population.validate()
+    expected_task.validate(
+        synthetic=population.configuration.input_binding.kind == "SYNTHETIC_FIXTURE"
+    )
+    if population.configuration.task != expected_task:
+        raise HistoryScreenedComparisonError("population is associated with another task")
+    authoritative: dict[tuple[ComparisonArm, object], DecisionJournalEntry[object, object]] = {}
+    for arm, decisions in (
+        (ComparisonArm.BASELINE, population.baseline_decisions),
+        (ComparisonArm.ZONE, population.zone_decisions),
+    ):
+        for decision in decisions:
+            key = (arm, decision.identity)
+            if key in authoritative:
+                raise HistoryScreenedComparisonError("population decision identity is duplicated")
+            authoritative[key] = decision
+    expected_cells = {
+        (arm, scenario, identity)
+        for arm, identity in authoritative
+        for scenario in ComparisonScenario
+    }
+    seen: dict[tuple[ComparisonArm, ComparisonScenario, object], HistoryScreenedReplayResult] = {}
+    by_cell: dict[tuple[ComparisonArm, ComparisonScenario], list[HistoryScreenedReplayResult]] = {
+        (arm, scenario): [] for arm in ComparisonArm for scenario in ComparisonScenario
+    }
+    for result in results:
+        result.validate()
+        cell = (result.arm, result.scenario, result.decision.identity)
+        authority = authoritative.get((result.arm, result.decision.identity))
+        if (
+            result.task_id != expected_task.task_id
+            or result.population_sha256 != population_sha256
+            or authority is None
+            or _decision_bytes(result.decision) != _decision_bytes(authority)
+        ):
+            raise HistoryScreenedComparisonError("result differs from task/population authority")
+        if cell in seen:
+            raise HistoryScreenedComparisonError("result cell is duplicated")
+        seen[cell] = result
+        by_cell[result.arm, result.scenario].append(result)
+    if set(seen) != expected_cells:
+        raise HistoryScreenedComparisonError("result cells are missing, extra, or foreign")
+    return {key: tuple(value) for key, value in by_cell.items()}
 
 
 def _authorized(decision: DecisionJournalEntry[object, object]) -> bool:
@@ -142,6 +324,16 @@ def _decimal_text(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
 
 
+def _exact_sum(values: tuple[Decimal, ...]) -> Decimal:
+    if not values:
+        return Decimal(0)
+    minimum_exponent = min(cast(int, value.as_tuple().exponent) for value in values)
+    maximum_adjusted = max(value.adjusted() for value in values if value != 0) if any(values) else 0
+    precision = max(34, maximum_adjusted - minimum_exponent + len(str(len(values))) + 2)
+    with localcontext(Context(prec=precision, rounding=ROUND_HALF_EVEN)):
+        return sum(values, Decimal(0))
+
+
 def _metrics(results: tuple[HistoryScreenedReplayResult, ...]) -> dict[str, object]:
     statuses = Counter(result.status.value for result in results)
     closed_r = tuple(
@@ -150,18 +342,22 @@ def _metrics(results: tuple[HistoryScreenedReplayResult, ...]) -> dict[str, obje
         for branch in result.branches
         if branch.closed_net_r is not None
     )
-    fees = sum(
-        (branch.final_position.cumulative_fees for result in results for branch in result.branches),
-        Decimal(0),
+    fees = _exact_sum(
+        tuple(
+            branch.final_position.cumulative_fees
+            for result in results
+            for branch in result.branches
+        )
     )
-    residuals: dict[str, Decimal] = {}
+    residual_values: dict[str, list[Decimal]] = {}
     for result in results:
         for branch in result.branches:
             if branch.final_position.quantity:
                 symbol = str(branch.final_position.symbol)
-                residuals[symbol] = residuals.get(symbol, Decimal(0)) + abs(
-                    branch.final_position.quantity
+                residual_values.setdefault(symbol, []).append(
+                    branch.final_position.quantity.copy_abs()
                 )
+    residuals = {symbol: _exact_sum(tuple(values)) for symbol, values in residual_values.items()}
     with localcontext(_CONTEXT):
         mean_r = sum(closed_r, Decimal(0)) / len(closed_r) if closed_r else None
         median_r = cast(Decimal | None, median(closed_r)) if closed_r else None
@@ -190,76 +386,161 @@ def _metrics(results: tuple[HistoryScreenedReplayResult, ...]) -> dict[str, obje
 def task_report(
     population: HistoryScreenedDecisionPopulation,
     results: tuple[HistoryScreenedReplayResult, ...],
+    *,
+    expected_task: HistoryScreenedTask,
+    run: HistoryScreenedRunAssociation,
 ) -> dict[str, object]:
-    population.validate()
-    for result in results:
-        result.validate()
-    expected = (len(population.baseline_decisions) + len(population.zone_decisions)) * len(
-        ComparisonScenario
+    run.validate(
+        population.configuration.input_binding,
+        actual_sha=run.executable_sha,
     )
-    if len(results) != expected:
-        raise HistoryScreenedComparisonError("task result population is incomplete")
-    by_cell: dict[tuple[ComparisonArm, ComparisonScenario], list[HistoryScreenedReplayResult]] = {
-        (arm, scenario): [] for arm in ComparisonArm for scenario in ComparisonScenario
+    population_sha = _sha(population_bytes(population))
+    by_cell = validate_task_associations(
+        population,
+        results,
+        expected_task=expected_task,
+        population_sha256=population_sha,
+    )
+    decisions = {
+        ComparisonArm.BASELINE: population.baseline_decisions,
+        ComparisonArm.ZONE: population.zone_decisions,
     }
-    for result in results:
-        by_cell[result.arm, result.scenario].append(result)
-    baseline_admitted = {
-        _opportunity(decision)
-        for decision in population.baseline_decisions
-        if _authorized(decision)
+    key_maps = {arm: _key_by_identity(population, arm) for arm in ComparisonArm}
+    actual_candidates: dict[ComparisonArm, set[OpportunityKey]] = {
+        arm: {
+            key
+            for decision, key in zip(arm_decisions, population.opportunity_keys, strict=True)
+            if key is not None and _actual_side(decision) != "UNAVAILABLE"
+        }
+        for arm, arm_decisions in decisions.items()
     }
-    zone_admitted = {
-        _opportunity(decision) for decision in population.zone_decisions if _authorized(decision)
+    admitted: dict[ComparisonArm, set[OpportunityKey]] = {
+        arm: {
+            key
+            for decision, key in zip(arm_decisions, population.opportunity_keys, strict=True)
+            if key is not None and _authorized(decision)
+        }
+        for arm, arm_decisions in decisions.items()
     }
-    baseline_by_identity = {
-        decision.identity: _opportunity(decision) for decision in population.baseline_decisions
+    masks = {
+        ComparisonArm.BASELINE: set(population.baseline_spacing_mask),
+        ComparisonArm.ZONE: set(population.zone_spacing_mask),
     }
-    zone_by_identity = {
-        decision.identity: _opportunity(decision) for decision in population.zone_decisions
+    if any(not masks[arm] <= admitted[arm] for arm in ComparisonArm):
+        raise HistoryScreenedComparisonError("spacing mask contains a non-admission")
+    opportunity_records = {
+        _opportunity_id(key): _opportunity_record(key)
+        for key in population.opportunity_keys
+        if key is not None
     }
-    baseline_mask = {
-        baseline_by_identity[item] for item in spacing_mask(population.baseline_decisions)
+    zone_rejections = {
+        key
+        for decision, key in zip(
+            population.zone_decisions, population.opportunity_keys, strict=True
+        )
+        if key is not None and _actual_side(decision) == "UNAVAILABLE"
     }
-    zone_mask = {zone_by_identity[item] for item in spacing_mask(population.zone_decisions)}
+    rejection_reasons = Counter(
+        str(cast(Any, reason).value)
+        for decision, key in zip(
+            population.zone_decisions, population.opportunity_keys, strict=True
+        )
+        if key in zone_rejections
+        for reason in decision.strategy_evaluation.reasons_against
+    )
     candidate_counts = {
-        "baseline": sum(
-            _decision_side(item) != "UNAVAILABLE" for item in population.baseline_decisions
-        ),
-        "zone": sum(_decision_side(item) != "UNAVAILABLE" for item in population.zone_decisions),
+        "baseline": len(actual_candidates[ComparisonArm.BASELINE]),
+        "zone": len(actual_candidates[ComparisonArm.ZONE]),
+        "underlying_opportunities": len(opportunity_records),
+        "zone_rejections": len(zone_rejections),
     }
     cells: dict[str, object] = {}
     masked_cells: dict[str, object] = {}
     for (arm, scenario), values in by_cell.items():
         key = f"{arm.value}:{scenario.value}"
-        cell = tuple(values)
-        mask = baseline_mask if arm is ComparisonArm.BASELINE else zone_mask
-        cells[key] = _metrics(cell)
+        cells[key] = _metrics(values)
         masked_cells[key] = _metrics(
-            tuple(item for item in cell if _opportunity(item.decision) in mask)
+            tuple(item for item in values if key_maps[arm][item.decision.identity] in masks[arm])
         )
     grouped = _grouped_cells(population, tuple(results))
-    diagnostics = _diagnostics(tuple(results))
+    diagnostics = _diagnostics(population, tuple(results))
+    baseline_admitted = admitted[ComparisonArm.BASELINE]
+    zone_admitted = admitted[ComparisonArm.ZONE]
+    admission_union = baseline_admitted | zone_admitted
+    action_pairs = Counter(
+        f"{baseline.strategy_evaluation.action.value}|{zone.strategy_evaluation.action.value}"
+        for baseline, zone in zip(
+            population.baseline_decisions, population.zone_decisions, strict=True
+        )
+    )
+    outcome_partitions: dict[str, object] = {}
+    for scenario in ComparisonScenario:
+        indexes = {
+            arm: {
+                key_maps[arm][result.decision.identity]: result
+                for result in by_cell[arm, scenario]
+                if key_maps[arm][result.decision.identity] is not None
+            }
+            for arm in ComparisonArm
+        }
+        partitions: dict[str, dict[str, list[str]]] = {}
+        for arm in ComparisonArm:
+            arm_parts: dict[str, list[str]] = {}
+            for opportunity in sorted(admission_union, key=_opportunity_id):
+                if opportunity not in admitted[arm]:
+                    label = "NOT_ADMITTED"
+                else:
+                    result = indexes[arm][opportunity]
+                    label = result.status.value
+                arm_parts.setdefault(label, []).append(_opportunity_id(opportunity))
+            partitions[arm.value] = arm_parts
+        outcome_partitions[scenario.value] = partitions
     return {
         "schema": REPORT_SCHEMA,
         "protocol_sha256": PROTOCOL_SHA256,
         "task_plan_sha256": TASK_PLAN_SHA256,
-        "task_id": population.configuration.task.task_id,
-        "wire_symbol": population.configuration.task.wire_symbol,
+        "run": run.record(),
+        "population_sha256": population_sha,
+        "task_id": expected_task.task_id,
+        "task_index": expected_task.index,
+        "wire_symbol": expected_task.wire_symbol,
         "decision_slots_per_arm": len(population.baseline_decisions),
         "candidates": candidate_counts,
+        "opportunity_records": opportunity_records,
+        "candidate_membership": {
+            arm.value: sorted(_opportunity_id(key) for key in actual_candidates[arm])
+            for arm in ComparisonArm
+        },
+        "zone_rejection_membership": sorted(_opportunity_id(key) for key in zone_rejections),
+        "zone_rejection_reasons": dict(sorted(rejection_reasons.items())),
+        "observation_action_pairs": dict(sorted(action_pairs.items())),
+        "both_no_signal_observations": action_pairs.get("NO_TRADE|NO_TRADE", 0),
         "admissions": {
             "baseline": len(baseline_admitted),
             "zone": len(zone_admitted),
             "common": len(baseline_admitted & zone_admitted),
             "baseline_only": len(baseline_admitted - zone_admitted),
             "zone_only": len(zone_admitted - baseline_admitted),
+            "union": len(admission_union),
+            "membership": {
+                "common": sorted(_opportunity_id(key) for key in baseline_admitted & zone_admitted),
+                "baseline_only": sorted(
+                    _opportunity_id(key) for key in baseline_admitted - zone_admitted
+                ),
+                "zone_only": sorted(
+                    _opportunity_id(key) for key in zone_admitted - baseline_admitted
+                ),
+            },
         },
         "masks": {
-            "baseline": len(baseline_mask),
-            "zone": len(zone_mask),
-            "intersection": len(baseline_mask & zone_mask),
+            "baseline": sorted(_opportunity_id(key) for key in masks[ComparisonArm.BASELINE]),
+            "zone": sorted(_opportunity_id(key) for key in masks[ComparisonArm.ZONE]),
+            "intersection": sorted(
+                _opportunity_id(key)
+                for key in masks[ComparisonArm.BASELINE] & masks[ComparisonArm.ZONE]
+            ),
         },
+        "admission_outcome_partitions": outcome_partitions,
         "full": cells,
         "masked": masked_cells,
         "grouped_zero_complete": grouped,
@@ -329,16 +610,22 @@ def _grouped_cells(
 
 
 def _diagnostics(
+    population: HistoryScreenedDecisionPopulation,
     results: tuple[HistoryScreenedReplayResult, ...],
 ) -> tuple[dict[str, object], ...]:
     rows: list[dict[str, object]] = []
+    key_maps = {arm: _key_by_identity(population, arm) for arm in ComparisonArm}
     for result in results:
         replay = result.legacy_replay
         fill = None if replay is None else replay.entry_fill
         branch = result.branches[0] if len(result.branches) == 1 else None
         rows.append(
             {
-                "opportunity": _opportunity(result.decision),
+                "opportunity": (
+                    None
+                    if (key := key_maps[result.arm][result.decision.identity]) is None
+                    else _opportunity_id(key)
+                ),
                 "arm": result.arm.value,
                 "scenario": result.scenario.value,
                 "status": result.status.value,
@@ -378,7 +665,7 @@ def execute_task(
     store: Any,
     configuration: HistoryScreenedConfiguration,
     *,
-    grant: HistoryScreenedExecutionGrant | None,
+    grant: HistoryScreenedExecutionGrant,
     actual_sha: str,
     directory: Path,
     task_index: int,
@@ -390,12 +677,19 @@ def execute_task(
         else evaluate_granted_task(
             cast(LockedHistoryScreenedCandleStore, store),
             configuration,
-            cast(HistoryScreenedExecutionGrant, grant),
+            grant,
             actual_sha=actual_sha,
         )
     )
     population_payload = population_bytes(population)
     population_sha = _sha(population_payload)
+    run_association = HistoryScreenedRunAssociation.from_grant(
+        grant,
+        configuration.input_binding,
+        actual_sha=actual_sha,
+    )
+    # Population construction sealed both masks before the first replay invocation.
+    population.validate()
     runner = HistoryScreenedAllFillRunner(store)
     series = ExecutionSeries(
         configuration.input_binding.source_id,
@@ -422,7 +716,14 @@ def execute_task(
                 )
     frozen_results = tuple(results)
     results_payload = result_bytes(frozen_results)
-    report_payload = _canonical(task_report(population, frozen_results))
+    report_payload = _canonical(
+        task_report(
+            population,
+            frozen_results,
+            expected_task=configuration.task,
+            run=run_association,
+        )
+    )
     return TaskArtifacts(
         _write_once(directory / f"{task_index:02d}.population.json.gz", population_payload),
         _write_once(directory / f"{task_index:02d}.results.jsonl.gz", results_payload),
@@ -430,13 +731,21 @@ def execute_task(
     )
 
 
-def verify_task(directory: Path, task_index: int) -> dict[str, object]:
+def verify_task(
+    directory: Path,
+    task_index: int,
+    *,
+    expected_task: HistoryScreenedTask,
+    run: HistoryScreenedRunAssociation,
+) -> dict[str, object]:
     population_payload = (directory / f"{task_index:02d}.population.json.gz").read_bytes()
     results_payload = (directory / f"{task_index:02d}.results.jsonl.gz").read_bytes()
     report_payload = (directory / f"{task_index:02d}.report.json").read_bytes()
     population = read_population(population_payload)
     results = read_results(results_payload)
-    expected = _canonical(task_report(population, results))
+    if task_index != expected_task.index:
+        raise HistoryScreenedComparisonError("task artifact index differs from reviewed task")
+    expected = _canonical(task_report(population, results, expected_task=expected_task, run=run))
     if not compare_bytes(expected, report_payload):
         raise HistoryScreenedComparisonError("saved task report differs from authorities")
     return {
@@ -444,6 +753,7 @@ def verify_task(directory: Path, task_index: int) -> dict[str, object]:
         "results_sha256": _sha(results_payload),
         "report_sha256": _sha(report_payload),
         "task_id": population.configuration.task.task_id,
+        "task_index": population.configuration.task.index,
     }
 
 
@@ -565,14 +875,49 @@ def _screen_arm(
     return "CANDIDATE_FOR_FURTHER_VALIDATION"
 
 
-def final_projection(directory: Path, task_count: int = 10) -> dict[str, object]:
+def final_projection(
+    directory: Path,
+    *,
+    run: HistoryScreenedRunAssociation,
+    tasks: tuple[HistoryScreenedTask, ...] = TASKS,
+) -> dict[str, object]:
+    if not tasks or tuple(task.index for task in tasks) != tuple(range(len(tasks))):
+        raise HistoryScreenedComparisonError("final task inventory is not exact ordered coverage")
+    if run.input_kind == "EXTERNAL_REVIEWED_EXECUTION_GRANT" and tasks != TASKS:
+        raise HistoryScreenedComparisonError("reviewed finalization omits or replaces a task")
+    expected_names = {
+        f"{task.index:02d}.{suffix}"
+        for task in tasks
+        for suffix in ("population.json.gz", "results.jsonl.gz", "report.json")
+    }
+    actual_names = {
+        path.name
+        for suffix in ("population.json.gz", "results.jsonl.gz", "report.json")
+        for path in directory.glob(f"*.{suffix}")
+    }
+    if actual_names != expected_names:
+        raise HistoryScreenedComparisonError("final task artifact coverage is incomplete or extra")
     all_results: list[HistoryScreenedReplayResult] = []
     task_reports: list[dict[str, object]] = []
-    masks: dict[ComparisonArm, set[str]] = {arm: set() for arm in ComparisonArm}
-    for index in range(task_count):
+    masks: dict[ComparisonArm, set[OpportunityKey]] = {arm: set() for arm in ComparisonArm}
+    admitted: dict[ComparisonArm, set[OpportunityKey]] = {arm: set() for arm in ComparisonArm}
+    result_index: dict[
+        tuple[ComparisonArm, ComparisonScenario, OpportunityKey],
+        HistoryScreenedReplayResult,
+    ] = {}
+    decision_keys: dict[tuple[ComparisonArm, object], OpportunityKey | None] = {}
+    for task in tasks:
+        index = task.index
         population = read_population((directory / f"{index:02d}.population.json.gz").read_bytes())
         results = read_results((directory / f"{index:02d}.results.jsonl.gz").read_bytes())
-        report = task_report(population, results)
+        population_sha = _sha((directory / f"{index:02d}.population.json.gz").read_bytes())
+        validate_task_associations(
+            population,
+            results,
+            expected_task=task,
+            population_sha256=population_sha,
+        )
+        report = task_report(population, results, expected_task=task, run=run)
         if not compare_bytes(
             _canonical(report), (directory / f"{index:02d}.report.json").read_bytes()
         ):
@@ -583,8 +928,36 @@ def final_projection(directory: Path, task_count: int = 10) -> dict[str, object]
             (ComparisonArm.BASELINE, population.baseline_decisions),
             (ComparisonArm.ZONE, population.zone_decisions),
         ):
-            by_identity = {decision.identity: _opportunity(decision) for decision in decisions}
-            masks[arm].update(by_identity[item] for item in spacing_mask(decisions))
+            task_key_map = _key_by_identity(population, arm)
+            for identity, opportunity in task_key_map.items():
+                composite = (arm, identity)
+                if composite in decision_keys:
+                    raise HistoryScreenedComparisonError(
+                        "decision identity is duplicated across tasks"
+                    )
+                decision_keys[composite] = opportunity
+            masks[arm].update(
+                population.baseline_spacing_mask
+                if arm is ComparisonArm.BASELINE
+                else population.zone_spacing_mask
+            )
+            admitted[arm].update(
+                key
+                for decision in decisions
+                if (key := task_key_map[decision.identity]) is not None and _authorized(decision)
+            )
+            for result in results:
+                if result.arm is not arm:
+                    continue
+                opportunity = task_key_map[result.decision.identity]
+                if opportunity is None:
+                    continue
+                cell = (arm, result.scenario, opportunity)
+                if cell in result_index:
+                    raise HistoryScreenedComparisonError(
+                        "opportunity result is duplicated across tasks"
+                    )
+                result_index[cell] = result
     full: dict[
         tuple[ComparisonArm, ComparisonScenario], tuple[HistoryScreenedReplayResult, ...]
     ] = {}
@@ -598,7 +971,7 @@ def final_projection(directory: Path, task_count: int = 10) -> dict[str, object]
             )
             full[arm, scenario] = values
             masked[arm, scenario] = tuple(
-                item for item in values if _opportunity(item.decision) in masks[arm]
+                item for item in values if decision_keys[arm, item.decision.identity] in masks[arm]
             )
     absolute = {
         f"{arm.value}:{scenario.value}": {
@@ -610,26 +983,38 @@ def final_projection(directory: Path, task_count: int = 10) -> dict[str, object]
     }
     paired: dict[str, object] = {}
     intersection = masks[ComparisonArm.BASELINE] & masks[ComparisonArm.ZONE]
+    admission_union = admitted[ComparisonArm.BASELINE] | admitted[ComparisonArm.ZONE]
+    common_admissions = admitted[ComparisonArm.BASELINE] & admitted[ComparisonArm.ZONE]
     for scenario in ComparisonScenario:
-        arm_index = {
-            arm: {_opportunity(item.decision): item for item in full[arm, scenario]}
-            for arm in ComparisonArm
-        }
-        common = set(arm_index[ComparisonArm.BASELINE]) & set(arm_index[ComparisonArm.ZONE])
-        for label, keys in (("full", common), ("intersection_mask", common & intersection)):
+        for label, paired_keys in (
+            ("full", admission_union),
+            ("intersection_mask", intersection),
+        ):
             deltas: list[Decimal] = []
-            unmatched = 0
-            for key in sorted(keys):
-                baseline_r = _closed_r(arm_index[ComparisonArm.BASELINE][key])
-                zone_r = _closed_r(arm_index[ComparisonArm.ZONE][key])
-                if baseline_r is None or zone_r is None:
-                    unmatched += 1
+            partitions: dict[str, list[str]] = {}
+            for key in sorted(paired_keys, key=_opportunity_id):
+                identity = _opportunity_id(key)
+                if key not in admitted[ComparisonArm.BASELINE]:
+                    partitions.setdefault("BASELINE_NOT_ADMITTED", []).append(identity)
+                if key not in admitted[ComparisonArm.ZONE]:
+                    partitions.setdefault("ZONE_NOT_ADMITTED", []).append(identity)
+                baseline = result_index[ComparisonArm.BASELINE, scenario, key]
+                zone = result_index[ComparisonArm.ZONE, scenario, key]
+                baseline_r = _closed_r(baseline)
+                zone_r = _closed_r(zone)
+                if baseline_r is not None and zone_r is not None:
+                    with localcontext(_CONTEXT):
+                        deltas.append(zone_r - baseline_r)
+                    partitions.setdefault("BOTH_CLOSED", []).append(identity)
                 else:
-                    deltas.append(zone_r - baseline_r)
+                    partitions.setdefault(
+                        f"BASELINE_{baseline.status.value}|ZONE_{zone.status.value}", []
+                    ).append(identity)
             paired[f"{scenario.value}:{label}"] = {
-                "denominator": len(keys),
+                "admission_union_denominator": len(paired_keys),
+                "common_admission_denominator": len(paired_keys & common_admissions),
                 "both_closed": len(deltas),
-                "unmatched_unfilled_or_open": unmatched,
+                "reason_partitions": dict(sorted(partitions.items())),
                 "mean_zone_minus_baseline_closed_net_r": _decimal_text(_mean(tuple(deltas))),
             }
     classifications = {
@@ -643,7 +1028,9 @@ def final_projection(directory: Path, task_count: int = 10) -> dict[str, object]
         "schema": PROJECTION_SCHEMA,
         "protocol_sha256": PROTOCOL_SHA256,
         "task_plan_sha256": TASK_PLAN_SHA256,
-        "task_count": task_count,
+        "run": run.record(),
+        "task_count": len(tasks),
+        "task_ids": [task.task_id for task in tasks],
         "task_reports": task_reports,
         "absolute": absolute,
         "paired": paired,

@@ -4,7 +4,7 @@ Protocol: `BREAKOUT_RETEST_HISTORY_SCREENED_180D_COMPARISON_V1`
 
 Status: implementation/predeclaration complete; historical execution not authorized
 
-Protocol SHA-256: `15fd986946e4e4e8ec5774e9ca67ecee5b9a3e245b97fdebd5b5bddf2d723236`
+Protocol SHA-256: `817338014f02d1b9f048e382b9b861114160053b83a1062068442378f8c7e671`
 
 Task-plan SHA-256: `1506b2568f6067d39ccebe3a4093349116cfcc92413dcbb2d961fdad52ecdd49`
 
@@ -76,12 +76,17 @@ Before outcomes are inspected, each member/arm selects the earliest authorized
 admission and then the next at or after 168 hours. Sides compete, the mask crosses
 reporting boundaries, and unfilled/open selected opportunities are not replaced.
 BASE and STRESS share an arm mask. Paired-mask analysis uses only the intersection
-of the independently frozen arm masks.
+of the independently frozen arm masks. The retained population seals the complete
+ordered decision calendar, unique underlying opportunity identities and both arm
+masks before an outcome runner is constructed.
 
 Task and panel reports retain:
 
 - complete terminal partitions and explicit denominators;
-- candidates, admissions, fills, closures, common and arm-only identities;
+- actual arm candidate counts, underlying audited opportunities, zone rejection
+  reasons, admissions, fills, closures, and common/arm-only identities;
+- explicit full opportunity, candidate, admission and frozen-mask memberships,
+  plus per-scenario admitted/not-admitted terminal partitions;
 - full and arm-specific masked BASE/STRESS economics;
 - exact incurred fees and residual base quantities per asset;
 - mean/median closed net approved-risk R and R-space profit factor with unavailable
@@ -92,9 +97,11 @@ Task and panel reports retain:
 - paired differences only where the same opportunity has two closed authorities,
   with unmatched, unfilled and open cases separate.
 
-Decimal calculations use a local precision-34, half-even context. Quantities from
-different assets are never summed, and asset means are not averaged into a panel
-mean.
+Decimal ratios and signed paired differences use a local precision-34, half-even
+context. Exact additive fee and per-asset residual-quantity totals choose a bounded
+local precision from the retained Decimal operands, independent of the ambient
+process context. Quantities from different assets are never summed, and asset
+means are not averaged into a panel mean.
 
 ## Frozen interpretation
 
@@ -125,8 +132,11 @@ simulating outcomes. Its retained result is
 binds the exact reviewed executable SHA, protocol digest, task-plan digest, input
 identity and a fresh UUID. It then creates one append-only, sequential ledger.
 `STARTED`, `FAILED`, and `COMPLETED` tasks never rerun. Full populations and
-reconstructible all-fill authorities are retained. `verify` only accepts a fully
-completed/finalized ledger and reconstructs reports from those retained bytes.
+reconstructible all-fill authorities are retained. Every result is bound to its
+exact run, task, population digest, arm, scenario, decision identity and sealed
+decision authority; duplicate, missing, foreign or reordered task cells fail
+closed. `verify` only accepts a fully completed/finalized ledger with the exact
+ordered task inventory and reconstructs reports from those retained bytes.
 
 No grant or UUID exists in this PR. The immediate next action is architect review.
 A later exact-SHA grant is the sole gate to the historical run. No acquisition,

@@ -54,6 +54,10 @@ from adaptive_trading_bot.research.all_fill_replay import (
     validate_shared_all_fill_relations,
 )
 from adaptive_trading_bot.research.breakout_retest_replay import BreakoutRetestReplayResult
+from adaptive_trading_bot.research.breakout_zone_comparison import (
+    OpportunityKey,
+    _opportunity_key,
+)
 from adaptive_trading_bot.research.paired_exit_replay import (
     EntryIntentProvenance,
     HistoricalStrategyContextObservation,
@@ -79,7 +83,14 @@ from adaptive_trading_bot.strategies import (
     BreakoutRetestZoneInvalidationStrategy,
     assemble_strategy_contexts,
 )
-from adaptive_trading_bot.strategies.core import StrategyContextError, StrategyEvaluationContext
+from adaptive_trading_bot.strategies.breakout_retest_zone_invalidation import (
+    BreakoutRetestZoneInvalidationAudit,
+)
+from adaptive_trading_bot.strategies.core import (
+    CandidateAction,
+    StrategyContextError,
+    StrategyEvaluationContext,
+)
 
 PROTOCOL_VERSION = "BREAKOUT_RETEST_HISTORY_SCREENED_180D_COMPARISON_V1"
 PROFILE = "NORMALIZED_BASE_SIGNAL_V1"
@@ -568,6 +579,7 @@ def protocol_record() -> dict[str, object]:
         },
         "mask_hours": 168,
         "screen": "EXPLORATORY_FIXED_GATES_V1",
+        "evidence_schema": "history-screened-180d-association-v2",
         "trading_authority": False,
     }
 
@@ -674,7 +686,10 @@ class HistoryScreenedDecisionPopulation:
     contexts: tuple[HistoricalStrategyContextObservation, ...]
     baseline_decisions: tuple[DecisionJournalEntry[object, object], ...]
     zone_decisions: tuple[DecisionJournalEntry[object, object], ...]
-    schema_version: str = field(init=False, default="history-screened-180d-population-v1")
+    opportunity_keys: tuple[OpportunityKey | None, ...]
+    baseline_spacing_mask: tuple[OpportunityKey, ...]
+    zone_spacing_mask: tuple[OpportunityKey, ...]
+    schema_version: str = field(init=False, default="history-screened-180d-population-v2")
     integrity_seal: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -691,35 +706,83 @@ class HistoryScreenedDecisionPopulation:
 
     def _validate_facts(self) -> None:
         self.configuration._validate_facts()
-        if self.schema_version != "history-screened-180d-population-v1":
+        if self.schema_version != "history-screened-180d-population-v2":
             raise HistoryScreenedComparisonError("unknown comparison population schema")
+        task = self.configuration.task
+        if tuple(item.context.observed_at for item in self.contexts) != tuple(
+            sorted({item.context.observed_at for item in self.contexts})
+        ):
+            raise HistoryScreenedComparisonError("population contexts are not unique chronological")
         for observation in self.contexts:
             observation.validate()
             if not isinstance(observation.context, HistoryScreenedStrategyContext):
                 raise HistoryScreenedComparisonError("population context lacks new binding")
-        expected_slots = sum(
-            self.configuration.task.signal_start
-            < item.context.observed_at
-            <= self.configuration.task.signal_end
-            for item in self.contexts
+        expected_times = tuple(
+            task.signal_start + Timeframe.MINUTES_15.duration * index
+            for index in range(
+                1,
+                int((task.signal_end - task.signal_start) / Timeframe.MINUTES_15.duration) + 1,
+            )
         )
         if (
-            len(self.baseline_decisions) != expected_slots
-            or len(self.zone_decisions) != expected_slots
+            len(self.baseline_decisions) != len(expected_times)
+            or len(self.zone_decisions) != len(expected_times)
+            or len(self.opportunity_keys) != len(expected_times)
         ):
             raise HistoryScreenedComparisonError("both arms must retain every decision slot")
-        for arm, expected in (
-            (self.baseline_decisions, BASELINE_IDENTITY),
-            (self.zone_decisions, ZONE_IDENTITY),
+        contexts = {item.context.observed_at: item.context for item in self.contexts}
+        seen_keys: set[OpportunityKey] = set()
+        for expected_at, baseline, zone, key in zip(
+            expected_times,
+            self.baseline_decisions,
+            self.zone_decisions,
+            self.opportunity_keys,
+            strict=True,
         ):
-            for decision in arm:
-                decision.validate()
-                if (
-                    (decision.identity.strategy_id, decision.identity.strategy_version) != expected
-                    or decision.identity.source_id != self.configuration.input_binding.source_id
-                    or decision.identity.symbol != self.configuration.task.symbol
-                ):
-                    raise HistoryScreenedComparisonError("arm decision identity changed")
+            baseline.validate()
+            zone.validate()
+            expected_key = _opportunity_key(
+                baseline,
+                dataset_version=self.configuration.input_binding.dataset_version,
+                manifest_sha256=self.configuration.input_binding.manifest_sha256,
+                epoch_start=task.context_start,
+            )
+            zone_audit = zone.strategy_evaluation.rule_audit
+            if (
+                baseline.identity.observed_at != expected_at
+                or zone.identity.observed_at != expected_at
+                or contexts.get(expected_at) != baseline.context
+                or baseline.context != zone.context
+                or (baseline.identity.strategy_id, baseline.identity.strategy_version)
+                != BASELINE_IDENTITY
+                or (zone.identity.strategy_id, zone.identity.strategy_version) != ZONE_IDENTITY
+                or baseline.identity.source_id != self.configuration.input_binding.source_id
+                or zone.identity.source_id != self.configuration.input_binding.source_id
+                or baseline.identity.symbol != task.symbol
+                or zone.identity.symbol != task.symbol
+                or key != expected_key
+                or not isinstance(zone_audit, BreakoutRetestZoneInvalidationAudit)
+                or zone_audit.underlying_action != baseline.strategy_evaluation.action
+                or zone_audit.underlying_reasons_for != baseline.strategy_evaluation.reasons_for
+                or zone_audit.underlying_reasons_against
+                != baseline.strategy_evaluation.reasons_against
+                or zone_audit.underlying_rule_audit != baseline.strategy_evaluation.rule_audit
+                or (
+                    zone.strategy_evaluation.action is not CandidateAction.NO_TRADE
+                    and baseline.strategy_evaluation.action is CandidateAction.NO_TRADE
+                )
+            ):
+                raise HistoryScreenedComparisonError("cross-arm decision authority changed")
+            if key is not None:
+                if key in seen_keys:
+                    raise HistoryScreenedComparisonError("opportunity identity is duplicated")
+                seen_keys.add(key)
+        if self.baseline_spacing_mask != _spacing_mask_keys(
+            self.baseline_decisions, self.opportunity_keys
+        ) or self.zone_spacing_mask != _spacing_mask_keys(
+            self.zone_decisions, self.opportunity_keys
+        ):
+            raise HistoryScreenedComparisonError("pre-outcome spacing mask changed")
 
     def validate(self) -> None:
         if not compare_digest(
@@ -986,11 +1049,25 @@ def _evaluate_population(
         or tuple(zone_decisions) != zone_journal.snapshot().entries
     ):
         raise HistoryScreenedComparisonError("arm journal differs from evaluated decisions")
+    baseline_tuple = tuple(baseline_decisions)
+    zone_tuple = tuple(zone_decisions)
+    opportunity_keys = tuple(
+        _opportunity_key(
+            decision,
+            dataset_version=configuration.input_binding.dataset_version,
+            manifest_sha256=configuration.input_binding.manifest_sha256,
+            epoch_start=task.context_start,
+        )
+        for decision in baseline_tuple
+    )
     result = HistoryScreenedDecisionPopulation(
         configuration,
         tuple(contexts),
-        tuple(baseline_decisions),
-        tuple(zone_decisions),
+        baseline_tuple,
+        zone_tuple,
+        opportunity_keys,
+        _spacing_mask_keys(baseline_tuple, opportunity_keys),
+        _spacing_mask_keys(zone_tuple, opportunity_keys),
     )
     result.validate()
     return result
@@ -1130,6 +1207,24 @@ def spacing_mask(
         if last is None or decision.identity.observed_at >= last + FOLLOW_UP:
             selected.append(decision.identity)
             last = decision.identity.observed_at
+    return tuple(selected)
+
+
+def _spacing_mask_keys(
+    decisions: tuple[DecisionJournalEntry[object, object], ...],
+    opportunity_keys: tuple[OpportunityKey | None, ...],
+) -> tuple[OpportunityKey, ...]:
+    if len(decisions) != len(opportunity_keys):
+        raise HistoryScreenedComparisonError("spacing inputs differ")
+    by_identity = {
+        decision.identity: key for decision, key in zip(decisions, opportunity_keys, strict=True)
+    }
+    selected: list[OpportunityKey] = []
+    for identity in spacing_mask(decisions):
+        key = by_identity[identity]
+        if key is None:
+            raise HistoryScreenedComparisonError("admitted decision lacks opportunity identity")
+        selected.append(key)
     return tuple(selected)
 
 
