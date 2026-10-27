@@ -32,6 +32,7 @@ _SCHEMA_MODULES = frozenset(
         "adaptive_trading_bot.research.all_fill_replay",
         "adaptive_trading_bot.research.breakout_retest_replay",
         "adaptive_trading_bot.research.breakout_zone_comparison",
+        "adaptive_trading_bot.research.breakout_history_screened_comparison",
         "adaptive_trading_bot.research.paired_exit_replay",
         "adaptive_trading_bot.research.range_mean_reversion_replay",
         "adaptive_trading_bot.research.research_v2_admission",
