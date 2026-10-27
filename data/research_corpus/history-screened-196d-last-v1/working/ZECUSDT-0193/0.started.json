@@ -1,0 +1,1 @@
+{"attempt":0,"plan_sha256":"0a9f48d8da7bb3af6054daa3cc565b93641c5e57a3a0e62dd2c954de9c101713","query":{"endTime":"1780617599999","interval":"5m","limit":"100","priceType":"LAST","startTime":"1780591200000","symbol":"ZECUSDT"},"request_id":"ZECUSDT-0193","started_at":"2026-10-26T22:36:19.044316Z"}

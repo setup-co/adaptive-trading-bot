@@ -1,0 +1,1 @@
+{"attempt":0,"plan_sha256":"0a9f48d8da7bb3af6054daa3cc565b93641c5e57a3a0e62dd2c954de9c101713","query":{"endTime":"1783757999999","interval":"5m","limit":"100","priceType":"LAST","startTime":"1783728000000","symbol":"BTCUSDT"},"request_id":"BTCUSDT-0302","started_at":"2026-10-26T21:56:34.514023Z"}

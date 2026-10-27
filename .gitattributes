@@ -18,3 +18,4 @@ data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/**/*.log -text 
 data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/original-attempt/logs/* -text -diff
 data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/recovery-attempt/logs/* -text -diff
 data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/lineage/* -text -diff
+data/research_evidence/issue-214-history-screened-partial-3cc2f47/**/*.log -text -diff
