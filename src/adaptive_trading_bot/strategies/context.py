@@ -24,6 +24,9 @@ from adaptive_trading_bot.regime import (
 from adaptive_trading_bot.strategies.core import StrategyContextError, StrategyEvaluationContext
 
 if TYPE_CHECKING:
+    from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+        HistoryScreenedContextAuthorization,
+    )
     from adaptive_trading_bot.research.research_v2_admission import ResearchV2ContextAuthorization
 
 
@@ -38,6 +41,7 @@ def assemble_strategy_contexts(
     regime_batch: MultiTimeframeRegimeBatch,
     *,
     research_authorization: ResearchV2ContextAuthorization | None = None,
+    history_screened_authorization: HistoryScreenedContextAuthorization | None = None,
 ) -> tuple[StrategyEvaluationContext, ...]:
     """Validate all inputs before emitting canonical stateless 15m contexts."""
 
@@ -50,9 +54,12 @@ def assemble_strategy_contexts(
         if require_utc(candidate, field=f"{label} batch observed_at") != observed_at:
             raise StrategyContextError("all strategy input batch timestamps must match")
 
-    if research_authorization is not None:
-        research_authorization.validate()
-    candles = _entry_candles(candle_batch, observed_at, research_authorization)
+    if research_authorization is not None and history_screened_authorization is not None:
+        raise StrategyContextError("only one isolated research authorization may be supplied")
+    authorization = research_authorization or history_screened_authorization
+    if authorization is not None:
+        authorization.validate()
+    candles = _entry_candles(candle_batch, observed_at, authorization)
     features = _entry_features(feature_batch, observed_at)
     structures = _entry_structures(structure_batch, observed_at)
     regimes = _entry_regimes(regime_batch, observed_at)
@@ -83,7 +90,7 @@ def assemble_strategy_contexts(
         ):
             raise StrategyContextError(f"multi-timeframe anchor mismatch for {series}")
         _validate_pivots(structure, series, observed_at)
-        if research_authorization is None:
+        if authorization is None:
             contexts.append(
                 StrategyEvaluationContext(
                     source_id=series.source_id,
@@ -95,7 +102,7 @@ def assemble_strategy_contexts(
                     multi_timeframe_regime=regime,
                 )
             )
-        else:
+        elif research_authorization is not None:
             from adaptive_trading_bot.research.research_v2_admission import (
                 ResearchV2StrategyContext,
             )
@@ -112,13 +119,33 @@ def assemble_strategy_contexts(
                     research_authorization=research_authorization,
                 )
             )
+        else:
+            from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+                HistoryScreenedStrategyContext,
+            )
+
+            assert history_screened_authorization is not None
+            contexts.append(
+                HistoryScreenedStrategyContext(
+                    source_id=series.source_id,
+                    symbol=series.symbol,
+                    observed_at=observed_at,
+                    candle_15m=candle,
+                    features_15m=feature,
+                    structure_15m=structure,
+                    multi_timeframe_regime=regime,
+                    research_authorization=history_screened_authorization,
+                )
+            )
     return tuple(contexts)
 
 
 def _entry_candles(
     batch: ObservedCandleBatch,
     observed_at: datetime,
-    research_authorization: ResearchV2ContextAuthorization | None = None,
+    research_authorization: (
+        ResearchV2ContextAuthorization | HistoryScreenedContextAuthorization | None
+    ) = None,
 ) -> dict[FeatureSeries, ObservedCandle]:
     result: dict[FeatureSeries, ObservedCandle] = {}
     for event in batch.events:
