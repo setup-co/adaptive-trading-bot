@@ -1,0 +1,1 @@
+{"attempt":0,"plan_sha256":"dc51e06df9c4b40935cbb705b25d4683ff63094f5b475f6fbf82f1a085e3a23f","query":{"endTime":"1777882799999","interval":"5m","limit":"100","priceType":"LAST","startTime":"1777852800000","symbol":"ZAMAUSDT"},"request_id":"ZAMAUSDT-0099","started_at":"2026-10-27T02:08:24.992119Z"}

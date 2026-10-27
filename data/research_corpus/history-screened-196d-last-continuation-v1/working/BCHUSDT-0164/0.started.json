@@ -1,0 +1,1 @@
+{"attempt":0,"plan_sha256":"dc51e06df9c4b40935cbb705b25d4683ff63094f5b475f6fbf82f1a085e3a23f","query":{"endTime":"1779753599999","interval":"5m","limit":"100","priceType":"LAST","startTime":"1779727200000","symbol":"BCHUSDT"},"request_id":"BCHUSDT-0164","started_at":"2026-10-27T02:21:46.795669Z"}
