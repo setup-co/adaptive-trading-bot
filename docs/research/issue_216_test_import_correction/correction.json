@@ -1,0 +1,20 @@
+{
+  "schema": "issue-216-test-import-correction-v1",
+  "pre_correction_publication_head": "b34f332187903cc2f347110a4102a73834a28c1c",
+  "frozen_execution_head": "682fd077ac99aa8b381d4c51e010168a333c7d98",
+  "original_publication_manifest_sha256": "199923afac0d51ca2e7a9b2f324dcecaf34b109d56e85694d06780136f8d3623",
+  "historical_snapshot_semantics": "The original publication manifest remains the immutable snapshot of the original publication. This sidecar records the later test-only import correction and does not rewrite historical source or evidence identities.",
+  "path": "tests/research/test_history_screened_196d_continuation.py",
+  "archived_original": {
+    "path": "docs/research/issue_216_test_import_correction/original_test.py.txt",
+    "bytes": 10476,
+    "sha256": "c2add2e3e7c3a2adfdba396bbca2854f2f5febe22eccb69ac15535837cc1ad13"
+  },
+  "corrected": {
+    "bytes": 10868,
+    "sha256": "2d0e10a0aa986aef1258e3c85bd0893f32babe37cb4c0323f656bd3584dd3299"
+  },
+  "scope": "TEST_IMPORT_CORRECTION_ONLY",
+  "corpus_and_evidence_bytes_changed": false,
+  "production_source_bytes_changed": false
+}

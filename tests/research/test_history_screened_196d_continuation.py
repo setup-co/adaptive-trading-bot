@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import socket
 import sys
@@ -9,13 +10,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts.research import history_screened_196d_continuation_wrapper as wrapper
 
 from adaptive_trading_bot.research import history_screened_196d_continuation as subject
 from adaptive_trading_bot.research import history_screened_196d_corpus as parent
 from adaptive_trading_bot.research import research_v2_corpus as core
 
 REPO = Path(__file__).resolve().parents[2]
+WRAPPER_PATH = REPO / "scripts/research/history_screened_196d_continuation_wrapper.py"
+WRAPPER_SPEC = importlib.util.spec_from_file_location(
+    "issue_216_history_screened_196d_continuation_wrapper",
+    WRAPPER_PATH,
+)
+if WRAPPER_SPEC is None or WRAPPER_SPEC.loader is None:
+    raise RuntimeError(f"cannot load Issue #216 wrapper from {WRAPPER_PATH}")
+wrapper = importlib.util.module_from_spec(WRAPPER_SPEC)
+WRAPPER_SPEC.loader.exec_module(wrapper)
 
 
 @pytest.fixture(scope="module")
