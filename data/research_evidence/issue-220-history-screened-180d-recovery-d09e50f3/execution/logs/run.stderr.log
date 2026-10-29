@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-220-execution\scripts\research\breakout_history_screened_comparison.py", line 178, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-220-execution\scripts\research\breakout_history_screened_comparison.py", line 170, in main
+    result = run(args.repo, args.grant, args.ledger_root)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-220-execution\scripts\research\breakout_history_screened_comparison.py", line 76, in run
+    grant = HistoryScreenedExecutionGrant.from_file(grant_path)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-220-execution\src\adaptive_trading_bot\research\breakout_history_screened_comparison.py", line 1132, in from_file
+    raise HistoryScreenedComparisonError("execution grant is not canonical JSON")
+adaptive_trading_bot.research.breakout_history_screened_comparison.HistoryScreenedComparisonError: execution grant is not canonical JSON
