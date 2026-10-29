@@ -19,3 +19,7 @@ data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/original-attemp
 data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/recovery-attempt/logs/* -text -diff
 data/research_evidence/issue-203-breakout-zone-recovery-b332eb83/lineage/* -text -diff
 data/research_evidence/issue-214-history-screened-partial-3cc2f47/**/*.log -text -diff
+data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/** -text -diff
+data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/original-ledger/*.population.json.gz filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/original-ledger/*.results.jsonl.gz filter=lfs diff=lfs merge=lfs -text
+data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/original-ledger/*.report.json filter=lfs diff=lfs merge=lfs -text

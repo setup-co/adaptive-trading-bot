@@ -61,6 +61,8 @@ exclude = [
   "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit-v2.py",
   "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit-v1.py",
   "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit.py",
+  "data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/execution/*.py",
+  "data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/recovery/*.py",
 ]
 
 [tool.ruff.lint]
@@ -71,6 +73,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit*.py" = ["E501"]
 "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit.py" = ["F841"]
 "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit*.py" = ["E501"]
+"data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/execution/*.py" = ["E501", "F401", "UP017"]
+"data/research_evidence/issue-220-history-screened-180d-recovery-d09e50f3/recovery/*.py" = ["E501", "F401", "UP017"]
 
 [tool.mypy]
 python_version = "3.12"
