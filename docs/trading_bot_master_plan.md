@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.9
+**Document version:** 1.10
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -1754,6 +1754,19 @@ Approved:
 - Affected Modules: Master Plan, new selection annex, standalone retained diagnostic/evidence, and project-state documentation only. No application/runtime/strategy/Risk/Safety/execution/accounting change.
 - Target Version: Research V2 design / Master Plan v1.9
 - Approved: Architect instruction in Issue #212; selection and coarse data screening only. Fine-grid acquisition and any study require separate authorization.
+
+### 2026-11-01 — Research-only 5m LAST execution and protection profile
+
+- Date: 2026-11-01
+- Change ID: Issue #223 / `LAST_5M_PROTECTIVE_EXECUTION_V1` / Master Plan v1.10
+- Old Decision: Research replay used the decision/replay bar model for both signal timing and modeled execution/protection, while the accepted Issue #222 assessment identified the need to separate 15m decisions from finer execution observations.
+- New Decision: Preserve every 15m strategy decision and authorization rule. Permit one opt-in, research-only adapter to consume an already-authorized intent on an exact finite 5m LAST grid, select the first eligible 5m open, model explicit protective acceptance/activation, retain conservative intrabar ambiguity and gap facts, and account every fill through the existing cost and position-accounting authorities. The runtime timeframe enum, strategy registries and defaults remain unchanged; 30m signals remain prospective.
+- Reason: Make execution granularity, latency quantization, protection timing, data gaps and filled-entry recovery explicit without inventing tick ordering or changing strategy logic.
+- Expected Benefit: Synthetic research can distinguish signal timeframe from modeled execution/protection granularity and retain unresolved exposure instead of silently assuming an executable stop.
+- Risk: 5m OHLC cannot reveal tick order inside a candle, prove venue acceptance or guarantee a protective fill. Activation-time touches and missing grids therefore fail closed or remain explicitly unresolved; the profile is not trading authority.
+- Affected Modules: One opt-in research adapter, focused synthetic/compatibility tests and its contract documentation. Strategies, Risk, Safety, runtime allowlists, legacy replay defaults, datasets and frozen evidence are unchanged.
+- Target Version: Research execution modeling / Master Plan v1.10
+- Approved: Architect implementation instruction in Issue #223. No historical evaluation, Paper/Shadow/Live activation, acquisition or trading is authorized.
 
 ---
 
