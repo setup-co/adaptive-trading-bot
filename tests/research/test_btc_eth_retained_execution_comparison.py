@@ -1,0 +1,648 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import runpy
+import sys
+import time
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, getcontext
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
+
+import pyarrow.parquet as pq
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from adaptive_trading_bot.domain import TradingSymbol  # noqa: E402
+from adaptive_trading_bot.execution import (  # noqa: E402
+    SimulatedExecutionSide,
+    price_simulated_market_fill,
+)
+from adaptive_trading_bot.orders import EntryOrderIntentAuthorizer, EntrySide  # noqa: E402
+from adaptive_trading_bot.research import (  # noqa: E402
+    breakout_history_screened_comparison as history_protocol,
+)
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (  # noqa: E402
+    ComparisonArm,
+    ComparisonScenario,
+    HistoryScreenedConfiguration,
+    HistoryScreenedTask,
+    scenario_costs,
+    synthetic_binding,
+)
+from adaptive_trading_bot.research.breakout_history_screened_execution import (  # noqa: E402
+    execute_task,
+    read_results,
+)
+from adaptive_trading_bot.research.breakout_history_screened_ledger import (  # noqa: E402
+    HistoryScreenedLedgerStore,
+)
+from adaptive_trading_bot.research.breakout_retest_replay import fixed_2r_geometry  # noqa: E402
+from adaptive_trading_bot.research.last_5m_protective_execution import (  # noqa: E402
+    ExitPolicy,
+    Last5mBar,
+    Last5mExecutionBinding,
+    Last5mExecutionStatus,
+    Last5mProtectionConfiguration,
+    ProtectionAcknowledgement,
+    TriggerBasis,
+    run_last_5m_protective_execution,
+)
+from adaptive_trading_bot.research.research_v2_corpus import Row, _table  # noqa: E402
+from adaptive_trading_bot.storage import SourceId  # noqa: E402
+
+SPEC = importlib.util.spec_from_file_location(
+    "btc_eth_retained_execution_comparison",
+    ROOT / "scripts/research/btc_eth_retained_execution_comparison.py",
+)
+assert SPEC is not None and SPEC.loader is not None
+subject = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = subject
+SPEC.loader.exec_module(subject)
+
+
+def tagged(value: Any) -> Any:
+    if value is None:
+        return ["none"]
+    if isinstance(value, str):
+        return ["str", value]
+    if isinstance(value, datetime):
+        return ["datetime", value.isoformat(), value.fold]
+    raise TypeError(value)
+
+
+def dataclass_tag(name: str, **fields: Any) -> list[Any]:
+    return ["dataclass", name, [[key, value] for key, value in fields.items()]]
+
+
+def enum(value: str) -> list[Any]:
+    return ["enum", "example.Enum", ["str", value]]
+
+
+def raw_record(*, observed: datetime | None = None, action: str = "LONG_CANDIDATE") -> list[Any]:
+    observed = observed or datetime(2026, 4, 10, 0, 15, tzinfo=UTC)
+    identity = dataclass_tag(
+        "example.Identity",
+        source_id=enum("source"),
+        symbol=dataclass_tag("example.Symbol"),
+        observed_at=tagged(observed),
+        strategy_id=tagged("breakout_retest"),
+        strategy_version=tagged("1.0.0"),
+    )
+    decision = dataclass_tag(
+        "example.Decision",
+        context=["none"],
+        strategy_evaluation=dataclass_tag("example.Evaluation", action=enum(action)),
+        risk_decision=dataclass_tag("example.Risk", status=enum("APPROVED")),
+        safety_decision=dataclass_tag("example.Safety", status=enum("CLEARED")),
+        identity=identity,
+    )
+    return dataclass_tag(
+        "example.Result",
+        decision=decision,
+        arm=enum("BASELINE"),
+        scenario=enum("BASE"),
+        task_id=tagged("task"),
+        population_sha256=tagged("a" * 64),
+    )
+
+
+def outcome(r: str | None, *, status: str = "ORDINARY_CLOSED") -> dict[str, object]:
+    return {
+        "status": status,
+        "filled": status != "ENTRY_UNFILLED",
+        "closed": r is not None,
+        "recovered": status == "INVALID_GEOMETRY_RECOVERED",
+        "unfilled": status == "ENTRY_UNFILLED",
+        "unresolved": r is None and status != "ENTRY_UNFILLED",
+        "closed_net_r": r,
+        "gross_pnl_quote": "10",
+        "fees_quote": "1",
+        "net_pnl_quote": "9",
+        "holding_upper_seconds": "300" if r is not None else None,
+        "ambiguous": False,
+        "gap": False,
+        "entry_grid_wait_seconds": "0",
+    }
+
+
+def test_raw_candidate_facts_are_bounded_and_preserve_decision_identity() -> None:
+    facts = subject._raw_facts(raw_record())
+    assert facts["arm"] == "BASELINE"
+    assert facts["scenario"] == "BASE"
+    assert facts["action"] == "LONG_CANDIDATE"
+    assert facts["risk"] == "APPROVED"
+    assert facts["safety"] == "CLEARED"
+    assert facts["observed_at"] == datetime(2026, 4, 10, 0, 15, tzinfo=UTC)
+
+
+def test_duplicate_or_missing_canonical_fields_fail_closed() -> None:
+    raw = raw_record()
+    raw[2] = [pair for pair in raw[2] if pair[0] != "task_id"]
+    with pytest.raises(subject.ComparisonError, match="task_id"):
+        subject._raw_facts(raw)
+
+
+def test_spacing_mask_is_frozen_before_outcomes() -> None:
+    start = datetime(2026, 4, 10, tzinfo=UTC)
+    values = [start, start + timedelta(hours=1), start + timedelta(hours=168)]
+    assert subject._mask(values) == {start, start + timedelta(hours=168)}
+
+
+def test_exact_aggregation_and_pairing_are_decimal_context_independent() -> None:
+    original = getcontext().prec
+    try:
+        getcontext().prec = 5
+        rows = [outcome("1.25"), outcome("-0.5"), outcome(None, status="TERMINAL_OPEN")]
+        result = subject._aggregate(rows)
+        waits = [outcome("1"), outcome("1")]
+        waits[1]["entry_grid_wait_seconds"] = "300"
+        wait_result = subject._aggregate(waits)
+        paired = subject._paired(
+            [
+                {"legacy": outcome("-1"), "new": outcome("1.5")},
+                {
+                    "legacy": outcome(None, status="ENTRY_UNFILLED"),
+                    "new": outcome(None, status="TERMINAL_OPEN"),
+                },
+            ]
+        )
+    finally:
+        getcontext().prec = original
+    assert result["net_r_mean"] == "0.375"
+    assert result["r_profit_factor"] == "2.5"
+    assert wait_result["grid_wait_count"] == 2
+    assert wait_result["recorded_grid_wait_count"] == 2
+    assert wait_result["positive_grid_delay_count"] == 1
+    assert paired["new_minus_old_closed_net_r_mean"] == "2.5"
+    assert paired["state_partitions"]["OLD_ENTRY_UNFILLED|NEW_TERMINAL_OPEN"] == 1
+
+
+def test_finite_window_accepts_master_exclusive_end_and_rejects_gaps() -> None:
+    source = SourceId("synthetic-window")
+    symbol = TradingSymbol("BTC", "USDT")
+    start = datetime(2026, 4, 10, tzinfo=UTC)
+    bars = tuple(
+        Last5mBar(
+            source,
+            symbol,
+            "epoch",
+            start + index * timedelta(minutes=5),
+            start + (index + 1) * timedelta(minutes=5),
+            Decimal("100"),
+            Decimal("101"),
+            Decimal("99"),
+            Decimal("100"),
+            Decimal("1"),
+        )
+        for index in range(3)
+    )
+    index = {bar.open_time: position for position, bar in enumerate(bars)}
+    assert subject._finite_window(bars, index, start, bars[-1].close_time) == bars
+    with pytest.raises(subject.ComparisonError, match="unavailable"):
+        subject._finite_window((bars[0], bars[2]), index, start, bars[-1].close_time)
+
+
+def test_budget_timeout_and_partial_rows_are_durable(tmp_path: Path) -> None:
+    state = subject.RunState(tmp_path, 0.0)
+    subject._append_jsonl(tmp_path / "rows.jsonl", {"completed": 1})
+    with pytest.raises(subject.BudgetExceeded):
+        state.check()
+    assert (tmp_path / "rows.jsonl").read_text() == '{"completed":1}\n'
+
+
+def test_expected_grid_is_exact_and_complete() -> None:
+    values = subject._expected_times()
+    assert len(values) == 17_280
+    assert values[0] == subject.SIGNAL_START
+    assert values[-1] == subject.SIGNAL_END_INCLUSIVE
+
+
+def test_actual_ledger_codec_authorizer_profile_and_output_round_trip(tmp_path: Path) -> None:
+    helpers = runpy.run_path(
+        str(Path(__file__).with_name("test_breakout_history_screened_comparison.py"))
+    )
+    store, configuration = helpers["_synthetic"]()
+    grant = helpers["_grant"](configuration.input_binding, "actual-driver-path")
+    executable = "1" * 40
+    ledger = HistoryScreenedLedgerStore.create(
+        tmp_path / "ledger-root",
+        grant,
+        actual_sha=executable,
+        synthetic_task_ids=(configuration.task.task_id,),
+    )
+    ledger.start(0)
+    artifacts = execute_task(
+        store,
+        configuration,
+        grant=grant,
+        actual_sha=executable,
+        directory=ledger.directory,
+        task_index=0,
+        synthetic=True,
+    )
+    ledger.complete(
+        0,
+        population_sha256=artifacts.population_sha256,
+        results_sha256=artifacts.results_sha256,
+        report_sha256=artifacts.report_sha256,
+    )
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    retained = evidence / "original-ledger"
+    ledger.directory.rename(retained)
+    rows: list[dict[str, object]] = []
+    for path in sorted(retained.iterdir()):
+        if not path.is_file():
+            continue
+        body = path.read_bytes()
+        rows.append(
+            {
+                "path": path.relative_to(evidence).as_posix(),
+                "bytes": len(body),
+                "sha256": sha256(body).hexdigest(),
+            }
+        )
+    final_event = retained / "0002.json"
+    events = subject._ledger_events(
+        evidence,
+        rows,
+        expected_final_sha=sha256(final_event.read_bytes()).hexdigest(),
+        expected_revision=2,
+    )
+    assert events[-1]["event"] == "COMPLETED"
+    sources = subject._select_task_inputs(evidence, rows, events, (configuration.task,))
+    source = sources[configuration.task.wire_symbol]
+    report = json.loads(Path(source["report"]).read_bytes())
+    expected_times = tuple(
+        configuration.task.signal_start + (index + 1) * timedelta(minutes=15)
+        for index in range(report["decision_slots_per_arm"])
+    )
+    state = subject.RunState(tmp_path / "output", time.monotonic() + 180)
+    state.output.mkdir()
+    typed, _ = subject._stream_task(source, report, state, expected_times=expected_times)
+    authorized = next(
+        value
+        for (arm, scenario, _), value in typed.items()
+        if arm == ComparisonArm.BASELINE.value
+        and scenario == ComparisonScenario.BASE.value
+        and EntryOrderIntentAuthorizer().authorize(value.decision).intent is not None
+    )
+    intent = EntryOrderIntentAuthorizer().authorize(authorized.decision).intent
+    assert intent is not None
+    opened = intent.authorized_at
+    source_id = SourceId(intent.source_id.value)
+    epoch = "synthetic-profile-epoch"
+
+    def bar(
+        index: int,
+        price: Decimal,
+        *,
+        high: Decimal | None = None,
+        low: Decimal | None = None,
+    ) -> Last5mBar:
+        value = price
+        high_value = value if high is None else high
+        low_value = value if low is None else low
+        start = opened + index * timedelta(minutes=5)
+        return Last5mBar(
+            source_id,
+            intent.symbol,
+            epoch,
+            start,
+            start + timedelta(minutes=5),
+            value,
+            max(value, high_value),
+            min(value, low_value),
+            value,
+            Decimal(1),
+        )
+
+    base_costs = scenario_costs(ComparisonScenario.BASE)
+    side = (
+        SimulatedExecutionSide.BUY if intent.side is EntrySide.BUY else SimulatedExecutionSide.SELL
+    )
+    priced = price_simulated_market_fill(
+        side=side,
+        quantity=intent.quantity,
+        reference_price=intent.reference_price,
+        costs=base_costs,
+    )
+    _, target = fixed_2r_geometry(intent.side, priced.fill_price, intent.stop_basis)
+    neutral = intent.reference_price
+    target_bar = bar(
+        1,
+        neutral,
+        high=max(neutral, target, intent.stop_basis),
+        low=min(neutral, target, intent.stop_basis),
+    )
+    ordinary_bars = (bar(0, neutral), target_bar)
+    ordinary = run_last_5m_protective_execution(
+        intent=intent,
+        binding=Last5mExecutionBinding(
+            source_id, intent.symbol, epoch, opened, opened + timedelta(minutes=10)
+        ),
+        bars=ordinary_bars,
+        configuration=Last5mProtectionConfiguration(base_costs, ExitPolicy.FIXED_2R),
+    )
+    open_result = run_last_5m_protective_execution(
+        intent=intent,
+        binding=Last5mExecutionBinding(
+            source_id, intent.symbol, epoch, opened, opened + timedelta(minutes=10)
+        ),
+        bars=(bar(0, neutral), bar(1, neutral)),
+        configuration=Last5mProtectionConfiguration(base_costs, ExitPolicy.FIXED_2R),
+    )
+    unfilled = run_last_5m_protective_execution(
+        intent=intent,
+        binding=Last5mExecutionBinding(
+            source_id, intent.symbol, epoch, opened, opened + timedelta(minutes=5)
+        ),
+        bars=(bar(0, neutral),),
+        configuration=Last5mProtectionConfiguration(
+            scenario_costs(ComparisonScenario.STRESS),
+            ExitPolicy.FIXED_2R,
+            acknowledgement=ProtectionAcknowledgement.ACCEPTED,
+            trigger_basis=TriggerBasis.LAST,
+        ),
+    )
+    invalid_open = (
+        intent.stop_basis * type(intent.stop_basis)("0.99")
+        if intent.side is EntrySide.BUY
+        else intent.stop_basis * type(intent.stop_basis)("1.01")
+    )
+    recovered = run_last_5m_protective_execution(
+        intent=intent,
+        binding=Last5mExecutionBinding(
+            source_id, intent.symbol, epoch, opened, opened + timedelta(minutes=10)
+        ),
+        bars=(bar(0, invalid_open), bar(1, invalid_open)),
+        configuration=Last5mProtectionConfiguration(base_costs, ExitPolicy.FIXED_2R),
+    )
+    assert ordinary.status is Last5mExecutionStatus.ORDINARY_CLOSED
+    assert ordinary.trigger is not None
+    assert ordinary.trigger.kind.value == "DUAL_TOUCH_STOP_FIRST"
+    assert ordinary.entry_fill is not None
+    assert ordinary.exit_fill is not None
+    assert open_result.status is Last5mExecutionStatus.TERMINAL_OPEN
+    assert unfilled.status is Last5mExecutionStatus.ENTRY_UNFILLED
+    assert recovered.status is Last5mExecutionStatus.INVALID_GEOMETRY_RECOVERED
+    saved = {
+        "ordinary": subject._new_row(ordinary),
+        "open": subject._new_row(open_result),
+        "unfilled": subject._new_row(unfilled),
+        "recovered": subject._new_row(recovered),
+    }
+    subject._replace_json(tmp_path / "synthetic-output.json", saved)
+    loaded = json.loads((tmp_path / "synthetic-output.json").read_bytes())
+    assert loaded["ordinary"]["closed"]
+    assert loaded["ordinary"]["dual_touch_stop_first"]
+    assert loaded["ordinary"]["approved_risk_quote"] == str(intent.approved_risk_quote)
+    assert loaded["ordinary"]["quantity"] == str(intent.quantity)
+    assert loaded["ordinary"]["entry_fee_quote"] == str(ordinary.entry_fill.fee_quote)
+    assert loaded["ordinary"]["exit_fee_quote"] == str(ordinary.exit_fill.fee_quote)
+
+    with pytest.raises(subject.ComparisonError, match="missing"):
+        subject._select_task_inputs(
+            evidence,
+            rows,
+            [replace_event for replace_event in events if replace_event["event"] != "COMPLETED"],
+            (configuration.task,),
+        )
+    with pytest.raises(subject.ComparisonError, match="duplicated"):
+        subject._select_task_inputs(
+            evidence,
+            rows,
+            [*events, dict(events[-1])],
+            (configuration.task,),
+        )
+
+
+def test_actual_cli_discovers_canonical_inputs_and_writes_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helpers = runpy.run_path(
+        str(Path(__file__).with_name("test_breakout_history_screened_comparison.py"))
+    )
+    store_btc, configuration_btc = helpers["_synthetic"]()
+    store_eth = helpers["SyntheticHistoryScreenedStore"]()
+    store_eth.symbol = TradingSymbol("ETH", "USDT")
+    store_eth.candles = {
+        frame: tuple(replace(candle, symbol=store_eth.symbol) for candle in values)
+        for frame, values in store_eth.candles.items()
+    }
+    task_eth = HistoryScreenedTask(
+        1,
+        "ETHUSDT",
+        context_start=configuration_btc.task.context_start,
+        signal_start=configuration_btc.task.signal_start,
+        signal_end=configuration_btc.task.signal_end,
+        follow_up_end=configuration_btc.task.follow_up_end,
+    )
+    monkeypatch.setattr(history_protocol, "PANEL", ("BTCUSDT", "ETHUSDT"))
+    monkeypatch.setattr(history_protocol, "CONTEXT_START", task_eth.context_start)
+    monkeypatch.setattr(history_protocol, "SIGNAL_START", task_eth.signal_start)
+    monkeypatch.setattr(history_protocol, "SIGNAL_END", task_eth.signal_end)
+    monkeypatch.setattr(history_protocol, "FOLLOW_UP_END", task_eth.follow_up_end)
+    binding_eth = synthetic_binding(store_eth, task_eth)
+    store_eth.bind(binding_eth)
+    configuration_eth = HistoryScreenedConfiguration(task_eth, binding_eth)
+    configurations = (configuration_btc, configuration_eth)
+    stores = (store_btc, store_eth)
+    executable = "1" * 40
+    grants = tuple(
+        helpers["_grant"](configuration.input_binding, "cli-synthetic-run")
+        for configuration in configurations
+    )
+    ledger = HistoryScreenedLedgerStore.create(
+        tmp_path / "ledger-root",
+        grants[0],
+        actual_sha=executable,
+        synthetic_task_ids=tuple(configuration.task.task_id for configuration in configurations),
+    )
+    for index, (store, configuration, grant) in enumerate(
+        zip(stores, configurations, grants, strict=True)
+    ):
+        ledger.start(index)
+        artifacts = execute_task(
+            store,
+            configuration,
+            grant=grant,
+            actual_sha=executable,
+            directory=ledger.directory,
+            task_index=index,
+            synthetic=True,
+        )
+        ledger.complete(
+            index,
+            population_sha256=artifacts.population_sha256,
+            results_sha256=artifacts.results_sha256,
+            report_sha256=artifacts.report_sha256,
+        )
+
+    repo = tmp_path / "repo"
+    evidence = repo / "evidence"
+    evidence.mkdir(parents=True)
+    retained = evidence / "original-ledger"
+    ledger.directory.rename(retained)
+    indexed: list[dict[str, object]] = []
+    for path in sorted(retained.iterdir()):
+        if path.is_file():
+            body = path.read_bytes()
+            indexed.append(
+                {
+                    "path": path.relative_to(evidence).as_posix(),
+                    "bytes": len(body),
+                    "sha256": sha256(body).hexdigest(),
+                }
+            )
+    index_path = evidence / "artifact-index.json"
+    index_path.write_bytes(subject._canonical({"artifacts": indexed}) + b"\n")
+
+    signal_start = configuration_btc.task.signal_start + timedelta(minutes=15)
+    signal_end = configuration_btc.task.signal_end
+    follow_up_end = signal_end + timedelta(hours=168)
+    corpus = repo / "corpus"
+    parquet_root = corpus / "parquet"
+    parquet_root.mkdir(parents=True)
+    files: dict[str, str] = {}
+    members: dict[str, object] = {}
+    for configuration in configurations:
+        symbol = configuration.task.wire_symbol
+        result_path = retained / f"{configuration.task.index:02d}.results.jsonl.gz"
+        results = read_results(result_path.read_bytes())
+        intent = next(
+            authorization.intent
+            for result in results
+            if result.scenario is ComparisonScenario.BASE
+            and (authorization := EntryOrderIntentAuthorizer().authorize(result.decision)).intent
+            is not None
+        )
+        assert intent is not None
+        candle_rows = []
+        opened = signal_start
+        while opened < follow_up_end:
+            millis = int(opened.timestamp() * 1000)
+            price = intent.reference_price
+            candle_rows.append(
+                Row(
+                    millis,
+                    price,
+                    price * Decimal("100"),
+                    price / Decimal("100"),
+                    price,
+                    Decimal("1"),
+                    millis + 300_000,
+                    price,
+                    1,
+                    Decimal("0.5"),
+                    price / Decimal("2"),
+                )
+            )
+            opened += timedelta(minutes=5)
+        relative = f"parquet/{symbol}-5m.parquet"
+        path = corpus / relative
+        pq.write_table(_table(symbol, "5m", candle_rows), path)
+        files[relative] = sha256(path.read_bytes()).hexdigest()
+        members[symbol] = {
+            "status": "QUALIFIED",
+            "epochs": [
+                {
+                    "start_ms": int(signal_start.timestamp() * 1000),
+                    "end_ms": int(follow_up_end.timestamp() * 1000),
+                }
+            ],
+        }
+    manifest = {
+        "dataset_version": grants[0].source_id,
+        "status": "QUALIFIED",
+        "files": files,
+    }
+    report = {"symbols": members}
+    plan = {"schema": "synthetic-canonical-plan"}
+    for name, value in (("manifest.json", manifest), ("report.json", report), ("plan.json", plan)):
+        (corpus / name).write_bytes(subject._canonical(value) + b"\n")
+
+    final_event = retained / "0004.json"
+    monkeypatch.setattr(subject, "TASKS", tuple(item.task for item in configurations))
+    monkeypatch.setattr(subject, "SYMBOLS", ("BTCUSDT", "ETHUSDT"))
+    monkeypatch.setattr(subject, "EVIDENCE_ROOT", Path("evidence"))
+    monkeypatch.setattr(subject, "CORPUS_ROOT", Path("corpus"))
+    monkeypatch.setattr(subject, "ARTIFACT_INDEX_SHA", sha256(index_path.read_bytes()).hexdigest())
+    monkeypatch.setattr(subject, "ORIGINAL_EVENT_SHA", sha256(final_event.read_bytes()).hexdigest())
+    monkeypatch.setattr(subject, "ORIGINAL_EVENT_REVISION", 4)
+    monkeypatch.setattr(subject, "ORIGINAL_UUID", grants[0].run_uuid)
+    monkeypatch.setattr(subject, "ORIGINAL_EXECUTABLE", executable)
+    monkeypatch.setattr(subject, "RETAINED_PROTOCOL_SHA256", grants[0].protocol_sha256)
+    monkeypatch.setattr(subject, "RETAINED_TASK_PLAN_SHA256", grants[0].task_plan_sha256)
+    monkeypatch.setattr(subject, "RETAINED_DATASET_VERSION", grants[0].dataset_version)
+    monkeypatch.setattr(subject, "RETAINED_MANIFEST_SHA256", grants[0].manifest_sha256)
+    monkeypatch.setattr(subject, "RETAINED_REPORT_SHA256", grants[0].manifest_sha256)
+    monkeypatch.setattr(subject, "RETAINED_PLAN_SHA256", grants[0].manifest_sha256)
+    monkeypatch.setattr(
+        subject, "CORPUS_MANIFEST_SHA", sha256((corpus / "manifest.json").read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(
+        subject, "CORPUS_REPORT_SHA", sha256((corpus / "report.json").read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(
+        subject, "CORPUS_PLAN_SHA", sha256((corpus / "plan.json").read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(subject, "DATASET_VERSION", grants[0].source_id)
+    monkeypatch.setattr(subject, "SIGNAL_START", signal_start)
+    monkeypatch.setattr(subject, "SIGNAL_END_INCLUSIVE", signal_end)
+    monkeypatch.setattr(subject, "FOLLOW_UP_END", follow_up_end)
+    monkeypatch.setattr(subject, "EXPECTED_SLOTS", 8)
+    monkeypatch.setattr(subject, "EXPECTED_RECORDS", 32)
+    output = tmp_path / "output"
+    run_record = tmp_path / "run-record.json"
+    run_record.write_bytes(
+        subject._canonical({"protocol": subject.PROTOCOL, "model_sha": subject.MODEL_SHA}) + b"\n"
+    )
+
+    assert (
+        subject.main(
+            ["--repo", str(repo), "--output", str(output), "--run-record", str(run_record)]
+        )
+        == 0
+    )
+    projection = json.loads((output / "projection.json").read_bytes())
+    assert projection["status"] == "COMPLETE"
+    assert set(projection["members"]) == {"BTCUSDT", "ETHUSDT"}
+    for member in projection["members"].values():
+        assert set(member["cells"]) == {
+            "BASELINE:BASE",
+            "BASELINE:STRESS",
+            "ZONE:BASE",
+            "ZONE:STRESS",
+        }
+        for cell_name, cell in member["cells"].items():
+            assert cell["full"]["legacy"]["denominator"] == 1
+            assert cell["full"]["new"]["denominator"] == 1
+            assert cell["full"]["paired"]["denominator"] == 1
+            assert cell["full"]["new"]["dual_touch_stop_first_count"] == 1
+            assert cell["full"]["new"]["recorded_grid_wait_count"] == 1
+            assert cell["full"]["new"]["positive_grid_delay_count"] == int(
+                cell_name.endswith(":STRESS")
+            )
+    output_rows: list[dict[str, Any]] = [
+        json.loads(line) for line in (output / "per-trade.jsonl").read_text().splitlines()
+    ]
+    assert len(output_rows) == 8
+    assert all(row["new"]["approved_risk_quote"] for row in output_rows)
+    assert all(row["new"]["quantity"] for row in output_rows)
+    assert all(row["new"]["risk_distance"] for row in output_rows)
+    assert all(row["new"]["target_price"] for row in output_rows)
+    assert all(row["new"]["entry_fee_quote"] for row in output_rows)
+    assert all(row["new"]["exit_fee_quote"] for row in output_rows)
+    assert all(row["legacy"]["approved_risk_quote"] for row in output_rows)
+    assert all(row["legacy"]["quantity"] for row in output_rows)
+    assert all(row["legacy"]["entry_fill_price"] for row in output_rows)
+    assert all(row["legacy"]["exit_fill_price"] for row in output_rows)
+    assert all(row["legacy"]["entry_fee_quote"] for row in output_rows)
+    assert all(row["legacy"]["exit_fee_quote"] for row in output_rows)
