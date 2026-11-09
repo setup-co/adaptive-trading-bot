@@ -6,6 +6,19 @@
 
 ---
 
+## Issue #225 bounded BTC/ETH execution comparison (2026-11-09)
+
+- PR #224 / Issue #223 is integrated at `90101c22d9465ba2fb41eedb3164ac0285c8b9e3`.
+- The one authorized real-input attempt for
+  `BTC_ETH_RETAINED_DECISION_EXECUTION_COMPARISON_V1` stopped during frozen
+  input-inventory discovery with `INCOMPLETE_TECHNICAL_BLOCKER`: the retained
+  publication inventory did not produce a unique BTCUSDT committed task event.
+- The attempt decoded zero retained records, read zero 5m shards, executed zero
+  trades, and produced no economic classification. Its no-retry boundary is
+  preserved in the retained Issue #225 evidence/report.
+
+---
+
 ## 1. Trusted repository state at this snapshot
 
 Current trusted `main` after the squash integration of PR #211 / Issue #210:
