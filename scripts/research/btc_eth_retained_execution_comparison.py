@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -26,6 +27,9 @@ from typing import Any, BinaryIO, cast
 
 from adaptive_trading_bot.orders import EntryOrderIntentAuthorizer, OrderIntentAuthorizationStatus
 from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+    DATASET_VERSION as RETAINED_DATASET_VERSION,
+)
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     FOLLOW_UP,
     TASKS,
     ComparisonArm,
@@ -33,6 +37,22 @@ from adaptive_trading_bot.research.breakout_history_screened_comparison import (
     HistoryScreenedReplayResult,
     scenario_costs,
 )
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+    MANIFEST_SHA256 as RETAINED_MANIFEST_SHA256,
+)
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+    PLAN_SHA256 as RETAINED_PLAN_SHA256,
+)
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+    PROTOCOL_SHA256 as RETAINED_PROTOCOL_SHA256,
+)
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+    REPORT_SHA256 as RETAINED_REPORT_SHA256,
+)
+from adaptive_trading_bot.research.breakout_history_screened_comparison import (
+    TASK_PLAN_SHA256 as RETAINED_TASK_PLAN_SHA256,
+)
+from adaptive_trading_bot.research.breakout_history_screened_ledger import LEDGER_SCHEMA_VERSION
 from adaptive_trading_bot.research.last_5m_protective_execution import (
     ExitPolicy,
     Last5mExecutionBinding,
@@ -233,6 +253,147 @@ def _indexed_path(root: Path, row: dict[str, object]) -> Path:
     return root / name
 
 
+def _indexed_size(row: dict[str, object]) -> int:
+    value = row.get("bytes") if row.get("bytes") is not None else row.get("size")
+    if type(value) is not int or value < 0:
+        raise ComparisonError("artifact index size is invalid")
+    return value
+
+
+def _indexed_digest(row: dict[str, object]) -> str:
+    value = row.get("sha256")
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ComparisonError("artifact index digest is invalid")
+    return value
+
+
+def _read_indexed(root: Path, row: dict[str, object]) -> bytes:
+    path = _indexed_path(root, row)
+    body = path.read_bytes()
+    if len(body) != _indexed_size(row) or _sha(body) != _indexed_digest(row):
+        raise ComparisonError(f"indexed artifact bytes changed: {path.name}")
+    return body
+
+
+def _ledger_events(
+    evidence: Path,
+    rows: list[dict[str, object]],
+    *,
+    expected_final_sha: str = ORIGINAL_EVENT_SHA,
+    expected_revision: int = 20,
+) -> list[dict[str, object]]:
+    event_rows: dict[int, dict[str, object]] = {}
+    for row in rows:
+        name = row.get("path") or row.get("name")
+        if not isinstance(name, str):
+            continue
+        match = re.search(r"(?:^|/)original-ledger/(\d{4})\.json$", name)
+        if match is None:
+            continue
+        revision = int(match.group(1))
+        if revision in event_rows:
+            raise ComparisonError("retained ledger revision is duplicated in artifact index")
+        event_rows[revision] = row
+    if set(event_rows) != set(range(expected_revision + 1)):
+        raise ComparisonError("retained ledger event inventory is incomplete or extra")
+    events: list[dict[str, object]] = []
+    previous: str | None = None
+    for revision in range(expected_revision + 1):
+        body = _read_indexed(evidence, event_rows[revision])
+        try:
+            event = json.loads(body)
+        except (UnicodeError, ValueError) as exc:
+            raise ComparisonError("retained ledger event is malformed") from exc
+        if (
+            not isinstance(event, dict)
+            or _canonical(event) != body
+            or event.get("schema_version") != LEDGER_SCHEMA_VERSION
+            or event.get("revision") != revision
+            or event.get("previous_sha256") != previous
+        ):
+            raise ComparisonError("retained ledger hash chain is contradictory")
+        events.append(event)
+        previous = _sha(body)
+    if previous != expected_final_sha:
+        raise ComparisonError("retained ledger final event identity changed")
+    return events
+
+
+def _validate_original_creation(events: list[dict[str, object]]) -> None:
+    created = events[0]
+    task_ids = created.get("task_ids")
+    if (
+        created.get("event") != "CREATED"
+        or created.get("run_uuid") != ORIGINAL_UUID
+        or created.get("executable_sha") != ORIGINAL_EXECUTABLE
+        or created.get("protocol_sha256") != RETAINED_PROTOCOL_SHA256
+        or created.get("task_plan_sha256") != RETAINED_TASK_PLAN_SHA256
+        or created.get("dataset_version") != RETAINED_DATASET_VERSION
+        or created.get("manifest_sha256") != RETAINED_MANIFEST_SHA256
+        or created.get("report_sha256") != RETAINED_REPORT_SHA256
+        or created.get("plan_sha256") != RETAINED_PLAN_SHA256
+        or not isinstance(task_ids, list)
+        or tuple(task_ids) != tuple(task.task_id for task in TASKS)
+    ):
+        raise ComparisonError("retained ledger creation provenance changed")
+
+
+def _select_task_inputs(
+    evidence: Path,
+    rows: list[dict[str, object]],
+    events: list[dict[str, object]],
+    tasks: Iterable[object],
+) -> dict[str, dict[str, object]]:
+    by_digest = {_indexed_digest(row): row for row in rows}
+    found: dict[str, dict[str, object]] = {}
+    for raw_task in tasks:
+        task = cast(Any, raw_task)
+        symbol = cast(str, task.wire_symbol)
+        matching = [
+            event
+            for event in events
+            if event.get("event") == "COMPLETED" and event.get("task_index") == task.index
+        ]
+        if not matching:
+            raise ComparisonError(f"{symbol} committed task event is missing")
+        if len(matching) > 1:
+            raise ComparisonError(f"{symbol} committed task event is duplicated")
+        event = matching[0]
+        result_row = by_digest.get(str(event.get("results_sha256")))
+        report_row = by_digest.get(str(event.get("report_sha256")))
+        if result_row is None or report_row is None:
+            raise ComparisonError(f"{symbol} task artifacts are absent from indexed inventory")
+        report_body = _read_indexed(evidence, report_row)
+        try:
+            report = json.loads(report_body)
+        except (UnicodeError, ValueError) as exc:
+            raise ComparisonError(f"{symbol} retained task report is malformed") from exc
+        if (
+            not isinstance(report, dict)
+            or report.get("task_id") != task.task_id
+            or report.get("task_index") != task.index
+            or report.get("wire_symbol") != symbol
+            or report.get("population_sha256") != event.get("population_sha256")
+        ):
+            raise ComparisonError(f"{symbol} task report differs from committed task authority")
+        found[symbol] = {
+            "task_id": task.task_id,
+            "task_index": task.index,
+            "results": _indexed_path(evidence, result_row),
+            "results_sha256": event["results_sha256"],
+            "results_bytes": _indexed_size(result_row),
+            "report": _indexed_path(evidence, report_row),
+            "report_sha256": event["report_sha256"],
+            "report_bytes": _indexed_size(report_row),
+            "population_sha256": event["population_sha256"],
+        }
+    return found
+
+
 def _discover_inputs(repo: Path) -> dict[str, dict[str, object]]:
     evidence = repo / EVIDENCE_ROOT
     index_path = evidence / "artifact-index.json"
@@ -240,39 +401,10 @@ def _discover_inputs(repo: Path) -> dict[str, dict[str, object]]:
     if _sha(index_body) != ARTIFACT_INDEX_SHA:
         raise ComparisonError("Issue #220 artifact index identity changed")
     rows = _index_rows(json.loads(index_body))
-    by_digest = {str(row.get("sha256")): row for row in rows if row.get("sha256")}
-    events: list[dict[str, object]] = []
-    for row in rows:
-        path = _indexed_path(evidence, row)
-        size = row.get("bytes") if row.get("bytes") is not None else row.get("size")
-        if path.suffix == ".json" and isinstance(size, int) and size <= 32_768:
-            try:
-                value = json.loads(path.read_bytes())
-            except (OSError, ValueError):
-                continue
-            if isinstance(value, dict) and value.get("event") == "TASK_COMPLETED":
-                events.append(value)
-    found: dict[str, dict[str, object]] = {}
+    events = _ledger_events(evidence, rows)
+    _validate_original_creation(events)
     tasks = {task.wire_symbol: task for task in TASKS if task.wire_symbol in SYMBOLS}
-    for symbol, task in tasks.items():
-        matching = [event for event in events if event.get("task_index") == task.index]
-        if len(matching) != 1:
-            raise ComparisonError(f"{symbol} committed task event is not unique")
-        event = matching[0]
-        result_row = by_digest.get(str(event.get("results_sha256")))
-        report_row = by_digest.get(str(event.get("report_sha256")))
-        if result_row is None or report_row is None:
-            raise ComparisonError(f"{symbol} task artifacts are absent from indexed inventory")
-        found[symbol] = {
-            "task_id": task.task_id,
-            "task_index": task.index,
-            "results": _indexed_path(evidence, result_row),
-            "results_sha256": event["results_sha256"],
-            "results_bytes": result_row.get("bytes") or result_row.get("size"),
-            "report": _indexed_path(evidence, report_row),
-            "report_sha256": event["report_sha256"],
-            "report_bytes": report_row.get("bytes") or report_row.get("size"),
-        }
+    found = _select_task_inputs(evidence, rows, events, tasks.values())
     if set(found) != set(SYMBOLS):
         raise ComparisonError("BTC/ETH task inventory is incomplete")
     return found
@@ -330,7 +462,11 @@ def _expected_times() -> tuple[datetime, ...]:
 
 
 def _stream_task(
-    source: dict[str, object], report: dict[str, object], state: RunState
+    source: dict[str, object],
+    report: dict[str, object],
+    state: RunState,
+    *,
+    expected_times: tuple[datetime, ...] | None = None,
 ) -> tuple[dict[tuple[str, str, datetime], HistoryScreenedReplayResult], dict[str, Counter[str]]]:
     path = cast(Path, source["results"])
     expected_size = source["results_bytes"]
@@ -353,6 +489,8 @@ def _stream_task(
                 observed = cast(datetime, facts["observed_at"])
                 if facts["task_id"] != source["task_id"]:
                     raise ComparisonError("retained result task linkage changed")
+                if facts["population_sha256"] != source["population_sha256"]:
+                    raise ComparisonError("retained result population linkage changed")
                 cells[(raw_arm, raw_scenario)].append(observed)
                 decision_digest = _sha(_canonical(facts["decision"]))
                 prior = decision_hashes.setdefault((raw_arm, observed), decision_digest)
@@ -376,12 +514,14 @@ def _stream_task(
         isinstance(expected_size, int) and size != expected_size
     ):
         raise ComparisonError("retained result stream hash/size changed")
-    expected_times = _expected_times()
+    expected_times = _expected_times() if expected_times is None else expected_times
     for key, values in cells.items():
         if tuple(values) != expected_times:
             raise ComparisonError(f"retained decision grid is incomplete or unordered for {key}")
-    if sum(len(values) for values in cells.values()) != EXPECTED_RECORDS:
+    if sum(len(values) for values in cells.values()) != len(expected_times) * 4:
         raise ComparisonError("retained task record count changed")
+    if report.get("population_sha256") != source["population_sha256"]:
+        raise ComparisonError("retained report population linkage changed")
     return typed, counts
 
 
