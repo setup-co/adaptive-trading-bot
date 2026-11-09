@@ -5,29 +5,39 @@ import json
 import runpy
 import sys
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, getcontext
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from adaptive_trading_bot.domain import TradingSymbol  # noqa: E402
 from adaptive_trading_bot.execution import (  # noqa: E402
     SimulatedExecutionSide,
     price_simulated_market_fill,
 )
 from adaptive_trading_bot.orders import EntryOrderIntentAuthorizer, EntrySide  # noqa: E402
+from adaptive_trading_bot.research import (  # noqa: E402
+    breakout_history_screened_comparison as history_protocol,
+)
 from adaptive_trading_bot.research.breakout_history_screened_comparison import (  # noqa: E402
     ComparisonArm,
     ComparisonScenario,
+    HistoryScreenedConfiguration,
+    HistoryScreenedTask,
     scenario_costs,
+    synthetic_binding,
 )
 from adaptive_trading_bot.research.breakout_history_screened_execution import (  # noqa: E402
     execute_task,
+    read_results,
 )
 from adaptive_trading_bot.research.breakout_history_screened_ledger import (  # noqa: E402
     HistoryScreenedLedgerStore,
@@ -43,6 +53,7 @@ from adaptive_trading_bot.research.last_5m_protective_execution import (  # noqa
     TriggerBasis,
     run_last_5m_protective_execution,
 )
+from adaptive_trading_bot.research.research_v2_corpus import Row, _table  # noqa: E402
 from adaptive_trading_bot.storage import SourceId  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
@@ -149,6 +160,9 @@ def test_exact_aggregation_and_pairing_are_decimal_context_independent() -> None
         getcontext().prec = 5
         rows = [outcome("1.25"), outcome("-0.5"), outcome(None, status="TERMINAL_OPEN")]
         result = subject._aggregate(rows)
+        waits = [outcome("1"), outcome("1")]
+        waits[1]["entry_grid_wait_seconds"] = "300"
+        wait_result = subject._aggregate(waits)
         paired = subject._paired(
             [
                 {"legacy": outcome("-1"), "new": outcome("1.5")},
@@ -162,8 +176,36 @@ def test_exact_aggregation_and_pairing_are_decimal_context_independent() -> None
         getcontext().prec = original
     assert result["net_r_mean"] == "0.375"
     assert result["r_profit_factor"] == "2.5"
+    assert wait_result["grid_wait_count"] == 2
+    assert wait_result["recorded_grid_wait_count"] == 2
+    assert wait_result["positive_grid_delay_count"] == 1
     assert paired["new_minus_old_closed_net_r_mean"] == "2.5"
     assert paired["state_partitions"]["OLD_ENTRY_UNFILLED|NEW_TERMINAL_OPEN"] == 1
+
+
+def test_finite_window_accepts_master_exclusive_end_and_rejects_gaps() -> None:
+    source = SourceId("synthetic-window")
+    symbol = TradingSymbol("BTC", "USDT")
+    start = datetime(2026, 4, 10, tzinfo=UTC)
+    bars = tuple(
+        Last5mBar(
+            source,
+            symbol,
+            "epoch",
+            start + index * timedelta(minutes=5),
+            start + (index + 1) * timedelta(minutes=5),
+            Decimal("100"),
+            Decimal("101"),
+            Decimal("99"),
+            Decimal("100"),
+            Decimal("1"),
+        )
+        for index in range(3)
+    )
+    index = {bar.open_time: position for position, bar in enumerate(bars)}
+    assert subject._finite_window(bars, index, start, bars[-1].close_time) == bars
+    with pytest.raises(subject.ComparisonError, match="unavailable"):
+        subject._finite_window((bars[0], bars[2]), index, start, bars[-1].close_time)
 
 
 def test_budget_timeout_and_partial_rows_are_durable(tmp_path: Path) -> None:
@@ -293,7 +335,12 @@ def test_actual_ledger_codec_authorizer_profile_and_output_round_trip(tmp_path: 
     )
     _, target = fixed_2r_geometry(intent.side, priced.fill_price, intent.stop_basis)
     neutral = intent.reference_price
-    target_bar = bar(1, neutral, high=max(neutral, target), low=min(neutral, target))
+    target_bar = bar(
+        1,
+        neutral,
+        high=max(neutral, target, intent.stop_basis),
+        low=min(neutral, target, intent.stop_basis),
+    )
     ordinary_bars = (bar(0, neutral), target_bar)
     ordinary = run_last_5m_protective_execution(
         intent=intent,
@@ -338,6 +385,10 @@ def test_actual_ledger_codec_authorizer_profile_and_output_round_trip(tmp_path: 
         configuration=Last5mProtectionConfiguration(base_costs, ExitPolicy.FIXED_2R),
     )
     assert ordinary.status is Last5mExecutionStatus.ORDINARY_CLOSED
+    assert ordinary.trigger is not None
+    assert ordinary.trigger.kind.value == "DUAL_TOUCH_STOP_FIRST"
+    assert ordinary.entry_fill is not None
+    assert ordinary.exit_fill is not None
     assert open_result.status is Last5mExecutionStatus.TERMINAL_OPEN
     assert unfilled.status is Last5mExecutionStatus.ENTRY_UNFILLED
     assert recovered.status is Last5mExecutionStatus.INVALID_GEOMETRY_RECOVERED
@@ -348,7 +399,13 @@ def test_actual_ledger_codec_authorizer_profile_and_output_round_trip(tmp_path: 
         "recovered": subject._new_row(recovered),
     }
     subject._replace_json(tmp_path / "synthetic-output.json", saved)
-    assert json.loads((tmp_path / "synthetic-output.json").read_bytes())["ordinary"]["closed"]
+    loaded = json.loads((tmp_path / "synthetic-output.json").read_bytes())
+    assert loaded["ordinary"]["closed"]
+    assert loaded["ordinary"]["dual_touch_stop_first"]
+    assert loaded["ordinary"]["approved_risk_quote"] == str(intent.approved_risk_quote)
+    assert loaded["ordinary"]["quantity"] == str(intent.quantity)
+    assert loaded["ordinary"]["entry_fee_quote"] == str(ordinary.entry_fill.fee_quote)
+    assert loaded["ordinary"]["exit_fee_quote"] == str(ordinary.exit_fill.fee_quote)
 
     with pytest.raises(subject.ComparisonError, match="missing"):
         subject._select_task_inputs(
@@ -364,3 +421,228 @@ def test_actual_ledger_codec_authorizer_profile_and_output_round_trip(tmp_path: 
             [*events, dict(events[-1])],
             (configuration.task,),
         )
+
+
+def test_actual_cli_discovers_canonical_inputs_and_writes_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helpers = runpy.run_path(
+        str(Path(__file__).with_name("test_breakout_history_screened_comparison.py"))
+    )
+    store_btc, configuration_btc = helpers["_synthetic"]()
+    store_eth = helpers["SyntheticHistoryScreenedStore"]()
+    store_eth.symbol = TradingSymbol("ETH", "USDT")
+    store_eth.candles = {
+        frame: tuple(replace(candle, symbol=store_eth.symbol) for candle in values)
+        for frame, values in store_eth.candles.items()
+    }
+    task_eth = HistoryScreenedTask(
+        1,
+        "ETHUSDT",
+        context_start=configuration_btc.task.context_start,
+        signal_start=configuration_btc.task.signal_start,
+        signal_end=configuration_btc.task.signal_end,
+        follow_up_end=configuration_btc.task.follow_up_end,
+    )
+    monkeypatch.setattr(history_protocol, "PANEL", ("BTCUSDT", "ETHUSDT"))
+    monkeypatch.setattr(history_protocol, "CONTEXT_START", task_eth.context_start)
+    monkeypatch.setattr(history_protocol, "SIGNAL_START", task_eth.signal_start)
+    monkeypatch.setattr(history_protocol, "SIGNAL_END", task_eth.signal_end)
+    monkeypatch.setattr(history_protocol, "FOLLOW_UP_END", task_eth.follow_up_end)
+    binding_eth = synthetic_binding(store_eth, task_eth)
+    store_eth.bind(binding_eth)
+    configuration_eth = HistoryScreenedConfiguration(task_eth, binding_eth)
+    configurations = (configuration_btc, configuration_eth)
+    stores = (store_btc, store_eth)
+    executable = "1" * 40
+    grants = tuple(
+        helpers["_grant"](configuration.input_binding, "cli-synthetic-run")
+        for configuration in configurations
+    )
+    ledger = HistoryScreenedLedgerStore.create(
+        tmp_path / "ledger-root",
+        grants[0],
+        actual_sha=executable,
+        synthetic_task_ids=tuple(configuration.task.task_id for configuration in configurations),
+    )
+    for index, (store, configuration, grant) in enumerate(
+        zip(stores, configurations, grants, strict=True)
+    ):
+        ledger.start(index)
+        artifacts = execute_task(
+            store,
+            configuration,
+            grant=grant,
+            actual_sha=executable,
+            directory=ledger.directory,
+            task_index=index,
+            synthetic=True,
+        )
+        ledger.complete(
+            index,
+            population_sha256=artifacts.population_sha256,
+            results_sha256=artifacts.results_sha256,
+            report_sha256=artifacts.report_sha256,
+        )
+
+    repo = tmp_path / "repo"
+    evidence = repo / "evidence"
+    evidence.mkdir(parents=True)
+    retained = evidence / "original-ledger"
+    ledger.directory.rename(retained)
+    indexed: list[dict[str, object]] = []
+    for path in sorted(retained.iterdir()):
+        if path.is_file():
+            body = path.read_bytes()
+            indexed.append(
+                {
+                    "path": path.relative_to(evidence).as_posix(),
+                    "bytes": len(body),
+                    "sha256": sha256(body).hexdigest(),
+                }
+            )
+    index_path = evidence / "artifact-index.json"
+    index_path.write_bytes(subject._canonical({"artifacts": indexed}) + b"\n")
+
+    signal_start = configuration_btc.task.signal_start + timedelta(minutes=15)
+    signal_end = configuration_btc.task.signal_end
+    follow_up_end = signal_end + timedelta(hours=168)
+    corpus = repo / "corpus"
+    parquet_root = corpus / "parquet"
+    parquet_root.mkdir(parents=True)
+    files: dict[str, str] = {}
+    members: dict[str, object] = {}
+    for configuration in configurations:
+        symbol = configuration.task.wire_symbol
+        result_path = retained / f"{configuration.task.index:02d}.results.jsonl.gz"
+        results = read_results(result_path.read_bytes())
+        intent = next(
+            authorization.intent
+            for result in results
+            if result.scenario is ComparisonScenario.BASE
+            and (authorization := EntryOrderIntentAuthorizer().authorize(result.decision)).intent
+            is not None
+        )
+        assert intent is not None
+        candle_rows = []
+        opened = signal_start
+        while opened < follow_up_end:
+            millis = int(opened.timestamp() * 1000)
+            price = intent.reference_price
+            candle_rows.append(
+                Row(
+                    millis,
+                    price,
+                    price * Decimal("100"),
+                    price / Decimal("100"),
+                    price,
+                    Decimal("1"),
+                    millis + 300_000,
+                    price,
+                    1,
+                    Decimal("0.5"),
+                    price / Decimal("2"),
+                )
+            )
+            opened += timedelta(minutes=5)
+        relative = f"parquet/{symbol}-5m.parquet"
+        path = corpus / relative
+        pq.write_table(_table(symbol, "5m", candle_rows), path)
+        files[relative] = sha256(path.read_bytes()).hexdigest()
+        members[symbol] = {
+            "status": "QUALIFIED",
+            "epochs": [
+                {
+                    "start_ms": int(signal_start.timestamp() * 1000),
+                    "end_ms": int(follow_up_end.timestamp() * 1000),
+                }
+            ],
+        }
+    manifest = {
+        "dataset_version": grants[0].source_id,
+        "status": "QUALIFIED",
+        "files": files,
+    }
+    report = {"symbols": members}
+    plan = {"schema": "synthetic-canonical-plan"}
+    for name, value in (("manifest.json", manifest), ("report.json", report), ("plan.json", plan)):
+        (corpus / name).write_bytes(subject._canonical(value) + b"\n")
+
+    final_event = retained / "0004.json"
+    monkeypatch.setattr(subject, "TASKS", tuple(item.task for item in configurations))
+    monkeypatch.setattr(subject, "SYMBOLS", ("BTCUSDT", "ETHUSDT"))
+    monkeypatch.setattr(subject, "EVIDENCE_ROOT", Path("evidence"))
+    monkeypatch.setattr(subject, "CORPUS_ROOT", Path("corpus"))
+    monkeypatch.setattr(subject, "ARTIFACT_INDEX_SHA", sha256(index_path.read_bytes()).hexdigest())
+    monkeypatch.setattr(subject, "ORIGINAL_EVENT_SHA", sha256(final_event.read_bytes()).hexdigest())
+    monkeypatch.setattr(subject, "ORIGINAL_EVENT_REVISION", 4)
+    monkeypatch.setattr(subject, "ORIGINAL_UUID", grants[0].run_uuid)
+    monkeypatch.setattr(subject, "ORIGINAL_EXECUTABLE", executable)
+    monkeypatch.setattr(subject, "RETAINED_PROTOCOL_SHA256", grants[0].protocol_sha256)
+    monkeypatch.setattr(subject, "RETAINED_TASK_PLAN_SHA256", grants[0].task_plan_sha256)
+    monkeypatch.setattr(subject, "RETAINED_DATASET_VERSION", grants[0].dataset_version)
+    monkeypatch.setattr(subject, "RETAINED_MANIFEST_SHA256", grants[0].manifest_sha256)
+    monkeypatch.setattr(subject, "RETAINED_REPORT_SHA256", grants[0].manifest_sha256)
+    monkeypatch.setattr(subject, "RETAINED_PLAN_SHA256", grants[0].manifest_sha256)
+    monkeypatch.setattr(
+        subject, "CORPUS_MANIFEST_SHA", sha256((corpus / "manifest.json").read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(
+        subject, "CORPUS_REPORT_SHA", sha256((corpus / "report.json").read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(
+        subject, "CORPUS_PLAN_SHA", sha256((corpus / "plan.json").read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(subject, "DATASET_VERSION", grants[0].source_id)
+    monkeypatch.setattr(subject, "SIGNAL_START", signal_start)
+    monkeypatch.setattr(subject, "SIGNAL_END_INCLUSIVE", signal_end)
+    monkeypatch.setattr(subject, "FOLLOW_UP_END", follow_up_end)
+    monkeypatch.setattr(subject, "EXPECTED_SLOTS", 8)
+    monkeypatch.setattr(subject, "EXPECTED_RECORDS", 32)
+    output = tmp_path / "output"
+    run_record = tmp_path / "run-record.json"
+    run_record.write_bytes(
+        subject._canonical({"protocol": subject.PROTOCOL, "model_sha": subject.MODEL_SHA}) + b"\n"
+    )
+
+    assert (
+        subject.main(
+            ["--repo", str(repo), "--output", str(output), "--run-record", str(run_record)]
+        )
+        == 0
+    )
+    projection = json.loads((output / "projection.json").read_bytes())
+    assert projection["status"] == "COMPLETE"
+    assert set(projection["members"]) == {"BTCUSDT", "ETHUSDT"}
+    for member in projection["members"].values():
+        assert set(member["cells"]) == {
+            "BASELINE:BASE",
+            "BASELINE:STRESS",
+            "ZONE:BASE",
+            "ZONE:STRESS",
+        }
+        for cell_name, cell in member["cells"].items():
+            assert cell["full"]["legacy"]["denominator"] == 1
+            assert cell["full"]["new"]["denominator"] == 1
+            assert cell["full"]["paired"]["denominator"] == 1
+            assert cell["full"]["new"]["dual_touch_stop_first_count"] == 1
+            assert cell["full"]["new"]["recorded_grid_wait_count"] == 1
+            assert cell["full"]["new"]["positive_grid_delay_count"] == int(
+                cell_name.endswith(":STRESS")
+            )
+    output_rows: list[dict[str, Any]] = [
+        json.loads(line) for line in (output / "per-trade.jsonl").read_text().splitlines()
+    ]
+    assert len(output_rows) == 8
+    assert all(row["new"]["approved_risk_quote"] for row in output_rows)
+    assert all(row["new"]["quantity"] for row in output_rows)
+    assert all(row["new"]["risk_distance"] for row in output_rows)
+    assert all(row["new"]["target_price"] for row in output_rows)
+    assert all(row["new"]["entry_fee_quote"] for row in output_rows)
+    assert all(row["new"]["exit_fee_quote"] for row in output_rows)
+    assert all(row["legacy"]["approved_risk_quote"] for row in output_rows)
+    assert all(row["legacy"]["quantity"] for row in output_rows)
+    assert all(row["legacy"]["entry_fill_price"] for row in output_rows)
+    assert all(row["legacy"]["exit_fill_price"] for row in output_rows)
+    assert all(row["legacy"]["entry_fee_quote"] for row in output_rows)
+    assert all(row["legacy"]["exit_fee_quote"] for row in output_rows)

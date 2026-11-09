@@ -74,6 +74,7 @@ MODEL_TREE = "8ecd7eabc46a2c3008475eaa7cbb6c568d509bfc"
 ORIGINAL_EXECUTABLE = "d09e50f3eea87a275b640ffd38c27ad8c0f8cb3e"
 ORIGINAL_UUID = "ec10ca5d-01e6-436f-8153-fe9c5b5439b5"
 ORIGINAL_EVENT_SHA = "0db0661d022a8c0c4260852bfd6490a2afab45416ffceb83e8f04dfff5eacbe2"
+ORIGINAL_EVENT_REVISION = 20
 ARTIFACT_INDEX_SHA = "e45e9a1a23f763ddba1bc4c2e087717f843eec2eaafdf325c5a9b5e8ad974ed6"
 CORPUS_MANIFEST_SHA = "756659f6700a2ae48b5c5aa58972f037c709116ca73b9c5c23571617d24d4e9d"
 CORPUS_REPORT_SHA = "bccffb447373f8fdc0d477580c9b78dcf5f4a5ca5777620df88026507e5b7e66"
@@ -401,7 +402,12 @@ def _discover_inputs(repo: Path) -> dict[str, dict[str, object]]:
     if _sha(index_body) != ARTIFACT_INDEX_SHA:
         raise ComparisonError("Issue #220 artifact index identity changed")
     rows = _index_rows(json.loads(index_body))
-    events = _ledger_events(evidence, rows)
+    events = _ledger_events(
+        evidence,
+        rows,
+        expected_final_sha=ORIGINAL_EVENT_SHA,
+        expected_revision=ORIGINAL_EVENT_REVISION,
+    )
     _validate_original_creation(events)
     tasks = {task.wire_symbol: task for task in TASKS if task.wire_symbol in SYMBOLS}
     found = _select_task_inputs(evidence, rows, events, tasks.values())
@@ -539,6 +545,9 @@ def _legacy_row(result: HistoryScreenedReplayResult) -> dict[str, object]:
     branches = result.branches
     branch = branches[0] if len(branches) == 1 else None
     position = branch.final_position if branch is not None else None
+    intent = result.entry_intent
+    entry_fill = branch.entry_fill if branch is not None else None
+    exit_fill = branch.exit_fill if branch is not None else None
     return {
         "status": result.status.value,
         "filled": bool(branches),
@@ -553,11 +562,27 @@ def _legacy_row(result: HistoryScreenedReplayResult) -> dict[str, object]:
         "fees_quote": None if position is None else str(position.cumulative_fees),
         "net_pnl_quote": None if position is None else str(position.cumulative_net_realized_pnl),
         "residual_quantity": None if position is None else str(position.quantity.copy_abs()),
+        "quantity": None if intent is None else str(intent.quantity),
+        "approved_risk_quote": None if intent is None else str(intent.approved_risk_quote),
+        "stop_basis": None if intent is None else str(intent.stop_basis),
+        "decision_reference_price": None if intent is None else str(intent.reference_price),
+        "entry_reference_price": None
+        if entry_fill is None
+        else str(entry_fill.reference_open_price),
+        "entry_fill_price": None if entry_fill is None else str(entry_fill.fill_price),
+        "entry_fee_quote": None if entry_fill is None else str(entry_fill.fee_quote),
+        "exit_reference_price": None if exit_fill is None else str(exit_fill.reference_open_price),
+        "exit_fill_price": None if exit_fill is None else str(exit_fill.fill_price),
+        "exit_fee_quote": None if exit_fill is None else str(exit_fill.fee_quote),
     }
 
 
 def _new_row(result: Last5mProtectiveExecutionResult) -> dict[str, object]:
     trigger = result.trigger
+    entry_fill = result.entry_fill
+    exit_fill = result.exit_fill
+    activation_ambiguous = bool(trigger and trigger.kind is TriggerKind.ACTIVATION_ORDER_AMBIGUOUS)
+    dual_touch = bool(trigger and trigger.kind is TriggerKind.DUAL_TOUCH_STOP_FIRST)
     return {
         "status": result.status.value,
         "filled": result.entry_fill is not None,
@@ -570,12 +595,27 @@ def _new_row(result: Last5mProtectiveExecutionResult) -> dict[str, object]:
         "fees_quote": str(result.total_fees),
         "net_pnl_quote": str(result.realized_net_pnl),
         "residual_quantity": str(result.unresolved_quantity),
+        "quantity": str(result.intent_audit.quantity),
+        "approved_risk_quote": str(result.approved_risk_quote),
+        "stop_basis": str(result.original_stop_basis),
+        "decision_reference_price": str(result.intent_audit.reference_price),
+        "risk_distance": _text(result.risk_distance),
+        "actual_fill_risk_quote": _text(result.actual_fill_risk_quote),
+        "target_price": _text(result.target_price),
+        "entry_reference_price": None if entry_fill is None else str(entry_fill.reference_price),
+        "entry_fill_price": None if entry_fill is None else str(entry_fill.fill_price),
+        "entry_fee_quote": None if entry_fill is None else str(entry_fill.fee_quote),
+        "exit_reference_price": None if exit_fill is None else str(exit_fill.reference_price),
+        "exit_fill_price": None if exit_fill is None else str(exit_fill.fill_price),
+        "exit_fee_quote": None if exit_fill is None else str(exit_fill.fee_quote),
         "entry_grid_wait_seconds": None
         if result.entry_grid_wait is None
         else str(Decimal(str(result.entry_grid_wait.total_seconds()))),
         "trigger": None if trigger is None else trigger.kind.value,
         "gap": bool(trigger and trigger.gap_through_stop),
-        "ambiguous": bool(trigger and trigger.kind is TriggerKind.ACTIVATION_ORDER_AMBIGUOUS),
+        "ambiguous": activation_ambiguous or dual_touch,
+        "activation_order_ambiguous": activation_ambiguous,
+        "dual_touch_stop_first": dual_touch,
         "holding_lower_seconds": None
         if result.holding_duration_lower is None
         else str(Decimal(str(result.holding_duration_lower.total_seconds()))),
@@ -645,14 +685,58 @@ def _aggregate(rows: list[dict[str, object]]) -> dict[str, object]:
             )
         ),
         "ambiguity_count": sum(bool(row.get("ambiguous")) for row in rows),
+        "activation_order_ambiguity_count": sum(
+            bool(row.get("activation_order_ambiguous")) for row in rows
+        ),
+        "dual_touch_stop_first_count": sum(bool(row.get("dual_touch_stop_first")) for row in rows),
         "gap_count": sum(bool(row.get("gap")) for row in rows),
         "grid_wait_count": sum(row.get("entry_grid_wait_seconds") is not None for row in rows),
+        "recorded_grid_wait_count": sum(
+            row.get("entry_grid_wait_seconds") is not None for row in rows
+        ),
+        "positive_grid_delay_count": sum(
+            Decimal(cast(str, row["entry_grid_wait_seconds"])) > 0
+            for row in rows
+            if row.get("entry_grid_wait_seconds") is not None
+        ),
+        "entry_fees_quote": str(
+            _exact_sum(
+                Decimal(cast(str, row["entry_fee_quote"]))
+                for row in rows
+                if row.get("entry_fee_quote") is not None
+            )
+        ),
+        "exit_fees_quote": str(
+            _exact_sum(
+                Decimal(cast(str, row["exit_fee_quote"]))
+                for row in rows
+                if row.get("exit_fee_quote") is not None
+            )
+        ),
         "holding_upper_seconds_median": _text(
             cast(Decimal | None, median(durations)) if durations else None
         ),
         "holding_upper_seconds_p90": _text(p90),
         "holding_upper_seconds_max": _text(durations[-1] if durations else None),
     }
+
+
+def _finite_window(
+    bars: tuple[Any, ...],
+    bar_index: dict[datetime, int],
+    start: datetime,
+    end: datetime,
+) -> tuple[Any, ...]:
+    """Return one complete half-open interval, including a master-series end boundary."""
+
+    first = bar_index.get(start)
+    if not bars:
+        raise ComparisonError("decision finite 168h 5m interval is unavailable")
+    stop = len(bars) if end == bars[-1].close_time else bar_index.get(end)
+    expected = int((end - start) / timedelta(minutes=5))
+    if first is None or stop is None or stop - first != expected:
+        raise ComparisonError("decision finite 168h 5m interval is unavailable")
+    return bars[first:stop]
 
 
 def _paired(rows: list[dict[str, object]]) -> dict[str, object]:
@@ -773,11 +857,7 @@ def _run(repo: Path, output: Path, run_record: Path) -> dict[str, object]:
                     or auth.intent is None
                 ):
                     raise ComparisonError("retained authorized decision no longer yields an intent")
-                first = bar_index.get(observed)
-                end = bar_index.get(observed + FOLLOW_UP)
-                if first is None or end is None:
-                    raise ComparisonError("decision finite 168h 5m interval is unavailable")
-                decision_bars = bars[first:end]
+                decision_bars = _finite_window(bars, bar_index, observed, observed + FOLLOW_UP)
                 binding = Last5mExecutionBinding(
                     source_id, symbol_task.symbol, epoch_id, observed, observed + FOLLOW_UP
                 )
