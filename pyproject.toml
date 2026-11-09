@@ -70,6 +70,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 # Retained external diagnostics are immutable evidence; keep all other lint rules active.
+# Issue #212's captured reconciliation source is immutable evidence.
+"data/research_evidence/issue-212-overlap-reconciliation-v1/reconcile.py" = ["SIM102"]
 "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit*.py" = ["E501"]
 "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-audit.py" = ["F841"]
 "data/research_evidence/issue-214-history-screened-partial-3cc2f47/partial-inventory-audit*.py" = ["E501"]
