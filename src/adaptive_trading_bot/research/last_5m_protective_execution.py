@@ -38,6 +38,7 @@ from adaptive_trading_bot.research.breakout_retest_replay import (
     BreakoutRetestReplayError,
     fixed_2r_geometry,
 )
+from adaptive_trading_bot.research.research_v2_corpus import FIELDS as CORPUS_FIELDS
 from adaptive_trading_bot.storage import SourceId
 
 PROFILE_ID = "LAST_5M_PROTECTIVE_EXECUTION_V1"
@@ -63,6 +64,12 @@ class ProtectionAcknowledgement(StrEnum):
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"
     UNACKNOWLEDGED = "UNACKNOWLEDGED"
+
+
+class ExitPolicy(StrEnum):
+    """Explicit exit-policy selection supported by this research adapter."""
+
+    FIXED_2R = "BREAKOUT_RETEST_FIXED_2R_V1"
 
 
 class Last5mExecutionStatus(StrEnum):
@@ -177,6 +184,7 @@ class Last5mProtectionConfiguration:
     """Opt-in execution costs and modeled protective acceptance latency."""
 
     costs: SimulatedExecutionCostConfiguration
+    exit_policy: ExitPolicy
     acknowledgement: ProtectionAcknowledgement = ProtectionAcknowledgement.ACCEPTED
     activation_latency: timedelta = timedelta(0)
     trigger_basis: TriggerBasis = TriggerBasis.LAST
@@ -185,6 +193,8 @@ class Last5mProtectionConfiguration:
         if not isinstance(self.costs, SimulatedExecutionCostConfiguration):
             raise TypeError("costs must use the shared simulated cost authority")
         self.costs.validate()
+        if self.exit_policy is not ExitPolicy.FIXED_2R:
+            raise Last5mProtectiveExecutionError("an explicit supported exit policy is required")
         if not isinstance(self.acknowledgement, ProtectionAcknowledgement):
             raise TypeError("acknowledgement is invalid")
         if not isinstance(
@@ -209,6 +219,20 @@ class CompactFill:
 
 
 @dataclass(frozen=True, slots=True)
+class Last5mIntentAudit:
+    """Compact immutable authorization facts needed to interpret one result."""
+
+    decision_identity: DecisionIdentity
+    strategy_id: str
+    strategy_version: str
+    side: EntrySide
+    quantity: Decimal
+    approved_risk_quote: Decimal
+    original_stop_basis: Decimal
+    reference_price: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class Last5mTriggerAudit:
     """Interval-level trigger and ambiguity facts without invented tick ordering."""
 
@@ -230,8 +254,11 @@ class Last5mProtectiveExecutionResult:
     profile_id: str
     profile_version: str
     decision_identity: DecisionIdentity
+    intent_audit: Last5mIntentAudit
     binding: Last5mExecutionBinding
     series_identity: str
+    configuration: Last5mProtectionConfiguration
+    exit_policy: ExitPolicy
     status: Last5mExecutionStatus
     authorization_at: datetime
     entry_eligible_at: datetime
@@ -242,12 +269,18 @@ class Last5mProtectiveExecutionResult:
     trigger: Last5mTriggerAudit | None
     exit_fill: CompactFill | None
     accounting: PositionAccountingState
+    approved_risk_quote: Decimal
+    original_stop_basis: Decimal
     risk_distance: Decimal | None
+    actual_fill_risk_quote: Decimal | None
     target_price: Decimal | None
     realized_gross_pnl: Decimal
     total_fees: Decimal
     realized_net_pnl: Decimal
-    realized_net_r: Decimal | None
+    closed_net_pnl_quote: Decimal | None
+    open_realized_fees_quote: Decimal | None
+    closed_net_approved_risk_r: Decimal | None
+    open_fee_burden_approved_risk_r: Decimal | None
     unresolved_quantity: Decimal
     holding_interval_start: datetime | None
     holding_interval_end: datetime | None
@@ -265,6 +298,12 @@ class Last5mParquetSource:
     """Locked reader for a small identity-bound research 5m parquet artifact."""
 
     def __init__(self, path: Path, *, expected_sha256: str) -> None:
+        if (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in expected_sha256)
+        ):
+            raise Last5mProtectiveExecutionError("expected parquet hash must be canonical SHA-256")
         self._path = path
         self._expected_sha256 = expected_sha256
 
@@ -273,40 +312,50 @@ class Last5mParquetSource:
         if sha256(body).hexdigest() != self._expected_sha256:
             raise Last5mProtectiveExecutionError("5m parquet hash differs from its binding")
         table = pq.read_table(pa.BufferReader(body))
-        required = {
-            "source_id",
-            "symbol",
-            "epoch_id",
-            "open_time_ms",
-            "close_time_ms",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        }
-        if set(table.column_names) != required:
-            raise Last5mProtectiveExecutionError("5m parquet schema is not exact")
+        expected_schema = pa.schema(
+            [pa.field("symbol", pa.string()), pa.field("timeframe", pa.string())]
+            + [
+                pa.field(
+                    name,
+                    pa.int64() if name.endswith("_ms") or name == "trade_count" else pa.string(),
+                )
+                for name in CORPUS_FIELDS
+            ]
+        )
+        if not table.schema.equals(expected_schema, check_metadata=False):
+            raise Last5mProtectiveExecutionError("5m parquet schema differs from canonical corpus")
+        wire_symbol = f"{binding.symbol.base}{binding.symbol.quote}"
         bars: list[Last5mBar] = []
         for row in table.to_pylist():
-            open_at = datetime.fromtimestamp(row["open_time_ms"] / 1000, tz=UTC)
+            if row["symbol"] != wire_symbol:
+                raise Last5mProtectiveExecutionError("5m parquet contains a foreign symbol")
+            if row["timeframe"] != "5m":
+                raise Last5mProtectiveExecutionError("5m parquet contains a foreign timeframe")
+            open_at = _from_millis(row["open_time_ms"])
             if binding.start <= open_at < binding.end:
                 bars.append(
                     Last5mBar(
-                        SourceId(row["source_id"]),
-                        TradingSymbol.parse(row["symbol"]),
-                        row["epoch_id"],
+                        binding.source_id,
+                        binding.symbol,
+                        binding.epoch_id,
                         open_at,
-                        datetime.fromtimestamp(row["close_time_ms"] / 1000, tz=UTC),
+                        _from_millis(row["close_time_ms"]),
                         Decimal(row["open"]),
                         Decimal(row["high"]),
                         Decimal(row["low"]),
                         Decimal(row["close"]),
-                        Decimal(row["volume"]),
+                        Decimal(row["base_volume"]),
                     )
                 )
         _validate_series(binding, tuple(bars))
         return tuple(bars)
+
+
+def _from_millis(value: int) -> datetime:
+    if not isinstance(value, int):
+        raise Last5mProtectiveExecutionError("canonical candle timestamp must be int64")
+    seconds, milliseconds = divmod(value, 1000)
+    return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(milliseconds=milliseconds)
 
 
 def run_last_5m_protective_execution(
@@ -339,6 +388,7 @@ def run_last_5m_protective_execution(
             intent,
             binding,
             series_identity,
+            configuration,
             Last5mExecutionStatus.ENTRY_UNFILLED,
             eligible_at,
             None,
@@ -355,7 +405,7 @@ def run_last_5m_protective_execution(
     entry_bar = bars[entry_index]
     entry_side = _execution_side(intent.side)
     entry = _compact_fill(
-        fill_id=f"{intent.identity.intent_schema_version}:entry",
+        fill_id=_fill_id(intent, "entry"),
         side=entry_side,
         quantity=intent.quantity,
         fill_at=entry_bar.open_time,
@@ -378,6 +428,7 @@ def run_last_5m_protective_execution(
                 intent,
                 binding,
                 series_identity,
+                configuration,
                 Last5mExecutionStatus.INVALID_GEOMETRY_UNRESOLVED,
                 eligible_at,
                 grid_wait,
@@ -392,7 +443,7 @@ def run_last_5m_protective_execution(
             )
         recovery_bar = bars[recovery_index]
         recovery = _compact_fill(
-            fill_id=f"{intent.identity.intent_schema_version}:recovery",
+            fill_id=_fill_id(intent, "recovery"),
             side=_opposite(entry_side),
             quantity=intent.quantity,
             fill_at=recovery_bar.open_time,
@@ -411,6 +462,7 @@ def run_last_5m_protective_execution(
             intent,
             binding,
             series_identity,
+            configuration,
             Last5mExecutionStatus.INVALID_GEOMETRY_RECOVERED,
             eligible_at,
             grid_wait,
@@ -435,6 +487,7 @@ def run_last_5m_protective_execution(
             intent,
             binding,
             series_identity,
+            configuration,
             status,
             eligible_at,
             grid_wait,
@@ -468,6 +521,7 @@ def run_last_5m_protective_execution(
                     intent,
                     binding,
                     series_identity,
+                    configuration,
                     Last5mExecutionStatus.ACTIVATION_ORDER_AMBIGUOUS_OPEN,
                     eligible_at,
                     grid_wait,
@@ -550,6 +604,7 @@ def run_last_5m_protective_execution(
         intent,
         binding,
         series_identity,
+        configuration,
         Last5mExecutionStatus.TERMINAL_OPEN,
         eligible_at,
         grid_wait,
@@ -627,6 +682,27 @@ def _opposite(side: SimulatedExecutionSide) -> SimulatedExecutionSide:
         if side is SimulatedExecutionSide.BUY
         else SimulatedExecutionSide.BUY
     )
+
+
+def _decision_key(identity: DecisionIdentity) -> str:
+    payload = dumps(
+        {
+            "observed_at": identity.observed_at.isoformat(),
+            "source_id": identity.source_id.value,
+            "strategy_id": identity.strategy_id,
+            "strategy_version": identity.strategy_version,
+            "symbol": str(identity.symbol),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return sha256(payload).hexdigest()
+
+
+def _fill_id(intent: EntryOrderIntent, purpose: str) -> str:
+    if purpose not in {"entry", "protective-exit", "recovery"}:
+        raise Last5mProtectiveExecutionError("fill purpose is invalid")
+    return f"{PROFILE_ID}:{_decision_key(intent.decision_identity)}:{purpose}"
 
 
 def _compact_fill(
@@ -715,7 +791,7 @@ def _closed_result(
     reference: Decimal,
 ) -> Last5mProtectiveExecutionResult:
     exit_fill = _compact_fill(
-        fill_id=f"{intent.identity.intent_schema_version}:protective-exit",
+        fill_id=_fill_id(intent, "protective-exit"),
         side=_opposite(entry.side),
         quantity=intent.quantity,
         fill_at=fill_at,
@@ -727,6 +803,7 @@ def _closed_result(
         intent,
         binding,
         series_identity,
+        configuration,
         Last5mExecutionStatus.ORDINARY_CLOSED,
         eligible_at,
         grid_wait,
@@ -746,6 +823,7 @@ def _result(
     intent: EntryOrderIntent,
     binding: Last5mExecutionBinding,
     series_identity: str,
+    configuration: Last5mProtectionConfiguration,
     status: Last5mExecutionStatus,
     eligible_at: datetime,
     grid_wait: timedelta | None,
@@ -760,12 +838,20 @@ def _result(
     *,
     protection_active_at: datetime | None = None,
 ) -> Last5mProtectiveExecutionResult:
-    net_r: Decimal | None = None
-    if entry is not None and risk_distance is not None:
-        with localcontext(_DECIMAL_CONTEXT):
-            approved_risk = risk_distance * entry.quantity
-            if approved_risk > 0:
-                net_r = state.cumulative_net_realized_pnl / approved_risk
+    approved_risk = intent.approved_risk_quote
+    if not approved_risk.is_finite() or approved_risk <= 0:
+        raise Last5mProtectiveExecutionError("authorized approved risk must be positive")
+    closed = entry is not None and state.quantity == 0
+    closed_net_r: Decimal | None = None
+    open_fee_burden_r: Decimal | None = None
+    actual_fill_risk: Decimal | None = None
+    with localcontext(_DECIMAL_CONTEXT):
+        if closed:
+            closed_net_r = state.cumulative_net_realized_pnl / approved_risk
+        elif entry is not None:
+            open_fee_burden_r = state.cumulative_fees / approved_risk
+        if entry is not None and risk_distance is not None:
+            actual_fill_risk = risk_distance * entry.quantity
     holding_start = entry.fill_at if entry is not None else None
     holding_end = exit_fill.fill_at if exit_fill is not None else None
     exact = bool(
@@ -790,8 +876,20 @@ def _result(
         PROFILE_ID,
         PROFILE_VERSION,
         intent.decision_identity,
+        Last5mIntentAudit(
+            intent.decision_identity,
+            intent.strategy_id,
+            intent.strategy_version,
+            intent.side,
+            intent.quantity,
+            intent.approved_risk_quote,
+            intent.stop_basis,
+            intent.reference_price,
+        ),
         binding,
         series_identity,
+        configuration,
+        configuration.exit_policy,
         status,
         intent.authorized_at,
         eligible_at,
@@ -802,12 +900,18 @@ def _result(
         trigger,
         exit_fill,
         state,
+        approved_risk,
+        intent.stop_basis,
         risk_distance,
+        actual_fill_risk,
         target,
         state.cumulative_gross_realized_pnl,
         state.cumulative_fees,
         state.cumulative_net_realized_pnl,
-        net_r,
+        state.cumulative_net_realized_pnl if closed else None,
+        state.cumulative_fees if entry is not None and not closed else None,
+        closed_net_r,
+        open_fee_burden_r,
         state.quantity.copy_abs(),
         holding_start,
         holding_end,

@@ -12,10 +12,13 @@ Risk sizing, Safety clearance and stop basis remain authoritative. It is not reg
 for runtime use and does not add 5m or 30m to the runtime timeframe enum. Existing
 replay, Paper and comparison defaults retain their prior behavior.
 
-The input is one exact, finite, contiguous UTC 5m LAST series bound to source, symbol,
-epoch and range. Missing, duplicate, out-of-order or cross-epoch observations reject
-the run. The locked Parquet reader also verifies the supplied artifact hash and exact
-schema. MARK triggers are outside this profile and fail closed.
+The input is one exact, finite, contiguous UTC 5m LAST series bound to trusted dataset
+source, symbol, epoch and range metadata. The accepted canonical Parquet rows store the
+wire symbol, `timeframe`, OHLC, `base_volume` and the other corpus fields; source and
+epoch are deliberately not invented as per-row columns. Missing, duplicate,
+out-of-order or cross-epoch observations reject the run. The locked reader verifies the
+artifact hash, canonical schema/types, `timeframe == 5m`, wire symbol, grid and OHLC.
+MARK triggers are outside this profile and fail closed.
 
 ## Modeled chronology
 
@@ -24,7 +27,10 @@ schema. MARK triggers are outside this profile and fail closed.
    eligibility, fill clock and grid wait are retained separately. A one-second offset
    from a grid boundary therefore waits 299 seconds; this does not change the legacy
    15m model's corresponding 899-second wait.
-3. The entry fill uses the shared spread, slippage and fee authority and is committed
+3. The caller must explicitly select the existing
+   `BREAKOUT_RETEST_FIXED_2R_V1` exit policy; an arbitrary authorized strategy intent
+   does not acquire that exit policy implicitly. The entry fill uses the shared spread,
+   slippage and fee authority and is committed
    through the shared average-cost position-accounting core.
 4. Protection is requested only after the fill. Rejected or unacknowledged protection
    leaves explicit unresolved exposure. Accepted protection becomes active only after
@@ -41,6 +47,12 @@ schema. MARK triggers are outside this profile and fail closed.
    fill. Recovery uses the first genuinely later 5m open and shared costs/accounting;
    absent that later fill, exposure remains unresolved.
 
+The configured shared `costs.latency` applies only to entry eligibility. Protection has
+its separately recorded modeled acknowledgement and activation latency; after it is
+active, this bar model adds no second trigger-to-fill latency. Recovery likewise does
+not reuse entry latency: it is eligible only at the first genuinely later 5m open. These
+are explicit research assumptions, not venue behavior.
+
 An intrabar protective fill timestamp is the interval's exclusive close solely to
 provide deterministic accounting chronology. The trigger audit retains the complete
 interval and marks holding time as non-exact. Open-event and recovery times are exact
@@ -49,12 +61,15 @@ order acceptance, or guaranteed execution.
 
 ## Retained result facts
 
-The compact result contains profile and decision/binding identities; authorization,
+The compact result contains profile and decision/binding identities; a decision-bound
+fill ID; the original authorized stop and approved-risk quote; selected exit policy;
+cost, entry-latency, acknowledgement and activation assumptions; authorization,
 eligibility, grid-wait and activation clocks; entry and exit fill prices/fees; stop,
 target and trigger interval/type; gap and ambiguity flags; shared accounting state;
-gross/net realized PnL, actual-fill risk-normalized result, unresolved quantity and
-holding-time certainty. Terminal results stop consuming later bars, and no result may
-close the same position twice.
+gross/net realized PnL, unresolved quantity and holding-time certainty. Actual-fill
+stop distance/risk is diagnostic only. Closed net R always uses the original positive
+`approved_risk_quote`, including recovery; it is unavailable for open exposure, whose
+entry-fee burden is reported separately.
 
 This implementation authorizes no historical evaluation. Any real-history use needs a
 separate reviewed protocol and exact-SHA grant.
