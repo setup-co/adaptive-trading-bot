@@ -19,6 +19,13 @@ from adaptive_trading_bot.strategies.breakout_retest_zone_invalidation import (
     BreakoutRetestZoneInvalidationStrategy,
 )
 from adaptive_trading_bot.strategies.context import assemble_strategy_contexts
+from adaptive_trading_bot.strategies.failed_breakout_reversion import (
+    BASE_COSTS as FAILED_BREAKOUT_BASE_COSTS,
+    POLICY_ID as FAILED_BREAKOUT_REVERSION_POLICY_ID,
+    FailedBreakoutReversionReasonCode,
+    FailedBreakoutReversionRuleAudit,
+    FailedBreakoutReversionStrategy,
+)
 from adaptive_trading_bot.strategies.core import (
     CandidateAction,
     SourceIdentity,
@@ -132,6 +139,11 @@ __all__ = [
     "BreakoutSide",
     "CandidateAction",
     "Ema50ComparisonRelation",
+    "FAILED_BREAKOUT_BASE_COSTS",
+    "FAILED_BREAKOUT_REVERSION_POLICY_ID",
+    "FailedBreakoutReversionReasonCode",
+    "FailedBreakoutReversionRuleAudit",
+    "FailedBreakoutReversionStrategy",
     "HoldOnlyExitReasonCode",
     "HoldOnlyExitRuleAudit",
     "HoldOnlyExitStrategy",

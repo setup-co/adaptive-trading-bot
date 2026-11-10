@@ -127,6 +127,81 @@ def run(
     )
 
 
+def run_frozen_target(
+    bars: tuple[Last5mBar, ...],
+    *,
+    target: str = "110",
+    latency: timedelta = timedelta(0),
+) -> Last5mProtectiveExecutionResult:
+    return run_last_5m_protective_execution(
+        intent=intent(),
+        binding=binding(len(bars)),
+        bars=bars,
+        configuration=Last5mProtectionConfiguration(
+            SimulatedExecutionCostConfiguration(latency=latency),
+            ExitPolicy.FROZEN_TARGET_30M,
+            frozen_target_price=Decimal(target),
+            holding_period=timedelta(minutes=30),
+        ),
+    )
+
+
+def test_frozen_target_time_exit_uses_deadline_open_only() -> None:
+    bars = tuple(
+        bar(
+            index,
+            open_price="102" if index == 6 else "100",
+            high="200" if index == 6 else "105",
+            low="90",
+            close="150" if index == 6 else "100",
+        )
+        for index in range(7)
+    )
+    result = run_frozen_target(bars)
+
+    assert result.status is Last5mExecutionStatus.ORDINARY_CLOSED
+    assert result.trigger is not None and result.trigger.kind is TriggerKind.TIME_EXIT
+    assert result.exit_fill is not None
+    assert result.exit_fill.fill_at == NOW + timedelta(minutes=30)
+    assert result.exit_fill.reference_price == Decimal(102)
+    assert result.holding_time_exact
+    assert result.holding_duration_lower == timedelta(minutes=30)
+    assert result.realized_gross_pnl == Decimal("1.666666666666666666666666666666667")
+    assert result.total_fees == 0
+    assert result.closed_net_approved_risk_r == Decimal("0.06666666666666666666666666666666668")
+
+
+def test_frozen_target_preserves_dual_touch_and_recovers_invalid_fill() -> None:
+    dual = run_frozen_target(
+        (
+            bar(0, high="105", low="90"),
+            bar(1, high="115", low="70"),
+        )
+    )
+    assert dual.trigger is not None
+    assert dual.trigger.kind is TriggerKind.DUAL_TOUCH_STOP_FIRST
+
+    recovered = run_frozen_target(
+        (bar(0, high="105", low="90"), bar(1, open_price="99", high="100", low="98")),
+        target="90",
+    )
+    assert recovered.status is Last5mExecutionStatus.INVALID_GEOMETRY_RECOVERED
+    assert recovered.position_closed
+    assert recovered.closed_net_approved_risk_r is not None
+
+
+def test_frozen_target_stress_quantizes_entry_and_deadline_from_fill() -> None:
+    bars = tuple(bar(index, high="105", low="90") for index in range(8))
+    result = run_frozen_target(bars, latency=timedelta(seconds=1))
+
+    assert result.entry_fill is not None
+    assert result.entry_fill.fill_at == NOW + timedelta(minutes=5)
+    assert result.entry_grid_wait == timedelta(seconds=299)
+    assert result.trigger is not None and result.trigger.kind is TriggerKind.TIME_EXIT
+    assert result.exit_fill is not None
+    assert result.exit_fill.fill_at == NOW + timedelta(minutes=35)
+
+
 @pytest.mark.parametrize(
     ("latency", "expected_fill", "expected_wait"),
     [

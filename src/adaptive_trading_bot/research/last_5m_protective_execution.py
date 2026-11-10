@@ -70,6 +70,7 @@ class ExitPolicy(StrEnum):
     """Explicit exit-policy selection supported by this research adapter."""
 
     FIXED_2R = "BREAKOUT_RETEST_FIXED_2R_V1"
+    FROZEN_TARGET_30M = "FAILED_BREAKOUT_FROZEN_TARGET_30M_V1"
 
 
 class Last5mExecutionStatus(StrEnum):
@@ -83,6 +84,7 @@ class Last5mExecutionStatus(StrEnum):
     PROTECTION_UNACKNOWLEDGED_OPEN = "PROTECTION_UNACKNOWLEDGED_OPEN"
     ACTIVATION_ORDER_AMBIGUOUS_OPEN = "ACTIVATION_ORDER_AMBIGUOUS_OPEN"
     TERMINAL_OPEN = "TERMINAL_OPEN"
+    DEADLINE_PRICE_UNAVAILABLE_OPEN = "DEADLINE_PRICE_UNAVAILABLE_OPEN"
 
 
 class TriggerKind(StrEnum):
@@ -96,6 +98,7 @@ class TriggerKind(StrEnum):
     DUAL_TOUCH_STOP_FIRST = "DUAL_TOUCH_STOP_FIRST"
     ACTIVATION_ORDER_AMBIGUOUS = "ACTIVATION_ORDER_AMBIGUOUS"
     INVALID_GEOMETRY_RECOVERY = "INVALID_GEOMETRY_RECOVERY"
+    TIME_EXIT = "TIME_EXIT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,12 +191,27 @@ class Last5mProtectionConfiguration:
     acknowledgement: ProtectionAcknowledgement = ProtectionAcknowledgement.ACCEPTED
     activation_latency: timedelta = timedelta(0)
     trigger_basis: TriggerBasis = TriggerBasis.LAST
+    frozen_target_price: Decimal | None = None
+    holding_period: timedelta | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.costs, SimulatedExecutionCostConfiguration):
             raise TypeError("costs must use the shared simulated cost authority")
         self.costs.validate()
-        if self.exit_policy is not ExitPolicy.FIXED_2R:
+        if self.exit_policy is ExitPolicy.FIXED_2R:
+            if self.frozen_target_price is not None or self.holding_period is not None:
+                raise Last5mProtectiveExecutionError("FIXED_2R rejects frozen-target fields")
+        elif self.exit_policy is ExitPolicy.FROZEN_TARGET_30M:
+            if (
+                not isinstance(self.frozen_target_price, Decimal)
+                or not self.frozen_target_price.is_finite()
+                or self.frozen_target_price <= 0
+                or self.holding_period != timedelta(minutes=30)
+            ):
+                raise Last5mProtectiveExecutionError(
+                    "frozen-target policy requires a positive target and exactly 30 minutes"
+                )
+        else:
             raise Last5mProtectiveExecutionError("an explicit supported exit policy is required")
         if not isinstance(self.acknowledgement, ProtectionAcknowledgement):
             raise TypeError("acknowledgement is invalid")
@@ -417,8 +435,17 @@ def run_last_5m_protective_execution(
     grid_wait = entry.fill_at - eligible_at
 
     try:
-        risk_distance, target = fixed_2r_geometry(intent.side, entry.fill_price, intent.stop_basis)
-    except BreakoutRetestReplayError:
+        if configuration.exit_policy is ExitPolicy.FIXED_2R:
+            risk_distance, target = fixed_2r_geometry(
+                intent.side, entry.fill_price, intent.stop_basis
+            )
+        else:
+            assert configuration.frozen_target_price is not None
+            target = configuration.frozen_target_price
+            risk_distance = _frozen_target_geometry(
+                intent.side, entry.fill_price, intent.stop_basis, target
+            )
+    except (BreakoutRetestReplayError, Last5mProtectiveExecutionError):
         recovery_index = next(
             (i for i in range(entry_index + 1, len(bars)) if bars[i].open_time > entry.fill_at),
             None,
@@ -439,7 +466,7 @@ def run_last_5m_protective_execution(
                 accounting.position(intent.symbol),
                 None,
                 None,
-                ("ENTRY_FILLED", "INVALID_2R_GEOMETRY", "RECOVERY_UNFILLED"),
+                ("ENTRY_FILLED", "INVALID_ENTRY_GEOMETRY", "RECOVERY_UNFILLED"),
             )
         recovery_bar = bars[recovery_index]
         recovery = _compact_fill(
@@ -473,7 +500,7 @@ def run_last_5m_protective_execution(
             accounting.position(intent.symbol),
             None,
             None,
-            ("ENTRY_FILLED", "INVALID_2R_GEOMETRY", "RECOVERY_FILLED"),
+            ("ENTRY_FILLED", "INVALID_ENTRY_GEOMETRY", "RECOVERY_FILLED"),
         )
 
     requested_at = entry.fill_at
@@ -502,9 +529,71 @@ def run_last_5m_protective_execution(
         )
 
     active_at = requested_at + configuration.activation_latency
+    deadline = (
+        entry.fill_at + configuration.holding_period
+        if configuration.exit_policy is ExitPolicy.FROZEN_TARGET_30M
+        and configuration.holding_period is not None
+        else None
+    )
     for bar in bars[entry_index:]:
         if active_at >= bar.close_time:
             continue
+        if deadline is not None and bar.open_time >= deadline:
+            if bar.open_time != deadline:
+                break
+            open_kind, open_reference = _open_trigger(
+                intent.side, bar.open, intent.stop_basis, target
+            )
+            if open_kind is not None:
+                trigger = Last5mTriggerAudit(
+                    open_kind,
+                    bar.open_time,
+                    bar.close_time,
+                    open_kind in {TriggerKind.STOP_OPEN, TriggerKind.STOP_OPEN_GAP},
+                    open_kind is TriggerKind.TARGET_OPEN,
+                    gap_through_stop=open_kind is TriggerKind.STOP_OPEN_GAP,
+                )
+                return _closed_result(
+                    intent,
+                    binding,
+                    series_identity,
+                    configuration,
+                    accounting,
+                    eligible_at,
+                    grid_wait,
+                    entry,
+                    requested_at,
+                    active_at,
+                    risk_distance,
+                    target,
+                    trigger,
+                    bar.open_time,
+                    open_reference,
+                )
+            trigger = Last5mTriggerAudit(
+                TriggerKind.TIME_EXIT,
+                bar.open_time,
+                bar.close_time,
+                False,
+                False,
+            )
+            return _closed_result(
+                intent,
+                binding,
+                series_identity,
+                configuration,
+                accounting,
+                eligible_at,
+                grid_wait,
+                entry,
+                requested_at,
+                active_at,
+                risk_distance,
+                target,
+                trigger,
+                bar.open_time,
+                bar.open,
+            )
         inside = bar.open_time < active_at < bar.close_time
         stop_touch, target_touch = _touches(intent.side, bar, intent.stop_basis, target)
         if inside:
@@ -605,7 +694,9 @@ def run_last_5m_protective_execution(
         binding,
         series_identity,
         configuration,
-        Last5mExecutionStatus.TERMINAL_OPEN,
+        Last5mExecutionStatus.DEADLINE_PRICE_UNAVAILABLE_OPEN
+        if deadline is not None
+        else Last5mExecutionStatus.TERMINAL_OPEN,
         eligible_at,
         grid_wait,
         entry,
@@ -615,7 +706,11 @@ def run_last_5m_protective_execution(
         accounting.position(intent.symbol),
         risk_distance,
         target,
-        ("ENTRY_FILLED", "PROTECTION_ACCEPTED", "FOLLOW_UP_ENDED_OPEN"),
+        (
+            "ENTRY_FILLED",
+            "PROTECTION_ACCEPTED",
+            "DEADLINE_PRICE_UNAVAILABLE" if deadline is not None else "FOLLOW_UP_ENDED_OPEN",
+        ),
         protection_active_at=active_at,
     )
 
@@ -749,6 +844,16 @@ def _touches(side: EntrySide, bar: Last5mBar, stop: Decimal, target: Decimal) ->
     raise Last5mProtectiveExecutionError("entry side is invalid")
 
 
+def _frozen_target_geometry(
+    side: EntrySide, entry: Decimal, stop: Decimal, target: Decimal
+) -> Decimal:
+    if side is EntrySide.BUY and stop < entry < target:
+        return entry - stop
+    if side is EntrySide.SELL and target < entry < stop:
+        return stop - entry
+    raise Last5mProtectiveExecutionError("filled entry invalidates frozen stop/target geometry")
+
+
 def _open_trigger(
     side: EntrySide, open_price: Decimal, stop: Decimal, target: Decimal
 ) -> tuple[TriggerKind | None, Decimal]:
@@ -862,6 +967,7 @@ def _result(
             TriggerKind.STOP_OPEN,
             TriggerKind.TARGET_OPEN,
             TriggerKind.INVALID_GEOMETRY_RECOVERY,
+            TriggerKind.TIME_EXIT,
         }
     )
     duration_lower: timedelta | None = None

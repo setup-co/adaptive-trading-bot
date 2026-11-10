@@ -1,0 +1,30 @@
+"""One-shot fixed failed-breakout reversion historical screen."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from adaptive_trading_bot.research.failed_breakout_reversion_screen import run
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--executable-sha", required=True)
+    args = parser.parse_args(argv)
+    result = run(
+        args.repo,
+        args.output,
+        run_id=args.run_id,
+        executable_sha=args.executable_sha,
+    )
+    print(json.dumps(result, sort_keys=True, separators=(",", ":"), default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
