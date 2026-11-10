@@ -1,0 +1,4 @@
+{"observed_at_utc":"2026-11-10T22:01:55.3635722Z","elapsed_seconds":0.042,"pid":15660,"main_working_set_bytes":2850816,"tree_working_set_bytes":23683072,"child_pids":[15704,14116]}
+{"observed_at_utc":"2026-11-10T22:01:55.7660905Z","elapsed_seconds":0.491,"pid":15660,"main_working_set_bytes":4513792,"tree_working_set_bytes":25346048,"child_pids":[15704,14116]}
+{"observed_at_utc":"2026-11-10T22:01:56.1606451Z","elapsed_seconds":0.889,"pid":15660,"main_working_set_bytes":4513792,"tree_working_set_bytes":25346048,"child_pids":[15704,14116]}
+{"observed_at_utc":"2026-11-10T22:01:56.7485005Z","elapsed_seconds":1.454,"pid":15660,"main_working_set_bytes":4513792,"tree_working_set_bytes":25346048,"child_pids":[15704,14116]}

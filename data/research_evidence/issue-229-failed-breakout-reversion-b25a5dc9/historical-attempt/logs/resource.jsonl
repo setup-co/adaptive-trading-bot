@@ -1,0 +1,16 @@
+{"observed_at_utc":"2026-11-10T22:02:43.6409802Z","elapsed_seconds":0.046,"pid":37812,"main_working_set_bytes":4345856,"tree_working_set_bytes":50941952,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:44.0520129Z","elapsed_seconds":0.506,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":96772096,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:44.4589838Z","elapsed_seconds":0.915,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":114008064,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:44.8669927Z","elapsed_seconds":1.318,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":250302464,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:45.2535780Z","elapsed_seconds":1.722,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":263450624,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:45.6561660Z","elapsed_seconds":2.122,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":268783616,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:46.0487677Z","elapsed_seconds":2.52,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271491072,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:46.4398796Z","elapsed_seconds":2.907,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271564800,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:46.8396567Z","elapsed_seconds":3.296,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271613952,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:47.2231044Z","elapsed_seconds":3.699,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271638528,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:47.6175854Z","elapsed_seconds":4.089,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271638528,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:48.0163565Z","elapsed_seconds":4.479,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271638528,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:48.4027663Z","elapsed_seconds":4.873,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271654912,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:48.7987239Z","elapsed_seconds":5.261,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271654912,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:49.2009146Z","elapsed_seconds":5.657,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":271659008,"child_pids":[31344,36044]}
+{"observed_at_utc":"2026-11-10T22:02:49.6094393Z","elapsed_seconds":6.059,"pid":37812,"main_working_set_bytes":4452352,"tree_working_set_bytes":151719936,"child_pids":[31344,36044]}
