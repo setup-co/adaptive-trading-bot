@@ -47,6 +47,17 @@ accounting batches. That is a caller/adapter integration blocker. It is not a
 finding about the hypothesis and does not establish corrupted source data.
 The executable was not patched and history was not invoked again.
 
+## Prospective review corrections
+
+The later source corrections on PR #230 are distinct from the frozen executable
+and do not alter this failed attempt. Synthetic coverage now submits an entry
+and same-timestamp exit in one atomic accounting batch, canonicalizes UTC
+decision identities before spacing and chronological joins, enforces the
+declared readiness and extreme-volatility guards through authorization, and
+exercises the actual command through a final projection and classification.
+These corrections have not been applied to historical data; the saved attempt
+above remains the only historical invocation and remains incomplete evidence.
+
 ## Preserved partial facts
 
 `trades.jsonl` contains 61 completed scenario rows written before the failure:

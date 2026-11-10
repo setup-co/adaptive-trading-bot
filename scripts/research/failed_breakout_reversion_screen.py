@@ -6,10 +6,18 @@ import argparse
 import json
 from pathlib import Path
 
-from adaptive_trading_bot.research.failed_breakout_reversion_screen import run
+from adaptive_trading_bot.research.failed_breakout_reversion_screen import (
+    DEFAULT_INPUT_AUTHORITY,
+    ScreenInputAuthority,
+    run,
+)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    authority: ScreenInputAuthority = DEFAULT_INPUT_AUTHORITY,
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -21,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output,
         run_id=args.run_id,
         executable_sha=args.executable_sha,
+        authority=authority,
     )
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), default=str))
     return 0

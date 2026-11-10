@@ -43,6 +43,8 @@ class FailedBreakoutReversionReasonCode(StrEnum):
     BASE_COST_ROOM_PASSED = "BASE_COST_ROOM_PASSED"
 
     WARMUP_INCOMPLETE = "WARMUP_INCOMPLETE"
+    REQUIRED_CONTEXT_NOT_READY = "REQUIRED_CONTEXT_NOT_READY"
+    EXTREME_VOLATILITY_BLOCKED = "EXTREME_VOLATILITY_BLOCKED"
     CONTEXT_NOT_FULLY_WARMED = "CONTEXT_NOT_FULLY_WARMED"
     ATR14_UNAVAILABLE = "ATR14_UNAVAILABLE"
     REFERENCE_RANGE_INVALID = "REFERENCE_RANGE_INVALID"
@@ -116,6 +118,19 @@ class FailedBreakoutReversionStrategy:
         if len(history) != 16:
             return self._no_trade(
                 context, history, (FailedBreakoutReversionReasonCode.WARMUP_INCOMPLETE,)
+            )
+        regime = context.multi_timeframe_regime
+        if not regime.is_fully_ready:
+            return self._no_trade(
+                context,
+                history,
+                (FailedBreakoutReversionReasonCode.REQUIRED_CONTEXT_NOT_READY,),
+            )
+        if regime.has_extreme_volatility:
+            return self._no_trade(
+                context,
+                history,
+                (FailedBreakoutReversionReasonCode.EXTREME_VOLATILITY_BLOCKED,),
             )
         if not feature.is_fully_warmed:
             return self._no_trade(

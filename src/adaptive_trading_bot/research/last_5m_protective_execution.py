@@ -431,7 +431,6 @@ def run_last_5m_protective_execution(
         costs=configuration.costs,
     )
     accounting = PositionAccountingCore()
-    _account(accounting, intent.symbol, entry)
     grid_wait = entry.fill_at - eligible_at
 
     try:
@@ -446,11 +445,17 @@ def run_last_5m_protective_execution(
                 intent.side, entry.fill_price, intent.stop_basis, target
             )
     except (BreakoutRetestReplayError, Last5mProtectiveExecutionError):
+        invalid_geometry_event = (
+            "INVALID_2R_GEOMETRY"
+            if configuration.exit_policy is ExitPolicy.FIXED_2R
+            else "INVALID_ENTRY_GEOMETRY"
+        )
         recovery_index = next(
             (i for i in range(entry_index + 1, len(bars)) if bars[i].open_time > entry.fill_at),
             None,
         )
         if recovery_index is None:
+            _account(accounting, intent.symbol, entry)
             return _result(
                 intent,
                 binding,
@@ -466,7 +471,7 @@ def run_last_5m_protective_execution(
                 accounting.position(intent.symbol),
                 None,
                 None,
-                ("ENTRY_FILLED", "INVALID_ENTRY_GEOMETRY", "RECOVERY_UNFILLED"),
+                ("ENTRY_FILLED", invalid_geometry_event, "RECOVERY_UNFILLED"),
             )
         recovery_bar = bars[recovery_index]
         recovery = _compact_fill(
@@ -477,7 +482,7 @@ def run_last_5m_protective_execution(
             reference_price=recovery_bar.open,
             costs=configuration.costs,
         )
-        _account(accounting, intent.symbol, recovery)
+        _account_fills(accounting, intent.symbol, entry, recovery)
         trigger = Last5mTriggerAudit(
             TriggerKind.INVALID_GEOMETRY_RECOVERY,
             recovery_bar.open_time,
@@ -500,11 +505,12 @@ def run_last_5m_protective_execution(
             accounting.position(intent.symbol),
             None,
             None,
-            ("ENTRY_FILLED", "INVALID_ENTRY_GEOMETRY", "RECOVERY_FILLED"),
+            ("ENTRY_FILLED", invalid_geometry_event, "RECOVERY_FILLED"),
         )
 
     requested_at = entry.fill_at
     if configuration.acknowledgement is not ProtectionAcknowledgement.ACCEPTED:
+        _account(accounting, intent.symbol, entry)
         status = (
             Last5mExecutionStatus.PROTECTION_REJECTED_OPEN
             if configuration.acknowledgement is ProtectionAcknowledgement.REJECTED
@@ -598,6 +604,7 @@ def run_last_5m_protective_execution(
         stop_touch, target_touch = _touches(intent.side, bar, intent.stop_basis, target)
         if inside:
             if stop_touch or target_touch:
+                _account(accounting, intent.symbol, entry)
                 trigger = Last5mTriggerAudit(
                     TriggerKind.ACTIVATION_ORDER_AMBIGUOUS,
                     bar.open_time,
@@ -689,6 +696,7 @@ def run_last_5m_protective_execution(
             reference,
         )
 
+    _account(accounting, intent.symbol, entry)
     return _result(
         intent,
         binding,
@@ -824,16 +832,28 @@ def _compact_fill(
 
 
 def _account(core: PositionAccountingCore, symbol: TradingSymbol, fill: CompactFill) -> None:
-    accounting_fill = PositionAccountingFill(
-        fill.fill_id,
-        symbol,
-        fill.side,
-        fill.quantity,
-        fill.fill_at,
-        fill.fill_price,
-        fill.fee_quote,
-    )
-    core.process(PositionAccountingFillBatch(fill.fill_at, (accounting_fill,)))
+    _account_fills(core, symbol, fill)
+
+
+def _account_fills(
+    core: PositionAccountingCore, symbol: TradingSymbol, *fills: CompactFill
+) -> None:
+    if not fills:
+        raise Last5mProtectiveExecutionError("accounting requires at least one fill")
+    grouped: dict[datetime, list[PositionAccountingFill]] = {}
+    for fill in fills:
+        accounting_fill = PositionAccountingFill(
+            fill.fill_id,
+            symbol,
+            fill.side,
+            fill.quantity,
+            fill.fill_at,
+            fill.fill_price,
+            fill.fee_quote,
+        )
+        grouped.setdefault(fill.fill_at, []).append(accounting_fill)
+    for fill_at in sorted(grouped):
+        core.process(PositionAccountingFillBatch(fill_at, tuple(grouped[fill_at])))
 
 
 def _touches(side: EntrySide, bar: Last5mBar, stop: Decimal, target: Decimal) -> tuple[bool, bool]:
@@ -903,7 +923,7 @@ def _closed_result(
         reference_price=reference,
         costs=configuration.costs,
     )
-    _account(accounting, intent.symbol, exit_fill)
+    _account_fills(accounting, intent.symbol, entry, exit_fill)
     return _result(
         intent,
         binding,

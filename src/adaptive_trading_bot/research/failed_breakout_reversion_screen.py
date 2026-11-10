@@ -8,7 +8,7 @@ import os
 import subprocess
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
@@ -79,6 +79,52 @@ TAIL_END = datetime(2026, 10, 7, 0, 40, tzinfo=UTC)
 RESEARCH_EQUITY = Decimal("10000")
 FRAMES = (Timeframe.MINUTES_15, Timeframe.HOUR_1, Timeframe.HOURS_4)
 _CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenInputAuthority:
+    """Exact corpus/calendar authority, substitutable only by bounded synthetic tests."""
+
+    source_id: SourceId
+    dataset_version: str
+    root: Path
+    manifest_sha256: str
+    report_sha256: str
+    plan_sha256: str
+    shards: tuple[tuple[str, str], ...]
+    valid_5m_rows: int
+    epoch_start_ms: int
+    epoch_end_ms: int
+    report_start: str
+    report_end: str
+    context_start: datetime
+    signal_start: datetime
+    signal_end: datetime
+    tail_end: datetime
+
+    @property
+    def shard_map(self) -> dict[str, str]:
+        return dict(self.shards)
+
+
+DEFAULT_INPUT_AUTHORITY = ScreenInputAuthority(
+    SOURCE_ID,
+    DATASET_VERSION,
+    ROOT,
+    MANIFEST_SHA256,
+    REPORT_SHA256,
+    PLAN_SHA256,
+    tuple(SHARDS.items()),
+    56_448,
+    1_775_001_600_000,
+    1_791_936_000_000,
+    "2026-04-01T00:00:00Z",
+    "2026-10-14T00:00:00Z",
+    CONTEXT_START,
+    SIGNAL_START,
+    SIGNAL_END,
+    TAIL_END,
+)
 
 
 class ScreenError(ValueError):
@@ -180,8 +226,14 @@ PROTOCOL_SHA256 = _sha(_canonical(protocol_record()))
 
 
 class _MemoryStore:
-    def __init__(self, symbol: TradingSymbol, candles: dict[Timeframe, tuple[Candle, ...]]) -> None:
-        self.source_id = SOURCE_ID
+    def __init__(
+        self,
+        symbol: TradingSymbol,
+        candles: dict[Timeframe, tuple[Candle, ...]],
+        *,
+        source_id: SourceId = SOURCE_ID,
+    ) -> None:
+        self.source_id = source_id
         self.symbol = symbol
         self.candles = candles
 
@@ -198,7 +250,7 @@ class _MemoryStore:
         start: datetime | None = None,
         end: datetime | None = None,
     ) -> tuple[Candle, ...]:
-        if source_id != SOURCE_ID or symbol != self.symbol or start is None or end is None:
+        if source_id != self.source_id or symbol != self.symbol or start is None or end is None:
             raise ScreenError("screen read identity is invalid")
         return tuple(
             candle for candle in self.candles[timeframe] if start <= candle.open_time < end
@@ -220,12 +272,15 @@ class _MemoryStore:
 class AcceptedInput:
     """Hash each accepted authority once and retain parsed BTC/ETH bars."""
 
-    def __init__(self, repo: Path) -> None:
+    def __init__(
+        self, repo: Path, authority: ScreenInputAuthority = DEFAULT_INPUT_AUTHORITY
+    ) -> None:
         self.repo = repo.resolve(strict=True)
-        self.root = self.repo / ROOT
-        self.manifest = self._json_once("manifest.json", MANIFEST_SHA256)
-        self.report = self._json_once("report.json", REPORT_SHA256)
-        self._exact(self.root / "plan.json", PLAN_SHA256)
+        self.authority = authority
+        self.root = self.repo / authority.root
+        self.manifest = self._json_once("manifest.json", authority.manifest_sha256)
+        self.report = self._json_once("report.json", authority.report_sha256)
+        self._exact(self.root / "plan.json", authority.plan_sha256)
         self._validate_common()
         self._cache: dict[str, tuple[_MemoryStore, tuple[Last5mBar, ...]]] = {}
 
@@ -246,38 +301,45 @@ class AcceptedInput:
         if (
             self.manifest.get("status") != "QUALIFIED"
             or self.manifest.get("capture_status") != "CAPTURE_COMPLETE"
-            or self.manifest.get("dataset_version") != DATASET_VERSION
-            or self.manifest.get("plan_sha256") != PLAN_SHA256
+            or self.manifest.get("dataset_version") != self.authority.dataset_version
+            or self.manifest.get("plan_sha256") != self.authority.plan_sha256
             or self.report.get("status") != "QUALIFIED"
-            or self.report.get("dataset_version") != DATASET_VERSION
-            or self.report.get("start") != "2026-04-01T00:00:00Z"
-            or self.report.get("end") != "2026-10-14T00:00:00Z"
+            or self.report.get("dataset_version") != self.authority.dataset_version
+            or self.report.get("start") != self.authority.report_start
+            or self.report.get("end") != self.authority.report_end
             or not isinstance(files, dict)
-            or files.get("report.json") != REPORT_SHA256
+            or files.get("report.json") != self.authority.report_sha256
         ):
             raise ScreenError("accepted corpus authority is contradictory")
 
     def load(self, wire: str) -> tuple[_MemoryStore, tuple[Last5mBar, ...]]:
         if wire in self._cache:
             return self._cache[wire]
-        if wire not in SHARDS:
+        shards = self.authority.shard_map
+        if wire not in shards:
             raise ScreenError("screen symbol is outside BTC/ETH")
         symbols = self.report.get("symbols")
         facts = symbols.get(wire) if isinstance(symbols, dict) else None
         if (
             not isinstance(facts, dict)
             or facts.get("status") != "QUALIFIED"
-            or facts.get("valid_5m_rows") != 56_448
+            or facts.get("valid_5m_rows") != self.authority.valid_5m_rows
             or facts.get("missing_5m_rows") != 0
             or facts.get("epochs")
-            != [{"start_ms": 1775001600000, "end_ms": 1791936000000, "rows": 56448}]
+            != [
+                {
+                    "start_ms": self.authority.epoch_start_ms,
+                    "end_ms": self.authority.epoch_end_ms,
+                    "rows": self.authority.valid_5m_rows,
+                }
+            ]
         ):
             raise ScreenError("accepted member coverage report changed")
         relative = f"parquet/{wire}-5m.parquet"
         files = self.manifest["files"]
-        if files.get(relative) != SHARDS[wire]:
+        if files.get(relative) != shards[wire]:
             raise ScreenError("5m shard manifest membership changed")
-        body = self._exact(self.root / relative, SHARDS[wire])
+        body = self._exact(self.root / relative, shards[wire])
         table = pq.read_table(pa.BufferReader(body))
         expected_schema = pa.schema(
             [pa.field("symbol", pa.string()), pa.field("timeframe", pa.string())]
@@ -320,7 +382,9 @@ class AcceptedInput:
             ):
                 raise ScreenError("5m shard contains an invalid canonical row")
             rows[row.open_time_ms] = row
-        if len(rows) != 56_448 or epochs(rows) != [(1775001600000, 1791936000000)]:
+        if len(rows) != self.authority.valid_5m_rows or epochs(rows) != [
+            (self.authority.epoch_start_ms, self.authority.epoch_end_ms)
+        ]:
             raise ScreenError("5m shard coverage changed")
         derived = {
             Timeframe.MINUTES_15: derive(rows, epochs(rows), 3),
@@ -334,7 +398,7 @@ class AcceptedInput:
         }
         five = tuple(
             Last5mBar(
-                SOURCE_ID,
+                self.authority.source_id,
                 symbol,
                 "accepted-complete-196d",
                 _instant(row.open_time_ms),
@@ -346,9 +410,9 @@ class AcceptedInput:
                 row.base_volume,
             )
             for row in rows.values()
-            if CONTEXT_START <= _instant(row.open_time_ms) < TAIL_END
+            if self.authority.context_start <= _instant(row.open_time_ms) < self.authority.tail_end
         )
-        value = (_MemoryStore(symbol, candles), five)
+        value = (_MemoryStore(symbol, candles, source_id=self.authority.source_id), five)
         self._cache[wire] = value
         return value
 
@@ -476,9 +540,10 @@ def run_member(
     signal_end: datetime = SIGNAL_END,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     symbol = store.symbol
+    source_id = store.source_id
     replay = ReplayEngine(HistoricalReplaySource(store)).prepare(
         tuple(
-            ReplaySeries(SOURCE_ID, symbol, frame, context_start, signal_end) for frame in FRAMES
+            ReplaySeries(source_id, symbol, frame, context_start, signal_end) for frame in FRAMES
         ),
         clock=FrozenClock(context_start),
     )
@@ -550,7 +615,7 @@ def run_member(
             start = context.observed_at
             end = start + timedelta(minutes=40)
             bars = tuple(five_by_open[start + timedelta(minutes=5 * index)] for index in range(8))
-            binding = Last5mExecutionBinding(SOURCE_ID, symbol, bars[0].epoch_id, start, end)
+            binding = Last5mExecutionBinding(source_id, symbol, bars[0].epoch_id, start, end)
             for scenario in Scenario:
                 result = run_last_5m_protective_execution(
                     intent=intent,
@@ -612,6 +677,18 @@ def _spacing_mask(admitted_times: Sequence[datetime]) -> list[datetime]:
         if not spaced or observed_at >= spaced[-1] + timedelta(minutes=35):
             spaced.append(observed_at)
     return spaced
+
+
+def _decision_time_identity(value: object) -> str:
+    if isinstance(value, str):
+        instant = datetime.fromisoformat(value)
+    elif isinstance(value, datetime):
+        instant = value
+    else:
+        raise ScreenError("decision time identity must be a datetime or ISO-8601 string")
+    if instant.tzinfo is None or instant.utcoffset() != timedelta(0):
+        raise ScreenError("decision time identity must be UTC")
+    return instant.astimezone(UTC).isoformat()
 
 
 def _decimals(rows: list[dict[str, Any]], key: str) -> list[Decimal]:
@@ -698,8 +775,8 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _block(signal_open: datetime) -> str:
-    day = (signal_open - SIGNAL_START).days
+def _block(signal_open: datetime, signal_start: datetime = SIGNAL_START) -> str:
+    day = (signal_open - signal_start).days
     return "BLOCK_1" if day < 60 else "BLOCK_2" if day < 120 else "BLOCK_3"
 
 
@@ -708,18 +785,20 @@ def _projection(
     executable_sha: str,
     members: list[dict[str, Any]],
     rows: list[dict[str, Any]],
+    authority: ScreenInputAuthority = DEFAULT_INPUT_AUTHORITY,
 ) -> dict[str, Any]:
+    shards = authority.shard_map
     by_member = {str(member["symbol"]): member for member in members}
     table: dict[str, Any] = {}
     complete = True
     candidate = True
-    for wire in SHARDS:
+    for wire in shards:
         mask = set(by_member[wire]["spacing_mask"])
         for scenario in Scenario:
             full = [
                 row for row in rows if row["symbol"] == wire and row["scenario"] == scenario.value
             ]
-            spaced = [row for row in full if str(row["decision_at"]) in mask]
+            spaced = [row for row in full if _decision_time_identity(row["decision_at"]) in mask]
             table[f"{wire}:{scenario.value}:FULL"] = _metrics(full)
             table[f"{wire}:{scenario.value}:SPACED"] = _metrics(spaced)
             full_metrics = table[f"{wire}:{scenario.value}:FULL"]
@@ -740,7 +819,7 @@ def _projection(
             ):
                 candidate = False
     blocks: dict[str, Any] = {}
-    for wire in SHARDS:
+    for wire in shards:
         mask = set(by_member[wire]["spacing_mask"])
         for scenario in Scenario:
             for block in ("BLOCK_1", "BLOCK_2", "BLOCK_3"):
@@ -749,9 +828,11 @@ def _projection(
                     for row in rows
                     if row["symbol"] == wire
                     and row["scenario"] == scenario.value
-                    and str(row["decision_at"]) in mask
+                    and _decision_time_identity(row["decision_at"]) in mask
                     and _block(
-                        datetime.fromisoformat(str(row["decision_at"])) - timedelta(minutes=15)
+                        datetime.fromisoformat(_decision_time_identity(row["decision_at"]))
+                        - timedelta(minutes=15),
+                        authority.signal_start,
                     )
                     == block
                 ]
@@ -768,7 +849,7 @@ def _projection(
         classification = "INCOMPLETE_ECONOMIC_EVIDENCE"
     elif any(
         table[f"{wire}:{scenario.value}:SPACED"]["closed"] < 30
-        for wire in SHARDS
+        for wire in shards
         for scenario in Scenario
     ):
         classification = "INSUFFICIENT_EVIDENCE"
@@ -785,13 +866,13 @@ def _projection(
         "protocol_sha256": PROTOCOL_SHA256,
         "run_id": run_id,
         "executable_sha": executable_sha,
-        "source_id": SOURCE_ID.value,
-        "dataset_version": DATASET_VERSION,
+        "source_id": authority.source_id.value,
+        "dataset_version": authority.dataset_version,
         "input_hashes": {
-            "manifest": MANIFEST_SHA256,
-            "report": REPORT_SHA256,
-            "plan": PLAN_SHA256,
-            **{f"{wire}-5m": digest for wire, digest in SHARDS.items()},
+            "manifest": authority.manifest_sha256,
+            "report": authority.report_sha256,
+            "plan": authority.plan_sha256,
+            **{f"{wire}-5m": digest for wire, digest in shards.items()},
         },
         "members": members,
         "economic_table": table,
@@ -809,7 +890,14 @@ def _projection(
     }
 
 
-def run(repo: Path, output: Path, *, run_id: str, executable_sha: str) -> dict[str, Any]:
+def run(
+    repo: Path,
+    output: Path,
+    *,
+    run_id: str,
+    executable_sha: str,
+    authority: ScreenInputAuthority = DEFAULT_INPUT_AUTHORITY,
+) -> dict[str, Any]:
     repo = repo.resolve(strict=True)
     output = output.resolve()
     if output.exists():
@@ -827,16 +915,24 @@ def run(repo: Path, output: Path, *, run_id: str, executable_sha: str) -> dict[s
         },
     )
     _replace(output / "protocol.json", protocol_record())
-    accepted = AcceptedInput(repo)
+    accepted = AcceptedInput(repo, authority)
     members: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
-    for wire in SHARDS:
+    for wire in authority.shard_map:
         store, five = accepted.load(wire)
-        member, member_rows = run_member(wire, store, five, output)
+        member, member_rows = run_member(
+            wire,
+            store,
+            five,
+            output,
+            context_start=authority.context_start,
+            signal_start=authority.signal_start,
+            signal_end=authority.signal_end,
+        )
         members.append(member)
         rows.extend(member_rows)
         _replace(output / f"{wire.lower()}-member.json", member)
-    projection = _projection(run_id, executable_sha, members, rows)
+    projection = _projection(run_id, executable_sha, members, rows, authority)
     _replace(output / "projection.json", projection)
     _replace(
         output / "complete.json",
