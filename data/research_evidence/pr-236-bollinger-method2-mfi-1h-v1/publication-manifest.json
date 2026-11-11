@@ -1,0 +1,30 @@
+{
+  "schema": "pr-236-bollinger-method2-hourly-publication-v1",
+  "run_id": "63964675-0ab4-4b46-89c3-1b034b69dfbd",
+  "executable_sha": "706c7818573c566e9a6a78e542887e7916c03612",
+  "protocol_sha256": "e4948ecdc43e03b072cc62f8ab6cfbeb9dfb58f80221c2e7e7aa0a5c52431672",
+  "classification": "NEGATIVE_ADAPTATION",
+  "promotion": "NO_PROMOTION",
+  "archived_15m_evidence_tree": "c6afa3b429d3e814451278ebf5114794510528fc",
+  "progress_record": "NOT_EMITTED_RUN_COMPLETED_BEFORE_HEARTBEAT_INTERVAL",
+  "trades_decompressed": {
+    "bytes": 11018109,
+    "sha256": "bac3ae504a7c9b21791b76fb05c7f209214d10e4e531c7ee4011a0e81dccaa4c"
+  },
+  "files": {
+    "README.md": "493042e7289edbe9e8c4b6bf50c1da25364a85a844aa7327df41cd55b0f6688a",
+    "btcusdt-member.json": "98e2a7860e3ea0f8e869b976b5782ba9b394f41317c299eb9d1f339519fb9069",
+    "complete.json": "1c5ea4a61440b3afbe3ad970dd8e79bc8290d126d17b2b3da12fdcf214dd93b0",
+    "ethusdt-member.json": "4fcc4daaf65800483755d7c77eddf44fcd0430cf33eb49305e2ef958c056e7e9",
+    "owned-tree-runner.ps1": "87faf8d4243d6b3cbc7b3656d7bf6712499090ea83e9d3a09569606af9e0a618",
+    "preflight.json": "8429dca95f73ab7121c4be9a0c42149e2b64ac6c2651c78fefb5ac4386472afc",
+    "projection.json": "6ecc6eae280738dd800bc2076116aa4d54a79ab0109c53eddf41f612c69ac416",
+    "protocol.json": "e4948ecdc43e03b072cc62f8ab6cfbeb9dfb58f80221c2e7e7aa0a5c52431672",
+    "run-exit.json": "f59444fb5853257ad3d599c1c71ea9b31e50261f7065a12b2aa63a07798e0f41",
+    "run-identity.json": "9d1f4e5a11dd4335ed84c2a894166d4594fffbd9305e064c636fbe4a30b2d2c5",
+    "run-owner.json": "9e875467f1fa64ff54069c6fc75a1bd80f547b203a7b72bdbe055ff93a3fe08b",
+    "run-stderr.log": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+    "run-stdout.log": "bf0a57111a748cb9f7aeb710ab43e79b9f068808bf1b205847bd0be0b57a2cf3",
+    "trades.jsonl.gz": "5f0e57f316fb52aacf4dc48b35eed4f65739d4df52dc22a9f7e1890e2fa790bf"
+  }
+}

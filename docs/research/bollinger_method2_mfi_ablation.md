@@ -37,8 +37,36 @@ expanded.
 - Unchanged authorities: thresholds, Risk/Safety/authorization gates, BASE/STRESS costs,
   fixed-2R geometry, 5m execution and the 30-minute modeled holding deadline.
 
-The new identity is research-only and has no historical result or execution grant. It does not
-replace or reinterpret the archived 15m result below and does not broaden runtime eligibility.
+The new identity is research-only and does not replace or reinterpret the archived 15m result
+below or broaden runtime eligibility.
+
+### Hourly historical result
+
+The single authorized hourly invocation used executable
+`706c7818573c566e9a6a78e542887e7916c03612`, protocol
+`e4948ecdc43e03b072cc62f8ab6cfbeb9dfb58f80221c2e7e7aa0a5c52431672` and run UUID
+`63964675-0ab4-4b46-89c3-1b034b69dfbd`. It exited 0 after 40.1836267 seconds. The owned process
+tree stayed below both bounds: no timeout, no memory termination and a peak combined working set
+of 352,595,968 bytes.
+
+| Asset | Arm | Observations | Signals | Risk rejected | Admitted |
+|---|---|---:|---:|---:|---:|
+| BTC | PRICE_CONTROL | 4,320 | 1,095 | 97 | 998 |
+| BTC | PRICE_PLUS_MFI | 4,320 | 321 | 47 | 274 |
+| ETH | PRICE_CONTROL | 4,320 | 1,042 | 52 | 990 |
+| ETH | PRICE_PLUS_MFI | 4,320 | 324 | 10 | 314 |
+
+MFI selected a less-negative subset in all asset/scenario comparisons, but every saved mean net R
+remained negative and every profit factor remained below one. BASE mean R for price/MFI was
+`-0.174348/-0.139973` BTC and `-0.134503/-0.078762` ETH; STRESS was
+`-0.340859/-0.261586` BTC and `-0.268590/-0.168083` ETH. All 2,576 arm admissions produced both
+scenario rows, filled and closed; unfilled, recovered and unresolved counts are zero.
+
+Because hourly decisions are more than 35 minutes apart, the FULL and COMMON_SPACED views are
+identical and are not independent confirmation. All three chronological block means are negative
+for each asset, arm and scenario. The result is **`NEGATIVE_ADAPTATION / NO_PROMOTION`**. Full
+economics, exit/holding facts, selection partitions, blocks and immutable hashes are retained in
+`data/research_evidence/pr-236-bollinger-method2-mfi-1h-v1/`.
 
 ## Archived 15m comparison
 

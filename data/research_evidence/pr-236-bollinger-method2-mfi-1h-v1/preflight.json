@@ -1,0 +1,24 @@
+{
+  "schema": "pr-236-bollinger-method2-hourly-preflight-v1",
+  "checkout": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2",
+  "branch": "issue-235-bb-method2",
+  "executable_sha": "706c7818573c566e9a6a78e542887e7916c03612",
+  "tree_sha": "44befd5d5ef5b8c88588f4b6adbaa310e0c0e5e4",
+  "run_id": "63964675-0ab4-4b46-89c3-1b034b69dfbd",
+  "interpreter": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-216-ci-env\\Scripts\\python.exe",
+  "package_origin": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2\\src\\adaptive_trading_bot\\__init__.py",
+  "cli_origin": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2\\scripts\\research\\bollinger_method2_screen.py",
+  "protocol_id": "BTC_ETH_BB_METHOD2_MFI_ABLATION_1H_30M_V1",
+  "protocol_sha256": "e4948ecdc43e03b072cc62f8ab6cfbeb9dfb58f80221c2e7e7aa0a5c52431672",
+  "result_schema": "bb-method2-mfi-hourly-ablation-result-v1",
+  "input_hashes": {
+    "manifest": "756659f6700a2ae48b5c5aa58972f037c709116ca73b9c5c23571617d24d4e9d",
+    "report": "bccffb447373f8fdc0d477580c9b78dcf5f4a5ca5777620df88026507e5b7e66",
+    "plan": "dc51e06df9c4b40935cbb705b25d4683ff63094f5b475f6fbf82f1a085e3a23f",
+    "BTCUSDT-5m": "8b0f88bb0bcb421c54f5c160c29dae9718802c29ae6d6059ce7bf4fa7ea07a78",
+    "ETHUSDT-5m": "41deb1ba9c0b473704316b69f51444c6c22c7ae4712038234cf422f74a5fc23d"
+  },
+  "prior_hourly_attempt_found": false,
+  "active_hourly_worker_found": false,
+  "command": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-216-ci-env\\Scripts\\python.exe -m scripts.research.bollinger_method2_screen --repo C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2 --output C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-236-hourly-run\\output --run-id 63964675-0ab4-4b46-89c3-1b034b69dfbd --executable-sha 706c7818573c566e9a6a78e542887e7916c03612"
+}
