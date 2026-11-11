@@ -8,8 +8,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  quality:
+  backend-prechecks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +35,89 @@ jobs:
       - name: Type check
         run: mypy src tests migrations
 
-      - name: Test
-        run: pytest
+      - name: Frozen successor inventory check
+        run: >-
+          pytest -q
+          tests/research/test_history_screened_196d_continuation.py::test_frozen_successor_inventory_reuses_only_parent_successes
+
+      - name: Collect and verify complete four-shard inventory
+        run: python scripts/ci/plan_pytest_shards.py --output pytest-shard-plan
+
+      - name: Upload complete pytest inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-shard-plan
+          path: pytest-shard-plan/
+          if-no-files-found: error
+
+  backend-tests:
+    needs: backend-prechecks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Download verified pytest inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: pytest-shard-plan
+          path: pytest-shard-plan
+
+      - name: Run pytest shard ${{ matrix.shard }}
+        id: pytest
+        shell: bash
+        run: |
+          set +e
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          started_epoch="$(date +%s)"
+          set -o pipefail
+          pytest "@pytest-shard-plan/shard-${{ matrix.shard }}.txt" \
+            --durations=30 --durations-min=1.0 \
+            --junitxml="pytest-shard-${{ matrix.shard }}.xml" \
+            2>&1 | tee "pytest-shard-${{ matrix.shard }}.log"
+          status="${PIPESTATUS[0]}"
+          ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          elapsed_seconds="$(( $(date +%s) - started_epoch ))"
+          printf '{"shard":%s,"started_at":"%s","ended_at":"%s","elapsed_seconds":%s,"exit_code":%s}\n' \
+            "${{ matrix.shard }}" "$started_at" "$ended_at" "$elapsed_seconds" "$status" \
+            > "pytest-shard-${{ matrix.shard }}-runtime.json"
+          exit "$status"
+
+      - name: Upload shard ${{ matrix.shard }} JUnit, durations and runtime
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-shard-${{ matrix.shard }}-results
+          path: |
+            pytest-shard-${{ matrix.shard }}.xml
+            pytest-shard-${{ matrix.shard }}.log
+            pytest-shard-${{ matrix.shard }}-runtime.json
+          if-no-files-found: error
+
+  quality:
+    if: always()
+    needs: [backend-prechecks, backend-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every backend prerequisite and shard
+        env:
+          PRECHECKS_RESULT: ${{ needs.backend-prechecks.result }}
+          SHARDS_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          test "$PRECHECKS_RESULT" = "success"
+          test "$SHARDS_RESULT" = "success"
 
   frontend-quality:
     runs-on: ubuntu-latest
