@@ -168,7 +168,7 @@ def _text(value: object) -> object:
         return str(value.total_seconds())
     if isinstance(value, StrEnum):
         return value.value
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [_text(item) for item in value]
     if isinstance(value, dict):
         return {str(key): _text(item) for key, item in value.items()}

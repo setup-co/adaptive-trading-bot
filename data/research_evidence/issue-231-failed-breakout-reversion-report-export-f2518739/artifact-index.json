@@ -1,0 +1,26 @@
+{
+  "schema": "issue-231-report-export-artifact-index-v1",
+  "issue": 231,
+  "export_id": "48f3d327-86b3-4210-98a3-4d22052200d8",
+  "exporter_sha": "f2518739f47add85355598260f0d0f72bc42c13d",
+  "source_run_id": "5708360d-0b81-437d-a888-6956bda16ed6",
+  "source_run_exit": 1,
+  "status": "REPORT_RECONSTRUCTED_FROM_SAVED_ROWS_ORIGINAL_EXIT_1",
+  "classification": "NEGATIVE",
+  "architect_acceptance": "PENDING",
+  "publication_copy_verified": true,
+  "files": [
+    {"path":"frozen-export.json","size":1267,"sha256":"89a48a183f45d47c6a78b802dcf8a1cfe76b7451250f890397fb9dcf131520cf"},
+    {"path":"logs/export-exit.json","size":280,"sha256":"3f2ecb66a0696b9c470c3637f2bf248873acc41479774dbcc6fde819d41f9fc9"},
+    {"path":"logs/export-start.json","size":1062,"sha256":"551da830ecebf37b7b5ec1496ca8fd54cfc9bad6d91d475768f774f6174eb5d5"},
+    {"path":"logs/owner.json","size":385,"sha256":"e2a679d11429e2ad21c7b4785dd5094d0c7ce792bf1820d9565a039128b2932d"},
+    {"path":"logs/process.json","size":294,"sha256":"b31afc51449b26f8252625f69057d0d755c839341e5e2dd56c2f7a94c59fc294"},
+    {"path":"logs/resource.jsonl","size":910,"sha256":"3f472cc7cc21fe2463efc078c1879cfce5640d62eaa6901419e53c4c761915e3"},
+    {"path":"logs/stderr.log","size":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+    {"path":"logs/stdout.log","size":1125,"sha256":"2fb1154b887413b66c383882ea3e75575d9ef3405d41c56e6564dded3194a2f8"},
+    {"path":"output/attestation.json","size":1123,"sha256":"83428d8f50c73db51ed64fc1fc51442eda42efb26533a6f8155bf8b4261cf90b"},
+    {"path":"output/projection.json","size":34272,"sha256":"0210bc1a9830c4cce42d598f4da0f682f76db555b71ca923a8f1036e55e9177d"},
+    {"path":"output/report.json","size":33731,"sha256":"a3b67d0e96aa3febb3b1ff078afc7ca14ba411429feeae8ce222e5eee5688c55"},
+    {"path":"run-export-once.ps1","size":6850,"sha256":"51fb28f51cfe7d4a00867146a11f84c34ce7cd3ddcd96b68ba019bc212208200"}
+  ]
+}
