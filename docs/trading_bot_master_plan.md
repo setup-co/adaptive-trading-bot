@@ -1624,6 +1624,20 @@ Approved:
 
 ## Change Log
 
+### 2026-11-11 — Bollinger Method II price/MFI entry ablation (research only)
+
+- Change ID: Issue #235 / `BTC_ETH_BB_METHOD2_MFI_ABLATION_15M_30M_V1`
+- Added two isolated research identities: `bb_price_control:0.1.0` and
+  `bb_mfi10_short_horizon:0.1.0`.
+- Scope: BTC/ETH closed-15m entry selection only, with identical shared Risk/Safety,
+  authorization, BASE/STRESS costs, fixed-2R target and existing 5m-LAST 30-minute execution.
+- The MFI arm is required to be a strict subset of the price arm and reports selection effect
+  separately from profitability. The book entry source and project exit adaptations remain
+  explicit in `docs/research/bollinger_method2_mfi_ablation.md`.
+- No legacy strategy, registry, runtime default, corpus, evidence or activation boundary changes.
+- Approved: Issue #235 authorizes one bounded historical comparison after synthetic CLI proof and
+  a clean executable freeze. It does not authorize tuning, Paper/Shadow/Live activation or orders.
+
 ### 2026-09-09 — Initial plan
 
 - Python Modular Monolith selected.
