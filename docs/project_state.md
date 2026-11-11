@@ -430,14 +430,6 @@ See `docs/architect_workflow.md` for the durable complete workflow.
 
 ## 7. Immediate next expected sequence
 
-0. Issue #235's one authorized BTC/ETH Bollinger Method II entry ablation is complete. Preserve
-   executable `717691b7ce461f6b1ff716df381914969cf3bece`, protocol
-   `c0f84213ac0dc0b362b349c0b25f1a3fda971e5d5e194d0c7227d4d5c4f79051` and run UUID
-   `5c844e1a-6dbd-4e0a-969d-da5562c65dd7`. MFI retained about 30–32% of price-control admissions and
-   improved mean net R in all four asset/cost comparisons, but every FULL and masked mean remained
-   negative and every profit factor remained below one. Classification is
-   `NEGATIVE_ADAPTATION / NO_PROMOTION`. Do not rerun, tune, promote or activate either research
-   identity on this evidence.
 1. Issue #214's fixed history-screened 196-day public acquisition stopped
    correctly after 1,648 successful requests when `ZAMAUSDT-0068` recorded a
    non-retryable `URLError` / `gaierror`. Preserve executable

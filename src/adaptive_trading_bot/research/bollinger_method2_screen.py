@@ -331,8 +331,6 @@ def _projection(
     table: dict[str, Any] = {}
     blocks: dict[str, Any] = {}
     comparisons: dict[str, Any] = {}
-    confirmed_candidate = True
-    complete = True
     by_member = {m["symbol"]: m for m in members}
     for wire in authority.shard_map:
         mask = set(by_member[wire]["common_spacing_mask"])
@@ -439,54 +437,7 @@ def _projection(
                         == block
                     ]
                     blocks[f"{wire}:{scenario.value}:{arm}:{block}"] = _study_metrics(vals)
-            cm = table[f"{wire}:{scenario.value}:{CONFIRMED_ID}:COMMON_SPACED"]
-            fm = table[f"{wire}:{scenario.value}:{CONFIRMED_ID}:FULL"]
-            if cm["unresolved"] or fm["unresolved"]:
-                complete = False
-            if (
-                cm["closed"] < 30
-                or cm["mean_net_r"] is None
-                or fm["mean_net_r"] is None
-                or cm["mean_net_r"] <= 0
-                or fm["mean_net_r"] <= 0
-                or cm["profit_factor_status"] != "FINITE"
-                or fm["profit_factor_status"] != "FINITE"
-                or cm["profit_factor"] is None
-                or fm["profit_factor"] is None
-                or cm["profit_factor"] <= 1
-                or fm["profit_factor"] <= 1
-            ):
-                confirmed_candidate = False
-            for block in ("BLOCK_1", "BLOCK_2", "BLOCK_3"):
-                metric = blocks[f"{wire}:{scenario.value}:{CONFIRMED_ID}:{block}"]
-                if (
-                    metric["closed"] == 0
-                    or metric["mean_net_r"] is None
-                    or metric["mean_net_r"] <= 0
-                ):
-                    confirmed_candidate = False
-    if not complete:
-        classification = "INCOMPLETE_ECONOMIC_EVIDENCE"
-    elif any(
-        table[f"{w}:{s.value}:{CONFIRMED_ID}:COMMON_SPACED"]["closed"] < 30
-        for w in authority.shard_map
-        for s in Scenario
-    ):
-        classification = "INSUFFICIENT_EVIDENCE"
-    elif confirmed_candidate:
-        classification = "REVIEW_ONLY_PRE_FUNDING"
-    else:
-        means = [
-            table[f"{w}:{s.value}:{CONFIRMED_ID}:{v}"]["mean_net_r"]
-            for w in authority.shard_map
-            for s in Scenario
-            for v in ("FULL", "COMMON_SPACED")
-        ]
-        classification = (
-            "NEGATIVE_ADAPTATION"
-            if all(x is not None and x <= 0 for x in means)
-            else "MIXED_FRAGILE"
-        )
+    classification = _classify_projection(table, blocks, tuple(authority.shard_map))
     return {
         "schema": "bb-method2-mfi-ablation-result-v1",
         "protocol": PROTOCOL_ID,
@@ -509,6 +460,55 @@ def _projection(
         else "NO_PROMOTION",
         "filter_effect": "DESCRIPTIVE_NOT_CAUSAL",
     }
+
+
+def _profit_factor_passes(metrics: dict[str, Any]) -> bool:
+    return metrics["profit_factor_status"] == "UNBOUNDED_ZERO_LOSS" or (
+        metrics["profit_factor_status"] == "NUMERIC"
+        and metrics["profit_factor"] is not None
+        and metrics["profit_factor"] > 1
+    )
+
+
+def _classify_projection(
+    table: dict[str, Any], blocks: dict[str, Any], wires: tuple[str, ...]
+) -> str:
+    confirmed = [
+        table[f"{wire}:{scenario.value}:{CONFIRMED_ID}:{view}"]
+        for wire in wires
+        for scenario in Scenario
+        for view in ("FULL", "COMMON_SPACED")
+    ]
+    if any(metric["unresolved"] for metric in confirmed):
+        return "INCOMPLETE_ECONOMIC_EVIDENCE"
+    if any(
+        table[f"{wire}:{scenario.value}:{CONFIRMED_ID}:COMMON_SPACED"]["closed"] < 30
+        for wire in wires
+        for scenario in Scenario
+    ):
+        return "INSUFFICIENT_EVIDENCE"
+    candidate = all(
+        metric["mean_net_r"] is not None
+        and metric["mean_net_r"] > 0
+        and _profit_factor_passes(metric)
+        for metric in confirmed
+    )
+    for wire in wires:
+        positive_base_blocks = sum(
+            blocks[f"{wire}:BASE:{CONFIRMED_ID}:{block}"]["mean_net_r"] is not None
+            and blocks[f"{wire}:BASE:{CONFIRMED_ID}:{block}"]["mean_net_r"] > 0
+            for block in ("BLOCK_1", "BLOCK_2", "BLOCK_3")
+        )
+        if positive_base_blocks < 2:
+            candidate = False
+    if candidate:
+        return "REVIEW_ONLY_PRE_FUNDING"
+    means = [metric["mean_net_r"] for metric in confirmed]
+    return (
+        "NEGATIVE_ADAPTATION"
+        if all(value is not None and value <= 0 for value in means)
+        else "MIXED_FRAGILE"
+    )
 
 
 def _decimal_difference(left: object, right: object) -> Decimal | None:

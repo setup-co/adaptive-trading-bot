@@ -5,21 +5,15 @@ Status: fixed research protocol; historical result is added only after the one a
 ## Source mapping and adaptation boundary
 
 This screen implements the entry-selection proposition described by John Bollinger as Method II:
-price action at the bands, optionally confirmed by an unbounded volume indicator. The project uses
-the published 20-period middle band, two population-standard-deviation bands, `%b > 0.8` for a
-long price condition and `%b < 0.2` for a short price condition. The confirmed arm additionally
-requires raw-money-flow MFI(10) strictly above 80 or below 20. Typical price is `(H+L+C)/3`; raw
-money flow is typical price times the canonical base-asset volume. A flow is positive or negative
-only when typical price is strictly above or below its predecessor; ties contribute to neither.
+price action at the bands, optionally confirmed by MFI on its bounded 0–100 scale. It freezes the
+book-version signal rather than mixing later platform defaults.
 
-Sources consulted:
-
-- John Bollinger, *Bollinger on Bollinger Bands*, Method II and indicator descriptions, as
-  represented by the publisher listing and the author's official Method II materials:
-  <https://www.bollingerbands.com/bollinger-band-rules> and
-  <https://www.bollingerbands.com/method-ii>.
-- Official Method II worksheet (2021), which distinguishes the price-only and price-plus-MFI
-  logic: <https://www.bollingerbands.com/_files/ugd/9c2d58_0f6617b3f75c4caa9f5937603e2d129a.pdf>.
+| Reference/version/page | Documented rule | Exact implemented rule | Project adaptation | Limitation |
+|---|---|---|---|---|
+| John Bollinger, *Bollinger on Bollinger Bands*, McGraw-Hill, ISBN 9780071373685, chapters 7/8 and 18/19, printed pp.155–159; [publisher identity/contents](https://www.mheducation.com/highered/mhp/product/bollinger-bollinger-bands); [consulted third-party transcription](https://studylib.net/doc/27097300/bollinger-on-bollinger-bands---john-bollinger) | Method II is trend following: price condition plus MFI confirmation; the book-version thresholds are BB20/2, `%b > 0.8` with MFI(10)>80 long and `%b < 0.2` with MFI(10)<20 short. | PRICE_CONTROL applies the strict `%b` condition; PRICE_PLUS_MFI adds the strict MFI(10) condition. | Shared project readiness/extreme-volatility, Risk and Safety guards remain mandatory. | The transcription is not publisher-hosted code; no book text is copied and this is not a TradeStation clone. |
+| [Official 2021 Method II manual, pp.1–3](https://www.bollingerbands.com/_files/ugd/58be43_b120ddf0184540608baf19e2c0ae2019.pdf) | Confirms price-plus-MFI Method II and BB defaults, but its displayed defaults use MFI(14) and separately describe a 10-period `%MoneyFlow` normalization. | The fixed book-version MFI(10) is used; `%MoneyFlow` is not substituted. | None. | The 2021 default display is corroborating context, not the chosen MFI period authority. |
+| [Official TradeStation methods page](https://www.bollingerbands.com/tradestation-methods), [official band rules](https://www.bollingerbands.com/bollinger-band-rules), and [authorized companion MFI description](https://bollingerbands.us/help-screening.php) | The companion description identifies MFI(10); the official pages identify Method II and general band conventions. | TP=`(H+L+C)/3`; raw flow=`TP * canonical base volume`; ten flows compare TP with the preceding TP; ties contribute to neither side; MFI=`100*positive/(positive+negative)`, with positive-only=100, negative-only=0 and both-zero unavailable. BB sigma is population sigma under the fixed Decimal context. | Calculation and missing-data conventions are deterministic for the accepted corpus. | These pages do not establish profitable WEEX performance or exact commercial-platform parity. |
+| Issue #235 fixed experiment | The source discusses Parabolic/opposite-band exits rather than this project's short-horizon exit. | Same entry signal as above. | Frozen opposite-band stop, decision-time fixed 2R target, shared BASE/STRESS costs and existing 5m-LAST 30-minute exit. | These exits are OUR adaptation, not Bollinger's original exit system. |
 
 This is **not** a reproduction of the book's exit system. Both arms instead use project
 adaptations: the opposite frozen band is the structural stop; the target is sealed at the 15m
@@ -48,9 +42,9 @@ differences. These are descriptive comparisons, not causal claims.
 
 Any unresolved exposure is incomplete evidence. Fewer than 30 confirmed closed common-spaced
 observations in any asset/scenario is insufficient. Review-only additionally requires positive
-FULL and COMMON_SPACED mean net R, finite profit factor above one, and positive means in all three
-fixed chronological blocks for both assets and scenarios. No result authorizes promotion or
-trading.
+FULL and COMMON_SPACED mean net R and profit factor above one (or explicit positive-gain,
+zero-loss unbounded PF) in both scenarios, plus positive BASE COMMON_SPACED mean in at least two
+fixed blocks per asset. No result authorizes promotion or trading.
 
 ## Historical result
 
@@ -96,6 +90,17 @@ This supports only the descriptive conclusion that MFI selected a less-bad subse
 masked mean remained negative, every profit factor remained far below one, and no exposure was
 unresolved. Classification is **`NEGATIVE_ADAPTATION / NO_PROMOTION`**. It is not a profitable
 strategy, a causal claim about MFI, or trading authority.
+
+### Prospective classifier-contract correction
+
+The original run outputs above remain immutable. Review found that executable
+`717691b7ce461f6b1ff716df381914969cf3bece` compared the inherited PF status with an unreachable
+`FINITE` label and required all BASE/STRESS blocks positive. Future classification now accepts the
+established `NUMERIC` PF above one or `UNBOUNDED_ZERO_LOSS`, and requires at least two positive BASE
+COMMON_SPACED blocks per asset, exactly as preregistered. The observed run's eight confirmed FULL
+and COMMON_SPACED means are all negative, so its `NEGATIVE_ADAPTATION / NO_PROMOTION` result does
+not depend on either defective positive-candidate gate. No simulation, outcome or archived evidence
+was rewritten.
 
 Compact immutable evidence is retained under
 `data/research_evidence/issue-235-bollinger-method2-mfi-v1/`. The large trade-row authority is

@@ -4,11 +4,14 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, getcontext, localcontext
 from pathlib import Path
+from typing import Any
 
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.research.bollinger_method2_screen import (
+    _classify_projection,
     _decimal_difference,
 )
+from adaptive_trading_bot.research.failed_breakout_reversion_screen import Scenario
 from adaptive_trading_bot.strategies.bollinger_method2 import CONFIRMED_ID, CONTROL_ID, _mfi10
 
 CLI = runpy.run_path(
@@ -119,3 +122,60 @@ def test_derived_difference_ignores_ambient_decimal_precision() -> None:
         ) == Decimal("0.000000000000000001")
     finally:
         getcontext().prec = original
+
+
+def _classification_inputs(
+    *,
+    mean: Decimal = Decimal("0.25"),
+    profit_factor_status: str = "NUMERIC",
+    profit_factor: Decimal | None = Decimal("2"),
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    table: dict[str, Any] = {}
+    blocks: dict[str, Any] = {}
+    for wire in ("BTCUSDT", "ETHUSDT"):
+        for scenario in Scenario:
+            for view in ("FULL", "COMMON_SPACED"):
+                table[f"{wire}:{scenario.value}:{CONFIRMED_ID}:{view}"] = {
+                    "closed": 30,
+                    "mean_net_r": mean,
+                    "profit_factor_status": profit_factor_status,
+                    "profit_factor": profit_factor,
+                    "unresolved": 0,
+                }
+        for index, block in enumerate(("BLOCK_1", "BLOCK_2", "BLOCK_3")):
+            blocks[f"{wire}:BASE:{CONFIRMED_ID}:{block}"] = {
+                "mean_net_r": Decimal("0.1") if index < 2 else Decimal("-0.1")
+            }
+    return table, blocks
+
+
+def test_classifier_accepts_numeric_pf_with_exactly_two_positive_base_blocks() -> None:
+    table, blocks = _classification_inputs()
+    assert _classify_projection(table, blocks, ("BTCUSDT", "ETHUSDT")) == "REVIEW_ONLY_PRE_FUNDING"
+
+
+def test_classifier_accepts_explicit_zero_loss_positive_profit_factor() -> None:
+    table, blocks = _classification_inputs(
+        profit_factor_status="UNBOUNDED_ZERO_LOSS", profit_factor=None
+    )
+    assert _classify_projection(table, blocks, ("BTCUSDT", "ETHUSDT")) == "REVIEW_ONLY_PRE_FUNDING"
+
+
+def test_classifier_preserves_negative_mixed_sparse_and_unresolved_contracts() -> None:
+    negative, blocks = _classification_inputs(mean=Decimal("-0.1"))
+    assert _classify_projection(negative, blocks, ("BTCUSDT", "ETHUSDT")) == "NEGATIVE_ADAPTATION"
+
+    mixed, blocks = _classification_inputs(mean=Decimal("-0.1"))
+    mixed[f"BTCUSDT:BASE:{CONFIRMED_ID}:FULL"]["mean_net_r"] = Decimal("0.1")
+    assert _classify_projection(mixed, blocks, ("BTCUSDT", "ETHUSDT")) == "MIXED_FRAGILE"
+
+    sparse, blocks = _classification_inputs()
+    sparse[f"ETHUSDT:STRESS:{CONFIRMED_ID}:COMMON_SPACED"]["closed"] = 29
+    assert _classify_projection(sparse, blocks, ("BTCUSDT", "ETHUSDT")) == "INSUFFICIENT_EVIDENCE"
+
+    unresolved, blocks = _classification_inputs()
+    unresolved[f"BTCUSDT:BASE:{CONFIRMED_ID}:FULL"]["unresolved"] = 1
+    assert (
+        _classify_projection(unresolved, blocks, ("BTCUSDT", "ETHUSDT"))
+        == "INCOMPLETE_ECONOMIC_EVIDENCE"
+    )
