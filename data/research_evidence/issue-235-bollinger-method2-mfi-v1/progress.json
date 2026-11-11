@@ -1,0 +1,1 @@
+{"counts":{"bb_mfi10_short_horizon":{"admitted":735,"observations":9415,"risk_rejected":55,"signals":790},"bb_price_control":{"admitted":2260,"observations":9415,"risk_rejected":220,"signals":2480}},"heartbeat_at":"2026-11-11T17:54:52.631507+00:00","observed_at":"2026-07-17T01:45:00+00:00","phase":"EVALUATING","rows":5990,"symbol":"ETHUSDT"}

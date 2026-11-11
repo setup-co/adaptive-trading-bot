@@ -51,3 +51,52 @@ observations in any asset/scenario is insufficient. Review-only additionally req
 FULL and COMMON_SPACED mean net R, finite profit factor above one, and positive means in all three
 fixed chronological blocks for both assets and scenarios. No result authorizes promotion or
 trading.
+
+## Historical result
+
+The single authorized invocation used executable
+`717691b7ce461f6b1ff716df381914969cf3bece`, protocol
+`c0f84213ac0dc0b362b349c0b25f1a3fda971e5d5e194d0c7227d4d5c4f79051` and run UUID
+`5c844e1a-6dbd-4e0a-969d-da5562c65dd7`. It exited 0 after 118.9113391 seconds, below the fixed
+600-second ceiling. The owned-process-tree monitor observed two process identities, no timeout and
+a peak combined working set of 414,556,160 bytes. Its separate non-market proof observed a spawned
+child and exited 0.
+
+Both arms evaluated exactly 17,280 decisions per asset. BTC price-control recorded 4,738 signals,
+162 Risk rejections and 4,576 admissions; its MFI arm recorded 1,451 signals, 59 Risk rejections and
+1,392 admissions. ETH recorded 4,723/392/4,331 and 1,483/97/1,386 respectively. Safety rejected
+none. Thus MFI retained 30.42% of BTC and 32.00% of ETH control admissions. The control-derived
+common masks contain 2,098 BTC and 2,043 ETH decisions; their intersections retain 539 and 532 MFI
+admissions. Every common admission had identical arm economics.
+
+| Asset | Costs | Arm | View | Closed | Mean net R | PF | W/L | Net quote | Fees quote |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|
+| BTC | BASE | PRICE | FULL | 4,576 | -0.3641605077 | 0.0861306347 | 592/3,984 | -39,740.9072 | 28,869.6577 |
+| BTC | BASE | MFI | FULL | 1,392 | -0.2647622170 | 0.1240598646 | 202/1,190 | -8,960.3933 | 6,692.0295 |
+| BTC | BASE | PRICE | MASK | 2,098 | -0.3953490233 | 0.0779479673 | 255/1,843 | -19,630.5547 | 14,034.5486 |
+| BTC | BASE | MFI | MASK | 539 | -0.2693689465 | 0.1411992185 | 86/453 | -3,492.8859 | 2,643.7790 |
+| BTC | STRESS | PRICE | FULL | 4,576 | -0.7300149412 | 0.0161171446 | 183/4,393 | -79,560.9473 | 57,739.9831 |
+| BTC | STRESS | MFI | FULL | 1,392 | -0.5391017432 | 0.0246075056 | 68/1,324 | -18,202.0293 | 13,384.1405 |
+| BTC | STRESS | PRICE | MASK | 2,098 | -0.7898153766 | 0.0129329652 | 76/2,022 | -39,123.4005 | 28,069.1879 |
+| BTC | STRESS | MFI | MASK | 539 | -0.5566540003 | 0.0244884380 | 26/513 | -7,225.4215 | 5,287.6385 |
+| ETH | BASE | PRICE | FULL | 4,331 | -0.2961304673 | 0.1456453913 | 701/3,630 | -31,374.4466 | 22,694.5073 |
+| ETH | BASE | MFI | FULL | 1,386 | -0.2038434551 | 0.1794270507 | 260/1,126 | -6,994.4199 | 5,131.7268 |
+| ETH | BASE | PRICE | MASK | 2,043 | -0.3216425904 | 0.1421258260 | 315/1,728 | -16,020.2725 | 11,477.2745 |
+| ETH | BASE | MFI | MASK | 532 | -0.2107846532 | 0.1907547966 | 100/432 | -2,772.7406 | 2,018.7583 |
+| ETH | STRESS | PRICE | FULL | 4,331 | -0.5876427946 | 0.0393974270 | 307/4,024 | -62,282.5545 | 45,389.6144 |
+| ETH | STRESS | MFI | FULL | 1,386 | -0.4111317963 | 0.0480447368 | 110/1,276 | -14,096.7040 | 10,263.1614 |
+| ETH | STRESS | PRICE | MASK | 2,043 | -0.6298745278 | 0.0388972302 | 143/1,900 | -31,396.4826 | 22,954.8160 |
+| ETH | STRESS | MFI | MASK | 532 | -0.4260392621 | 0.0464059719 | 45/487 | -5,597.1260 | 4,037.2153 |
+
+MFI improved the FULL mean net R relative to price control by `+0.0993982907` BTC BASE,
+`+0.1909131980` BTC STRESS, `+0.0922870122` ETH BASE and `+0.1765109983` ETH STRESS. Within the
+control population, MFI-retained decisions also outperformed excluded decisions by
+`+0.1428538248`, `+0.2743777619`, `+0.1357198811` and `+0.2595820488` mean net R respectively.
+This supports only the descriptive conclusion that MFI selected a less-bad subset. Every FULL and
+masked mean remained negative, every profit factor remained far below one, and no exposure was
+unresolved. Classification is **`NEGATIVE_ADAPTATION / NO_PROMOTION`**. It is not a profitable
+strategy, a causal claim about MFI, or trading authority.
+
+Compact immutable evidence is retained under
+`data/research_evidence/issue-235-bollinger-method2-mfi-v1/`. The large trade-row authority is
+stored as a deterministic gzip copy while the original remains preserved externally.

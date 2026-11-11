@@ -1,0 +1,33 @@
+{
+  "classification": "NEGATIVE_ADAPTATION",
+  "executable_sha": "717691b7ce461f6b1ff716df381914969cf3bece",
+  "files": {
+    "btcusdt-member.json": {"bytes": 59274, "sha256": "c3e334ebfecd134803b9b1a2665af8a4537e639f36a76d65d127864839915202"},
+    "complete.json": {"bytes": 177, "sha256": "74fd7f51264114ba7c74c2d862058469b116db00644cd90aef385a774c44ede8"},
+    "environment.json": {"bytes": 564, "sha256": "04865a93b14a5aac17289cc1d501b85c7dea93e9e001d8eed4470bf95372bd5f"},
+    "ethusdt-member.json": {"bytes": 57734, "sha256": "13c81deab425d3988c485bae6c36192a9127c14ff85b676fa1af5c9d4e49fa0e"},
+    "historical-exit.json": {"bytes": 689, "sha256": "bc9d3b11dc458ab08a42c09e59375ffaa254d2a279e64c9a7d8548239c7da3c9"},
+    "historical-stderr.log": {"bytes": 2, "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"},
+    "historical-stdout.log": {"bytes": 184321, "sha256": "e67dcc7de4195c82526fdb0c992222fdaab51329459e5a447c6ec8c464b8f781"},
+    "owned-tree-runner.ps1": {"bytes": 4154, "sha256": "cf3ce64a7478c6bbd82b9e4e25dfb4b790ff8c039400797867d2bfe950e1d25a"},
+    "progress.json": {"bytes": 343, "sha256": "022137ead65c8bc770942db1b5fff7c7d28e66e93dc2259a22a583292378fec0"},
+    "projection.json": {"bytes": 184317, "sha256": "18674a904425d55c53329f132b9faf6ed0931c209442a0c23f332bf748df3eb7"},
+    "proof-exit.json": {"bytes": 670, "sha256": "f8a896a5fa77f9d1670fb7c9f268c7219d07906f52c3b7b209e463eed33ebaa3"},
+    "proof-stderr.log": {"bytes": 2, "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"},
+    "proof-stdout.log": {"bytes": 17, "sha256": "65de5bff98563afa45b2a64b602581271f678b2ad0cfebec6b20967a35fb1fd0"},
+    "protocol.json": {"bytes": 822, "sha256": "c0f84213ac0dc0b362b349c0b25f1a3fda971e5d5e194d0c7227d4d5c4f79051"},
+    "run-identity.json": {"bytes": 242, "sha256": "c72197e39dceb69b79f4f0cd94954060536e59dba60eaa4830f066b6a88f27f2"},
+    "trades.jsonl.gz": {"bytes": 6182156, "sha256": "1222025ad038b9ea0f1bcfbc5ef396aa46fbdad903b00b5ba8cda013d4a1763b"}
+  },
+  "input_hashes": {
+    "BTCUSDT-5m": "8b0f88bb0bcb421c54f5c160c29dae9718802c29ae6d6059ce7bf4fa7ea07a78",
+    "ETHUSDT-5m": "41deb1ba9c0b473704316b69f51444c6c22c7ae4712038234cf422f74a5fc23d",
+    "manifest": "756659f6700a2ae48b5c5aa58972f037c709116ca73b9c5c23571617d24d4e9d",
+    "plan": "dc51e06df9c4b40935cbb705b25d4683ff63094f5b475f6fbf82f1a085e3a23f",
+    "report": "bccffb447373f8fdc0d477580c9b78dcf5f4a5ca5777620df88026507e5b7e66"
+  },
+  "original_trade_rows": {"bytes": 49958347, "sha256": "f5ede046c144b19791a76e5eac350c6ffc768fa803b4d1437ac6ca1a651aaf53"},
+  "promotion": "NO_PROMOTION",
+  "protocol_sha256": "c0f84213ac0dc0b362b349c0b25f1a3fda971e5d5e194d0c7227d4d5c4f79051",
+  "run_id": "5c844e1a-6dbd-4e0a-969d-da5562c65dd7"
+}
