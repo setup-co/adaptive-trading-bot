@@ -1,0 +1,2 @@
+{"observed_at":"2026-11-11T13:29:42.1882275+00:00","child_pid":21780,"elapsed_seconds":0.045,"working_set_bytes":4452352,"peak_working_set_bytes":4452352,"output_exists":false}
+{"observed_at":"2026-11-11T13:30:12.4585695+00:00","child_pid":21780,"elapsed_seconds":30.316,"working_set_bytes":4427776,"peak_working_set_bytes":4452352,"output_exists":true}
