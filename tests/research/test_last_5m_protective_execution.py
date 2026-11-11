@@ -69,6 +69,31 @@ def intent(*, short: bool = False, strategy_id: str = "manual") -> EntryOrderInt
     return result.intent
 
 
+def unit_intent(*, short: bool, reference: str, stop: str) -> EntryOrderIntent:
+    entry = _entry(strategy_id="same-open-test")
+    evaluation = replace(
+        entry.strategy_evaluation,
+        action=(CandidateAction.SHORT_CANDIDATE if short else CandidateAction.LONG_CANDIDATE),
+        reference_price=Decimal(reference),
+        invalidation_reference_price=Decimal(stop),
+    )
+    risk = RiskManager().evaluate(
+        evaluation,
+        RiskPortfolioSnapshot(NOW, "USDT", Decimal(10000), Decimal(10000), Decimal(10000)),
+    )
+    authorized = EntryOrderIntentAuthorizer().authorize(
+        DecisionJournalEntry(
+            entry.context,
+            evaluation,
+            risk,
+            OperationalSafetyGate().evaluate(risk, _health(risk)),
+        )
+    )
+    assert authorized.intent is not None
+    assert authorized.intent.quantity == 1
+    return authorized.intent
+
+
 def bar(
     index: int,
     *,
@@ -125,6 +150,164 @@ def run(
             activation_latency=activation,
         ),
     )
+
+
+def run_frozen_target(
+    bars: tuple[Last5mBar, ...],
+    *,
+    target: str = "110",
+    latency: timedelta = timedelta(0),
+    order_intent: EntryOrderIntent | None = None,
+    spread: str = "0",
+    slippage: str = "0",
+    fee: str = "0",
+) -> Last5mProtectiveExecutionResult:
+    return run_last_5m_protective_execution(
+        intent=order_intent or intent(),
+        binding=binding(len(bars)),
+        bars=bars,
+        configuration=Last5mProtectionConfiguration(
+            SimulatedExecutionCostConfiguration(
+                spread_bps=Decimal(spread),
+                slippage_bps=Decimal(slippage),
+                fee_bps=Decimal(fee),
+                latency=latency,
+            ),
+            ExitPolicy.FROZEN_TARGET_30M,
+            frozen_target_price=Decimal(target),
+            holding_period=timedelta(minutes=30),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "short",
+        "raw_open",
+        "reference",
+        "stop",
+        "target",
+        "entry_price",
+        "exit_price",
+        "fees",
+        "net_pnl",
+        "net_r",
+    ),
+    [
+        (
+            False,
+            "99.98",
+            "125",
+            "100",
+            "101",
+            "100.009994",
+            "99.950006",
+            "0.1599680000",
+            "-0.2199560000",
+            "-0.0087982400",
+        ),
+        (
+            True,
+            "100.02",
+            "75",
+            "100",
+            "99",
+            "99.989994",
+            "100.050006",
+            "0.1600320000",
+            "-0.2200440000",
+            "-0.00880176",
+        ),
+    ],
+)
+def test_frozen_target_batches_same_open_entry_and_exit_atomically(
+    short: bool,
+    raw_open: str,
+    reference: str,
+    stop: str,
+    target: str,
+    entry_price: str,
+    exit_price: str,
+    fees: str,
+    net_pnl: str,
+    net_r: str,
+) -> None:
+    result = run_frozen_target(
+        (bar(0, open_price=raw_open, high="102", low="98"),),
+        target=target,
+        order_intent=unit_intent(short=short, reference=reference, stop=stop),
+        spread="2",
+        slippage="2",
+        fee="8",
+    )
+
+    assert result.status is Last5mExecutionStatus.ORDINARY_CLOSED
+    assert result.trigger is not None
+    assert result.trigger.kind is TriggerKind.STOP_OPEN_GAP
+    assert result.entry_fill is not None and result.exit_fill is not None
+    assert result.entry_fill.fill_at == result.exit_fill.fill_at == NOW
+    assert result.accounting.quantity == 0
+    assert result.entry_fill.fill_price == Decimal(entry_price)
+    assert result.exit_fill.fill_price == Decimal(exit_price)
+    assert result.total_fees == Decimal(fees)
+    assert result.realized_net_pnl == Decimal(net_pnl)
+    assert result.closed_net_approved_risk_r == Decimal(net_r)
+
+
+def test_frozen_target_time_exit_uses_deadline_open_only() -> None:
+    bars = tuple(
+        bar(
+            index,
+            open_price="102" if index == 6 else "100",
+            high="200" if index == 6 else "105",
+            low="90",
+            close="150" if index == 6 else "100",
+        )
+        for index in range(7)
+    )
+    result = run_frozen_target(bars)
+
+    assert result.status is Last5mExecutionStatus.ORDINARY_CLOSED
+    assert result.trigger is not None and result.trigger.kind is TriggerKind.TIME_EXIT
+    assert result.exit_fill is not None
+    assert result.exit_fill.fill_at == NOW + timedelta(minutes=30)
+    assert result.exit_fill.reference_price == Decimal(102)
+    assert result.holding_time_exact
+    assert result.holding_duration_lower == timedelta(minutes=30)
+    assert result.realized_gross_pnl == Decimal("1.666666666666666666666666666666667")
+    assert result.total_fees == 0
+    assert result.closed_net_approved_risk_r == Decimal("0.06666666666666666666666666666666668")
+
+
+def test_frozen_target_preserves_dual_touch_and_recovers_invalid_fill() -> None:
+    dual = run_frozen_target(
+        (
+            bar(0, high="105", low="90"),
+            bar(1, high="115", low="70"),
+        )
+    )
+    assert dual.trigger is not None
+    assert dual.trigger.kind is TriggerKind.DUAL_TOUCH_STOP_FIRST
+
+    recovered = run_frozen_target(
+        (bar(0, high="105", low="90"), bar(1, open_price="99", high="100", low="98")),
+        target="90",
+    )
+    assert recovered.status is Last5mExecutionStatus.INVALID_GEOMETRY_RECOVERED
+    assert recovered.position_closed
+    assert recovered.closed_net_approved_risk_r is not None
+
+
+def test_frozen_target_stress_quantizes_entry_and_deadline_from_fill() -> None:
+    bars = tuple(bar(index, high="105", low="90") for index in range(8))
+    result = run_frozen_target(bars, latency=timedelta(seconds=1))
+
+    assert result.entry_fill is not None
+    assert result.entry_fill.fill_at == NOW + timedelta(minutes=5)
+    assert result.entry_grid_wait == timedelta(seconds=299)
+    assert result.trigger is not None and result.trigger.kind is TriggerKind.TIME_EXIT
+    assert result.exit_fill is not None
+    assert result.exit_fill.fill_at == NOW + timedelta(minutes=35)
 
 
 @pytest.mark.parametrize(

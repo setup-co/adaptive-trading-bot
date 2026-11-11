@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\scripts\research\failed_breakout_reversion_screen.py", line 30, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\scripts\research\failed_breakout_reversion_screen.py", line 19, in main
+    result = run(
+             ^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\src\adaptive_trading_bot\research\failed_breakout_reversion_screen.py", line 835, in run
+    member, member_rows = run_member(wire, store, five, output)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\src\adaptive_trading_bot\research\failed_breakout_reversion_screen.py", line 555, in run_member
+    result = run_last_5m_protective_execution(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\src\adaptive_trading_bot\research\last_5m_protective_execution.py", line 640, in run_last_5m_protective_execution
+    return _closed_result(
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\src\adaptive_trading_bot\research\last_5m_protective_execution.py", line 906, in _closed_result
+    _account(accounting, intent.symbol, exit_fill)
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\src\adaptive_trading_bot\research\last_5m_protective_execution.py", line 836, in _account
+    core.process(PositionAccountingFillBatch(fill.fill_at, (accounting_fill,)))
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-229-failed-breakout-reversion\src\adaptive_trading_bot\accounting\positions.py", line 192, in process
+    raise PositionAccountingCoreError(
+adaptive_trading_bot.accounting.positions.PositionAccountingCoreError: fill batches must advance strictly; submit equal-time fills together

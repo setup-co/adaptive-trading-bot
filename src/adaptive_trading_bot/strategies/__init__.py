@@ -27,6 +27,17 @@ from adaptive_trading_bot.strategies.core import (
     StrategyEvaluation,
     StrategyEvaluationContext,
 )
+from adaptive_trading_bot.strategies.failed_breakout_reversion import (
+    BASE_COSTS as FAILED_BREAKOUT_BASE_COSTS,
+)
+from adaptive_trading_bot.strategies.failed_breakout_reversion import (
+    POLICY_ID as FAILED_BREAKOUT_REVERSION_POLICY_ID,
+)
+from adaptive_trading_bot.strategies.failed_breakout_reversion import (
+    FailedBreakoutReversionReasonCode,
+    FailedBreakoutReversionRuleAudit,
+    FailedBreakoutReversionStrategy,
+)
 from adaptive_trading_bot.strategies.range_context import (
     RangeContextSnapshot,
     RangeDetectorSeriesState,
@@ -119,6 +130,8 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "BREAKOUT_RETEST_ZONE_INVALIDATION_POLICY_ID",
+    "FAILED_BREAKOUT_BASE_COSTS",
+    "FAILED_BREAKOUT_REVERSION_POLICY_ID",
     "ArmedBreakout",
     "BreakoutRetestConfiguration",
     "BreakoutRetestReasonCode",
@@ -132,6 +145,9 @@ __all__ = [
     "BreakoutSide",
     "CandidateAction",
     "Ema50ComparisonRelation",
+    "FailedBreakoutReversionReasonCode",
+    "FailedBreakoutReversionRuleAudit",
+    "FailedBreakoutReversionStrategy",
     "HoldOnlyExitReasonCode",
     "HoldOnlyExitRuleAudit",
     "HoldOnlyExitStrategy",

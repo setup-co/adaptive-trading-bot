@@ -1768,6 +1768,19 @@ Approved:
 - Target Version: Research execution modeling / Master Plan v1.10
 - Approved: Architect implementation instruction in Issue #223. No historical evaluation, Paper/Shadow/Live activation, acquisition or trading is authorized.
 
+### 2026-11-11 — Research-only failed-excursion mean-reversion exception
+
+- Date: 2026-11-11
+- Change ID: Issue #229 / `BTC_ETH_FAILED_BREAKOUT_REVERSION_15M_30M_V1`
+- Old Decision: Range Mean Reversion required the existing detector's `VALID_RANGE`; a rolling high/low alone was not sufficient range evidence.
+- New Decision: Permit separately versioned `range_failed_breakout_reversion:0.1.0` to test the causal previous-16-bar failed-excursion rule without claiming or inheriting `VALID_RANGE`. Preserve Range Mean Reversion 2.0.0, its detector, runtime registries and eligibility unchanged. Bind the new 15m decision to its sealed midpoint, structural stop and opt-in 5m-LAST frozen-target/30-minute modeled exit.
+- Reason: Test one prospectively fixed mean-reversion hypothesis without silently relaxing the existing validated-range strategy or copying a backtest-only rule.
+- Expected Benefit: One shared Strategy → Risk → Safety → authorization → execution/accounting path with explicit grid latency, deadline, ambiguity and recovery evidence.
+- Risk: Selection-informed historical evidence, 5m intrabar ambiguity and unavailable funding/perpetual mechanics can mislead. Any result remains research evidence, not strategy or trading approval.
+- Affected Modules: One research-only strategy, the opt-in 5m execution policy, a single-purpose runner, focused tests and protocol/result documentation. Existing strategies, defaults, runtime boundaries, datasets and frozen evidence remain unchanged.
+- Target Version: Research hypothesis / Master Plan v1.11
+- Approved: Architect instruction in Issue #229; one bounded historical screen only. No Paper/Shadow/Live activation or trading is authorized.
+
 ---
 
 # 38. Next action
