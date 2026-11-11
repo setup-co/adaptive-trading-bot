@@ -24,6 +24,7 @@ from adaptive_trading_bot.research.failed_breakout_reversion_screen import (
     run_member,
 )
 from adaptive_trading_bot.research.last_5m_protective_execution import (
+    Last5mBar,
     Last5mExecutionBinding,
     Last5mParquetSource,
 )
@@ -83,7 +84,7 @@ def _rows(wire: str) -> list[Row]:
     return values
 
 
-def _fixture(tmp_path, wire: str):
+def _fixture(tmp_path: Path, wire: str) -> tuple[_MemoryStore, tuple[Last5mBar, ...]]:
     rows = _rows(wire)
     path = tmp_path / f"{wire}-5m.parquet"
     pq.write_table(_table(wire, "5m", rows), path, compression="zstd", use_dictionary=False)
@@ -102,7 +103,7 @@ def _fixture(tmp_path, wire: str):
     return _MemoryStore(symbol, candles), five
 
 
-def test_actual_canonical_parquet_path_runs_both_members_and_scenarios(tmp_path) -> None:
+def test_actual_canonical_parquet_path_runs_both_members_and_scenarios(tmp_path: Path) -> None:
     output = tmp_path / "output"
     output.mkdir()
     all_rows = []
@@ -163,11 +164,13 @@ def _write_input_authority(repo: Path) -> ScreenInputAuthority:
     rows = _rows("BTCUSDT")
     epoch_start = rows[0].open_time_ms
     epoch_end = rows[-1].close_time_ms
+    report_start = START.isoformat().replace("+00:00", "Z")
+    report_end = TAIL_END.isoformat().replace("+00:00", "Z")
     report = {
         "status": "QUALIFIED",
         "dataset_version": "synthetic-failed-breakout-v1",
-        "start": START.isoformat().replace("+00:00", "Z"),
-        "end": TAIL_END.isoformat().replace("+00:00", "Z"),
+        "start": report_start,
+        "end": report_end,
         "symbols": {
             wire: {
                 "status": "QUALIFIED",
@@ -204,8 +207,8 @@ def _write_input_authority(repo: Path) -> ScreenInputAuthority:
         len(rows),
         epoch_start,
         epoch_end,
-        report["start"],
-        report["end"],
+        report_start,
+        report_end,
         START,
         SIGNAL_START,
         SIGNAL_END,
@@ -213,7 +216,9 @@ def _write_input_authority(repo: Path) -> ScreenInputAuthority:
     )
 
 
-def test_actual_command_writes_complete_projection_and_canonical_time_joins(tmp_path) -> None:
+def test_actual_command_writes_complete_projection_and_canonical_time_joins(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     authority = _write_input_authority(repo)
@@ -274,7 +279,7 @@ def test_actual_command_writes_complete_projection_and_canonical_time_joins(tmp_
                 == 0
             )
 
-    members = [
+    members: list[dict[str, object]] = [
         json.loads((output / f"{wire.lower()}-member.json").read_text())
         for wire in ("BTCUSDT", "ETHUSDT")
     ]
@@ -292,7 +297,9 @@ def test_actual_command_writes_complete_projection_and_canonical_time_joins(tmp_
     assert btc_base["mean_net_r"] == "-0.01255182533741923390866223950356772"
 
 
-def _classification_inputs(positive_by_wire: dict[str, bool], *, unresolved: bool = False):
+def _classification_inputs(
+    positive_by_wire: dict[str, bool], *, unresolved: bool = False
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     classification_start = DEFAULT_INPUT_AUTHORITY.signal_start
     decision_times = [
         *(classification_start + timedelta(minutes=15 + 35 * index) for index in range(15)),
@@ -301,14 +308,14 @@ def _classification_inputs(positive_by_wire: dict[str, bool], *, unresolved: boo
             for index in range(15)
         ),
     ]
-    members = [
+    members: list[dict[str, object]] = [
         {
             "symbol": wire,
             "spacing_mask": [value.isoformat() for value in decision_times],
         }
         for wire in ("BTCUSDT", "ETHUSDT")
     ]
-    rows = []
+    rows: list[dict[str, object]] = []
     for wire, positive in positive_by_wire.items():
         for scenario in ("BASE", "STRESS"):
             for index, decision_at in enumerate(decision_times):
