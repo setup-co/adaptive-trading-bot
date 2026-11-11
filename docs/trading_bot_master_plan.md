@@ -1624,6 +1624,18 @@ Approved:
 
 ## Change Log
 
+### 2026-11-12 — Bollinger Method II hourly research successor (not executed)
+
+- Change ID: PR #236 / `BTC_ETH_BB_METHOD2_MFI_ABLATION_1H_30M_V1`
+- Added distinct research identities `bb_price_control_1h:0.2.0` and
+  `bb_mfi10_hourly:0.2.0`; the existing 15m identities and results remain immutable.
+- BB(20, 2 population standard deviations) and MFI(10) now consume completed 1h OHLCV derived
+  from the accepted canonical 5m authority, with 4,320 hourly decisions per asset and arm over the
+  unchanged 180-day calendar.
+- Thresholds, Risk/Safety/authorization, BASE/STRESS costs, 5m execution, fixed-2R target and the
+  30-minute modeled holding deadline are unchanged. Runtime eligibility is not expanded.
+- No historical execution is authorized or represented by this implementation change.
+
 ### 2026-11-11 — Bollinger Method II price/MFI entry ablation (research only)
 
 - Change ID: Issue #235 / `BTC_ETH_BB_METHOD2_MFI_ABLATION_15M_30M_V1`

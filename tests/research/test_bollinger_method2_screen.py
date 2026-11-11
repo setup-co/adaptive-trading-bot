@@ -8,10 +8,11 @@ from typing import Any
 
 from adaptive_trading_bot.domain import Candle, Timeframe, TradingSymbol
 from adaptive_trading_bot.research.bollinger_method2_screen import (
+    PROTOCOL_ID,
     _classify_projection,
     _decimal_difference,
 )
-from adaptive_trading_bot.research.failed_breakout_reversion_screen import Scenario
+from adaptive_trading_bot.research.failed_breakout_reversion_screen import AcceptedInput, Scenario
 from adaptive_trading_bot.strategies.bollinger_method2 import CONFIRMED_ID, CONTROL_ID, _mfi10
 
 CLI = runpy.run_path(
@@ -31,9 +32,9 @@ def _flow_candles(
     return tuple(
         Candle(
             TradingSymbol("BTC", "USDT"),
-            Timeframe.MINUTES_15,
-            datetime(2026, 1, 1, tzinfo=UTC) + index * timedelta(minutes=15),
-            datetime(2026, 1, 1, tzinfo=UTC) + (index + 1) * timedelta(minutes=15),
+            Timeframe.HOUR_1,
+            datetime(2026, 1, 1, tzinfo=UTC) + index * timedelta(hours=1),
+            datetime(2026, 1, 1, tzinfo=UTC) + (index + 1) * timedelta(hours=1),
             Decimal(price),
             high=Decimal(price),
             low=Decimal(price),
@@ -100,13 +101,42 @@ def test_actual_cli_reads_canonical_parquet_and_writes_final_report(tmp_path: Pa
     projection = json.loads((output / "projection.json").read_text())
     complete = json.loads((output / "complete.json").read_text())
     assert complete["status"] == "COMPLETE"
+    assert projection["schema"] == "bb-method2-mfi-hourly-ablation-result-v1"
+    assert projection["protocol"] == PROTOCOL_ID
     assert complete["trade_rows"] > 0
     assert projection["classification"] == "INSUFFICIENT_EVIDENCE"
+    accepted = AcceptedInput(repo, authority)
+    trades = tuple(json.loads(line) for line in (output / "trades.jsonl").read_text().splitlines())
     for member in projection["members"]:
+        assert all(arm["counts"]["observations"] == 4 for arm in member["arms"].values())
         control = member["arms"][CONTROL_ID]["counts"]
         confirmed = member["arms"][CONFIRMED_ID]["counts"]
         assert confirmed["signals"] <= control["signals"]
         assert confirmed["admitted"] <= control["admitted"]
+        store, _ = accepted.load(member["symbol"])
+        hourly = store.candles[Timeframe.HOUR_1]
+        by_close = {candle.close_time: index for index, candle in enumerate(hourly)}
+        for row in (
+            item
+            for item in trades
+            if item["symbol"] == member["symbol"] and item["arm"] == CONFIRMED_ID
+        ):
+            decision_at = datetime.fromisoformat(row["decision_at"])
+            assert decision_at.minute == decision_at.second == decision_at.microsecond == 0
+            index = by_close[decision_at]
+            expected_mfi, _, _ = _mfi10(hourly[index - 10 : index + 1])
+            assert expected_mfi is not None
+            assert Decimal(row["mfi10"]) == expected_mfi
+            with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+                closes = tuple(candle.close for candle in hourly[index - 19 : index + 1])
+                expected_sma = sum(closes, Decimal(0)) / Decimal(20)
+                sigma = (
+                    sum(((close - expected_sma) ** 2 for close in closes), Decimal(0)) / Decimal(20)
+                ).sqrt()
+                assert Decimal(row["reference"]) == hourly[index].close
+                assert Decimal(row["sma20"]) == expected_sma
+                assert Decimal(row["upper_band"]) == expected_sma + Decimal(2) * sigma
+                assert Decimal(row["lower_band"]) == expected_sma - Decimal(2) * sigma
     assert all(
         "retained_control" in value and "excluded_control" in value
         for value in projection["selection_comparison"].values()

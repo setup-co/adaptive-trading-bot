@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 
-from adaptive_trading_bot.domain import Candle
+from adaptive_trading_bot.domain import Candle, Timeframe
 from adaptive_trading_bot.strategies.core import (
     CandidateAction,
     StrategyContextError,
@@ -14,11 +14,27 @@ from adaptive_trading_bot.strategies.core import (
     StrategyEvaluationContext,
 )
 
-CONTROL_ID = "bb_price_control"
-CONFIRMED_ID = "bb_mfi10_short_horizon"
-STRATEGY_VERSION = "0.1.0"
-POLICY_ID = "BB_METHOD2_BOOK_ENTRY_PROJECT_30M_EXIT_V1"
+CONTROL_ID = "bb_price_control_1h"
+CONFIRMED_ID = "bb_mfi10_hourly"
+STRATEGY_VERSION = "0.2.0"
+POLICY_ID = "BB_METHOD2_BOOK_ENTRY_1H_PROJECT_30M_EXIT_V1"
 _CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
+
+
+@dataclass(frozen=True, slots=True)
+class BollingerMethod2HourlyContext(StrategyEvaluationContext):
+    """Normal project context plus the actual completed hourly OHLCV candle."""
+
+    candle_1h: Candle
+
+    def validate(self) -> None:
+        StrategyEvaluationContext.validate(self)
+        if (
+            self.candle_1h.symbol != self.symbol
+            or self.candle_1h.timeframe is not Timeframe.HOUR_1
+            or self.candle_1h.close_time != self.observed_at
+        ):
+            raise StrategyContextError("hourly decision candle identity or close time mismatch")
 
 
 class BollingerMethod2ReasonCode(StrEnum):
@@ -81,9 +97,9 @@ class BollingerMethod2Strategy:
 
     def evaluate(self, context: StrategyEvaluationContext) -> Evaluation:
         context.validate()
+        candle = _hourly_candle(context)
         key = (context.source_id, context.symbol)
         history = self._history.get(key, ())
-        candle = context.candle_15m
         if history and candle.open_time < history[-1].close_time:
             raise StrategyContextError("Bollinger history moved backward or duplicated")
         if history and candle.open_time != history[-1].close_time:
@@ -97,7 +113,7 @@ class BollingerMethod2Strategy:
     def _evaluate_before_insert(
         self, context: StrategyEvaluationContext, history: tuple[Candle, ...]
     ) -> Evaluation:
-        candle = context.candle_15m
+        candle = _hourly_candle(context)
         if len(history) < 19:
             return self._no_trade(context, history, BollingerMethod2ReasonCode.WARMUP_INCOMPLETE)
         if not context.multi_timeframe_regime.is_fully_ready:
@@ -264,7 +280,7 @@ class BollingerMethod2Strategy:
             (),
             (reason,),
             self._audit(
-                context.candle_15m,
+                _hourly_candle(context),
                 len(history),
                 facts.get("sma"),
                 facts.get("sigma"),
@@ -310,6 +326,12 @@ class BollingerMethod2Strategy:
             stop,
             target,
         )
+
+
+def _hourly_candle(context: StrategyEvaluationContext) -> Candle:
+    if not isinstance(context, BollingerMethod2HourlyContext):
+        raise StrategyContextError("Bollinger Method II hourly strategy requires hourly context")
+    return context.candle_1h
 
 
 def _mfi10(candles: tuple[Candle, ...]) -> tuple[Decimal | None, Decimal, Decimal]:

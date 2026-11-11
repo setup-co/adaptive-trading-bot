@@ -1,4 +1,4 @@
-"""One-shot BTC/ETH Bollinger Method-II MFI entry ablation."""
+"""BTC/ETH hourly Bollinger Method-II MFI entry ablation route."""
 
 from __future__ import annotations
 

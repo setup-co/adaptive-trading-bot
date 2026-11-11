@@ -9,7 +9,7 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from pathlib import Path
 from typing import Any
 
-from adaptive_trading_bot.domain import FrozenClock
+from adaptive_trading_bot.domain import FrozenClock, Timeframe
 from adaptive_trading_bot.features import (
     FeatureEngine,
     MarketStructureEngine,
@@ -69,21 +69,26 @@ from adaptive_trading_bot.strategies.bollinger_method2 import (
     CONTROL_ID,
     BollingerMethod2Audit,
     BollingerMethod2Configuration,
+    BollingerMethod2HourlyContext,
     BollingerMethod2Strategy,
 )
 from adaptive_trading_bot.strategies.context import assemble_strategy_contexts
 from adaptive_trading_bot.strategies.core import CandidateAction
 
-PROTOCOL_ID = "BTC_ETH_BB_METHOD2_MFI_ABLATION_15M_30M_V1"
+PROTOCOL_ID = "BTC_ETH_BB_METHOD2_MFI_ABLATION_1H_30M_V1"
 ARMS = (CONTROL_ID, CONFIRMED_ID)
+STRATEGY_VERSION = "0.2.0"
+DECISION_CADENCE = timedelta(hours=1)
 _DECIMAL_CONTEXT = Context(prec=50, rounding=ROUND_HALF_EVEN)
 
 
 def protocol_record() -> dict[str, object]:
     return {
         "protocol": PROTOCOL_ID,
-        "arms": [[CONTROL_ID, "0.1.0"], [CONFIRMED_ID, "0.1.0"]],
+        "arms": [[CONTROL_ID, STRATEGY_VERSION], [CONFIRMED_ID, STRATEGY_VERSION]],
         "source_signal": {
+            "decision_timeframe": "1h",
+            "indicator_input": "ACTUAL_COMPLETED_1H_OHLCV",
             "bb_period": 20,
             "population_sigma": "2",
             "price_long": "%b>0.8",
@@ -102,7 +107,9 @@ def protocol_record() -> dict[str, object]:
             "context_start": CONTEXT_START.isoformat(),
             "signal_start": SIGNAL_START.isoformat(),
             "signal_end": SIGNAL_END.isoformat(),
-            "expected_slots_per_asset_arm": 17280,
+            "decision_close_first": (SIGNAL_START + DECISION_CADENCE).isoformat(),
+            "decision_close_last": SIGNAL_END.isoformat(),
+            "expected_slots_per_asset_arm": 4320,
         },
         "scenarios": {s.value: _text(asdict(scenario_costs(s))) for s in Scenario},
         "equity_usdt": str(RESEARCH_EQUITY),
@@ -202,11 +209,29 @@ def run_member(
     last_heartbeat = datetime.now(UTC)
     for batch in replay:
         observed = observed_candles_from_replay(batch)
+        hourly_candles = {
+            event.candle.symbol: event.candle
+            for event in observed.events
+            if event.candle.timeframe is Timeframe.HOUR_1
+        }
         fb = features.process(observed)
         sb = structures.process(observed)
         rb = regimes.process(fb, sb)
         mtf = composer.process(rb)
-        for context in assemble_strategy_contexts(observed, fb, sb, mtf):
+        for base_context in assemble_strategy_contexts(observed, fb, sb, mtf):
+            hourly_candle = hourly_candles.get(base_context.symbol)
+            if hourly_candle is None:
+                continue
+            context = BollingerMethod2HourlyContext(
+                base_context.source_id,
+                base_context.symbol,
+                base_context.observed_at,
+                base_context.candle_15m,
+                base_context.features_15m,
+                base_context.structure_15m,
+                base_context.multi_timeframe_regime,
+                hourly_candle,
+            )
             evaluations = {arm: strategy.evaluate(context) for arm, strategy in strategies.items()}
             if not signal_start < context.observed_at <= signal_end:
                 continue
@@ -294,7 +319,7 @@ def run_member(
                 },
             )
             last_heartbeat = datetime.now(UTC)
-    expected = int((signal_end - signal_start) / timedelta(minutes=15))
+    expected = int((signal_end - signal_start) / DECISION_CADENCE)
     if any(counts[a]["observations"] != expected for a in ARMS):
         raise ScreenError("observation population incomplete")
     mask = _spacing_mask(control_admissions)
@@ -431,7 +456,7 @@ def _projection(
                         if _decision_time_identity(r["decision_at"]) in mask
                         and _block(
                             datetime.fromisoformat(_decision_time_identity(r["decision_at"]))
-                            - timedelta(minutes=15),
+                            - DECISION_CADENCE,
                             authority.signal_start,
                         )
                         == block
@@ -439,7 +464,7 @@ def _projection(
                     blocks[f"{wire}:{scenario.value}:{arm}:{block}"] = _study_metrics(vals)
     classification = _classify_projection(table, blocks, tuple(authority.shard_map))
     return {
-        "schema": "bb-method2-mfi-ablation-result-v1",
+        "schema": "bb-method2-mfi-hourly-ablation-result-v1",
         "protocol": PROTOCOL_ID,
         "protocol_sha256": PROTOCOL_SHA256,
         "run_id": run_id,

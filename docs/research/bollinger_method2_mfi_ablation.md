@@ -1,6 +1,7 @@
 # Bollinger Method II price/MFI entry ablation
 
-Status: fixed research protocol; historical result is added only after the one authorized run.
+Status: the completed 15m comparison is retained below; the distinct hourly successor protocol is
+implemented but has not been run on historical data.
 
 ## Source mapping and adaptation boundary
 
@@ -13,16 +14,33 @@ book-version signal rather than mixing later platform defaults.
 | John Bollinger, *Bollinger on Bollinger Bands*, McGraw-Hill, ISBN 9780071373685, chapters 7/8 and 18/19, printed pp.155–159; [publisher identity/contents](https://www.mheducation.com/highered/mhp/product/bollinger-bollinger-bands); [consulted third-party transcription](https://studylib.net/doc/27097300/bollinger-on-bollinger-bands---john-bollinger) | Method II is trend following: price condition plus MFI confirmation; the book-version thresholds are BB20/2, `%b > 0.8` with MFI(10)>80 long and `%b < 0.2` with MFI(10)<20 short. | PRICE_CONTROL applies the strict `%b` condition; PRICE_PLUS_MFI adds the strict MFI(10) condition. | Shared project readiness/extreme-volatility, Risk and Safety guards remain mandatory. | The transcription is not publisher-hosted code; no book text is copied and this is not a TradeStation clone. |
 | [Official 2021 Method II manual, pp.1–3](https://www.bollingerbands.com/_files/ugd/58be43_b120ddf0184540608baf19e2c0ae2019.pdf) | Confirms price-plus-MFI Method II and BB defaults, but its displayed defaults use MFI(14) and separately describe a 10-period `%MoneyFlow` normalization. | The fixed book-version MFI(10) is used; `%MoneyFlow` is not substituted. | None. | The 2021 default display is corroborating context, not the chosen MFI period authority. |
 | [Official TradeStation methods page](https://www.bollingerbands.com/tradestation-methods), [official band rules](https://www.bollingerbands.com/bollinger-band-rules), and [authorized companion MFI description](https://bollingerbands.us/help-screening.php) | The companion description identifies MFI(10); the official pages identify Method II and general band conventions. | TP=`(H+L+C)/3`; raw flow=`TP * canonical base volume`; ten flows compare TP with the preceding TP; ties contribute to neither side; MFI=`100*positive/(positive+negative)`, with positive-only=100, negative-only=0 and both-zero unavailable. BB sigma is population sigma under the fixed Decimal context. | Calculation and missing-data conventions are deterministic for the accepted corpus. | These pages do not establish profitable WEEX performance or exact commercial-platform parity. |
-| Issue #235 fixed experiment | The source discusses Parabolic/opposite-band exits rather than this project's short-horizon exit. | Same entry signal as above. | Frozen opposite-band stop, decision-time fixed 2R target, shared BASE/STRESS costs and existing 5m-LAST 30-minute exit. | These exits are OUR adaptation, not Bollinger's original exit system. |
+| Issues #235 and #236 fixed experiments | The source discusses Parabolic/opposite-band exits rather than this project's short-horizon exit. | Same entry signal as above. | Frozen opposite-band stop, decision-time fixed 2R target, shared BASE/STRESS costs and existing 5m-LAST 30-minute exit. | These exits are OUR adaptation, not Bollinger's original exit system. |
 
 This is **not** a reproduction of the book's exit system. Both arms instead use project
-adaptations: the opposite frozen band is the structural stop; the target is sealed at the 15m
-decision close at fixed 2R; and the existing opt-in 5m-LAST protection profile applies a 30-minute
+adaptations: the opposite frozen band is the structural stop; the target is sealed at the decision
+close at fixed 2R; and the existing opt-in 5m-LAST protection profile applies a 30-minute
 modeled deadline after fill. Shared Risk, Safety, authorization, pricing, costs, accounting,
 recovery and journal authorities are unchanged. No runtime registry or activation boundary is
 expanded.
 
-## Fixed comparison
+## Hourly successor comparison (not historically executed)
+
+- Protocol: `BTC_ETH_BB_METHOD2_MFI_ABLATION_1H_30M_V1`.
+- Arms: `bb_price_control_1h:0.2.0` and `bb_mfi10_hourly:0.2.0`.
+- Output schema: `bb-method2-mfi-hourly-ablation-result-v1`.
+- Assets: BTCUSDT and ETHUSDT only; one decision at every completed 1h close.
+- Indicators: BB(20, 2 population standard deviations) and MFI(10) consume completed hourly
+  OHLCV candles aggregated from each hour's twelve accepted canonical 5m bars. They are not
+  calculated from a 15m series sampled on the hour.
+- Calendar: the unchanged 180-day signal window has 4,320 decision closes per asset and arm,
+  from `2026-04-10T01:00:00Z` through `2026-10-07T00:00:00Z`, inclusive.
+- Unchanged authorities: thresholds, Risk/Safety/authorization gates, BASE/STRESS costs,
+  fixed-2R geometry, 5m execution and the 30-minute modeled holding deadline.
+
+The new identity is research-only and has no historical result or execution grant. It does not
+replace or reinterpret the archived 15m result below and does not broaden runtime eligibility.
+
+## Archived 15m comparison
 
 - Protocol: `BTC_ETH_BB_METHOD2_MFI_ABLATION_15M_30M_V1`.
 - Arms: `bb_price_control:0.1.0` and `bb_mfi10_short_horizon:0.1.0`.
@@ -47,6 +65,9 @@ zero-loss unbounded PF) in both scenarios, plus positive BASE COMMON_SPACED mean
 fixed blocks per asset. No result authorizes promotion or trading.
 
 ## Historical result
+
+This result belongs only to the archived 15m protocol and identities immediately above. It is not
+an hourly result.
 
 The single authorized invocation used executable
 `717691b7ce461f6b1ff716df381914969cf3bece`, protocol
