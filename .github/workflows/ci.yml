@@ -37,11 +37,11 @@ jobs:
 
       - name: Frozen successor inventory check
         run: >-
-          pytest -q
+          python -m pytest -q
           tests/research/test_history_screened_196d_continuation.py::test_frozen_successor_inventory_reuses_only_parent_successes
 
       - name: Collect and verify complete four-shard inventory
-        run: python scripts/ci/plan_pytest_shards.py --output pytest-shard-plan
+        run: python -m scripts.ci.plan_pytest_shards --output pytest-shard-plan
 
       - name: Upload complete pytest inventory
         uses: actions/upload-artifact@v4
@@ -83,7 +83,7 @@ jobs:
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           started_epoch="$(date +%s)"
           set -o pipefail
-          pytest "@pytest-shard-plan/shard-${{ matrix.shard }}.txt" \
+          python -m pytest "@pytest-shard-plan/shard-${{ matrix.shard }}.txt" \
             --durations=30 --durations-min=1.0 \
             --junitxml="pytest-shard-${{ matrix.shard }}.xml" \
             2>&1 | tee "pytest-shard-${{ matrix.shard }}.log"
