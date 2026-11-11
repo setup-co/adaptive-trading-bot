@@ -1781,6 +1781,30 @@ Approved:
 - Target Version: Research hypothesis / Master Plan v1.11
 - Approved: Architect instruction in Issue #229; one bounded historical screen only. No Paper/Shadow/Live activation or trading is authorized.
 
+### 2026-11-11 — Research-only impulse/pullback Trend-context exception
+
+- Date: 2026-11-11
+- Change ID: Issue #233 / `BTC_ETH_IMPULSE_PULLBACK_15M_30M_V1`
+- Old Decision: Trend Pullback required the existing approved HTF/EMA trend detector; no separate
+  fixed impulse/pullback/resumption context was admitted for an offline hypothesis.
+- New Decision: Permit separately versioned `trend_impulse_pullback:0.1.0` to test one causal
+  three-candle directional context on BTC/ETH without claiming the existing detector approved a
+  trend. Preserve `trend_pullback:1.0.0`, all runtime registries and eligibility unchanged. Bind the
+  new 15m decision to its sealed decision-time fixed-2R target, structural stop and opt-in 5m-LAST
+  frozen-target/30-minute modeled exit.
+- Reason: Test the prospectively fixed second-ranked hypothesis without silently changing the
+  existing Trend family or creating backtest-only decision, risk or accounting logic.
+- Expected Benefit: One shared Strategy → Risk → Safety → authorization → execution/accounting path
+  with explicit causal ATR references, grid latency, deadline, ambiguity and recovery evidence.
+- Risk: Selection-informed history, 5m intrabar ambiguity and unavailable funding/perpetual
+  mechanics can mislead. Any result remains research evidence, not strategy or trading approval.
+- Affected Modules: One research-only strategy, one thin study adapter/CLI, focused tests and this
+  protocol/result document. Existing strategies, defaults, runtime boundaries, datasets and frozen
+  evidence remain unchanged.
+- Target Version: Research hypothesis / Master Plan v1.12
+- Approved: Architect instruction in Issue #233; one bounded historical screen only. No
+  Paper/Shadow/Live activation or trading is authorized.
+
 ---
 
 # 38. Next action

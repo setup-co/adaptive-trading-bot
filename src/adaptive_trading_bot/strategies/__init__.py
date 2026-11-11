@@ -58,6 +58,17 @@ from adaptive_trading_bot.strategies.range_mean_reversion import (
     RangeMeanReversionSide,
     RangeMeanReversionStrategy,
 )
+from adaptive_trading_bot.strategies.trend_impulse_pullback import (
+    BASE_COSTS as TREND_IMPULSE_PULLBACK_BASE_COSTS,
+)
+from adaptive_trading_bot.strategies.trend_impulse_pullback import (
+    POLICY_ID as TREND_IMPULSE_PULLBACK_POLICY_ID,
+)
+from adaptive_trading_bot.strategies.trend_impulse_pullback import (
+    TrendImpulsePullbackReasonCode,
+    TrendImpulsePullbackRuleAudit,
+    TrendImpulsePullbackStrategy,
+)
 from adaptive_trading_bot.strategies.trend_pullback import (
     StrategyReasonCode,
     TrendPullbackConfiguration,
@@ -132,6 +143,8 @@ __all__ = [
     "BREAKOUT_RETEST_ZONE_INVALIDATION_POLICY_ID",
     "FAILED_BREAKOUT_BASE_COSTS",
     "FAILED_BREAKOUT_REVERSION_POLICY_ID",
+    "TREND_IMPULSE_PULLBACK_BASE_COSTS",
+    "TREND_IMPULSE_PULLBACK_POLICY_ID",
     "ArmedBreakout",
     "BreakoutRetestConfiguration",
     "BreakoutRetestReasonCode",
@@ -179,6 +192,9 @@ __all__ = [
     "StrategyEvaluation",
     "StrategyEvaluationContext",
     "StrategyReasonCode",
+    "TrendImpulsePullbackReasonCode",
+    "TrendImpulsePullbackRuleAudit",
+    "TrendImpulsePullbackStrategy",
     "TrendPullbackConfiguration",
     "TrendPullbackEma50ExitStrategy",
     "TrendPullbackExitReasonCode",
