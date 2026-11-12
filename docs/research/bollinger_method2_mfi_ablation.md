@@ -87,21 +87,29 @@ economics, exit/holding facts, selection partitions, blocks and immutable hashes
 This diagnosis is post-result and exploratory. It neither replaces the negative parent result nor
 approves the entry strategy, a timer replacement, runtime activation or trading.
 
-The single authorized invocation used executable
-`a392c72ac12981734717027fdf5bdb7cf393178a`, protocol
-`a2e9d441a9da1b135154d82add231464e44e36926a0dc610e8be7ce3e46ecc9e` and UUID
-`2de5c8b3-afc5-4654-bad9-d5856df3f7f5`. It completed 5,152 exact paired rows in 57.7439625
-seconds, with a 413,777,920-byte peak owned-tree working set. Natural closes/open rows were
-BTC PRICE 965/33, BTC MFI 259/15, ETH PRICE 960/30 and ETH MFI 301/13 per scenario.
+The completed invocation used executable `a392c72ac12981734717027fdf5bdb7cf393178a` and UUID
+`2de5c8b3-afc5-4654-bad9-d5856df3f7f5`, but the CLI incorrectly inherited the parent tail and
+ended follow-up at `2026-10-07T00:40:00Z`. Its actual effective protocol hash is
+`e525a2cb503abb2fc90f7f7dead79a1769e3ec759ae71b6551e6a37a613cc127`, not the intended
+October-14 hash `a2e9d441a9da1b135154d82add231464e44e36926a0dc610e8be7ce3e46ecc9e`. The exit-0
+computation is preserved as a **completed shorter-follow-up, off-protocol diagnostic**; it does
+not complete or validate the approved October-14 experiment.
+
+That diagnostic completed 5,152 exact paired rows in 57.7439625 seconds, with a 413,777,920-byte
+peak owned-tree working set. Natural closes/open rows at the actual earlier boundary were BTC
+PRICE 965/33, BTC MFI 259/15, ETH PRICE 960/30 and ETH MFI 301/13 per scenario.
 
 BTC terminal-valued mean R remained negative in every arm/scenario (`-0.203704/-0.129982` BASE
 PRICE/MFI; `-0.375494/-0.256344` STRESS). ETH BASE became slightly positive (`+0.005236` PRICE,
-`+0.051890` MFI), while ETH STRESS remained negative (`-0.134964/-0.037271`). Peak concurrency
-ranged from 20 to 49 and median upper holding duration from 102,000 to 193,500 seconds. The result
-is therefore mixed and remains **`NO_PROMOTION`**; endpoint-valued open positions are not realized
-closes. Exact paired economics, natural-close views, transitions, blocks, selection partitions,
-duration bins and hashes are retained in
+`+0.051890` MFI), while ETH STRESS remained negative (`-0.134964/-0.037271`). Those values are
+specific to the earlier cutoff; the missing follow-up's direction is unknown. The captured
+102,000–193,500-second medians combined natural-close durations with censored open ages and must
+not be described as closed-only holding medians. Corrected prospective reporting separates those
+two clocks and derives open-position concurrency from each row's recorded valuation boundary.
+The diagnostic remains **`NO_PROMOTION`**; endpoint-valued open positions are not realized closes.
+Exact captured bytes and hashes are retained in
 `data/research_evidence/pr-236-bollinger-method2-no-time-exit-v1/`.
+See the [append-only qualification](bollinger_method2_no_time_exit_shorter_followup_addendum.md).
 
 ## Archived 15m comparison
 

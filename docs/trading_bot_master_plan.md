@@ -1852,6 +1852,11 @@ Approved:
 - Target Version: Research diagnosis / Master Plan v1.12
 - Approved: Architect instruction on PR #236; one bounded paired run only. No strategy promotion,
   Paper/Shadow/Live activation or trading is authorized.
+- Correction: the first completed invocation inherited the legacy `2026-10-07T00:40:00Z` tail
+  and is preserved only as an off-protocol shorter-follow-up diagnostic. Its exit 0 does not
+  complete the intended October-14 protocol. The default CLI now fails closed on effective
+  protocol identity and resolves the prospective endpoint independently; no historical rerun or
+  continuation was authorized by the correction.
 
 ---
 

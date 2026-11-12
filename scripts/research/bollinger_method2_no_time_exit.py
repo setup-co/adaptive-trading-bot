@@ -9,12 +9,17 @@ from pathlib import Path
 
 from adaptive_trading_bot.research.bollinger_method2_no_time_exit import (
     DEFAULT_PARENT_AUTHORITY,
+    FOLLOWUP_END,
+    PROTOCOL_SHA256,
     ParentAuthority,
+    protocol_record,
     run,
 )
 from adaptive_trading_bot.research.failed_breakout_reversion_screen import (
     DEFAULT_INPUT_AUTHORITY,
     ScreenInputAuthority,
+    _canonical,
+    _sha,
 )
 
 
@@ -35,6 +40,17 @@ def main(
     effective_parent_authority = (
         DEFAULT_PARENT_AUTHORITY if parent_authority is None else parent_authority
     )
+    production_defaults = authority is None and parent is None and parent_authority is None
+    followup_end = FOLLOWUP_END if authority is None else effective_authority.tail_end
+    effective_protocol_sha256 = _sha(
+        _canonical(
+            protocol_record(
+                effective_parent_authority,
+                followup_end=followup_end,
+            )
+        )
+    )
+    expected_protocol_sha256 = PROTOCOL_SHA256 if production_defaults else effective_protocol_sha256
     result = run(
         args.repo,
         args.output,
@@ -43,7 +59,8 @@ def main(
         authority=effective_authority,
         parent=parent,
         parent_authority=effective_parent_authority,
-        followup_end=effective_authority.tail_end,
+        followup_end=followup_end,
+        expected_protocol_sha256=expected_protocol_sha256,
     )
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), default=str))
     return 0

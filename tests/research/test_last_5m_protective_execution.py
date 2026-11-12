@@ -277,6 +277,52 @@ def test_no_time_exit_can_end_with_censored_open_exposure() -> None:
     assert result.closed_net_approved_risk_r is None
 
 
+def test_no_time_exit_can_reach_event_after_a_shorter_followup_boundary() -> None:
+    opened = NOW
+    old_cutoff = opened + timedelta(minutes=5)
+    extended_cutoff = opened + timedelta(minutes=10)
+
+    def cutoff_bar(index: int, *, high: str) -> Last5mBar:
+        start = opened + index * timedelta(minutes=5)
+        return Last5mBar(
+            SOURCE,
+            BTC,
+            "october-followup",
+            start,
+            start + timedelta(minutes=5),
+            Decimal("100"),
+            Decimal(high),
+            Decimal("95"),
+            Decimal("100"),
+            Decimal(1),
+        )
+
+    bars = (cutoff_bar(0, high="105"), cutoff_bar(1, high="111"))
+    order_intent = intent()
+    configuration = Last5mProtectionConfiguration(
+        SimulatedExecutionCostConfiguration(),
+        ExitPolicy.FROZEN_TARGET_NO_TIME_EXIT,
+        frozen_target_price=Decimal("110"),
+        holding_period=None,
+    )
+    short = run_last_5m_protective_execution(
+        intent=order_intent,
+        binding=Last5mExecutionBinding(SOURCE, BTC, "october-followup", opened, old_cutoff),
+        bars=bars[:1],
+        configuration=configuration,
+    )
+    full = run_last_5m_protective_execution(
+        intent=order_intent,
+        binding=Last5mExecutionBinding(SOURCE, BTC, "october-followup", opened, extended_cutoff),
+        bars=bars,
+        configuration=configuration,
+    )
+    assert short.status is Last5mExecutionStatus.TERMINAL_OPEN
+    assert full.trigger is not None and full.trigger.kind is TriggerKind.TARGET_INTRABAR
+    assert full.exit_fill is not None
+    assert old_cutoff < full.exit_fill.fill_at <= extended_cutoff
+
+
 @pytest.mark.parametrize(
     (
         "short",

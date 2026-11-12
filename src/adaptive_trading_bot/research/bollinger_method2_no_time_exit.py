@@ -439,9 +439,10 @@ def _metrics(rows: list[dict[str, Any]], *, terminal: bool) -> dict[str, Any]:
     closed = 0
     censored = 0
     triggers: Counter[str] = Counter()
-    lower: list[Decimal] = []
-    upper: list[Decimal] = []
-    bins: Counter[str] = Counter()
+    closed_lower: list[Decimal] = []
+    closed_upper: list[Decimal] = []
+    closed_bins: Counter[str] = Counter()
+    open_ages: list[Decimal] = []
     for row in rows:
         new = row["new"]
         valuation = row["terminal_valuation"]
@@ -458,9 +459,9 @@ def _metrics(rows: list[dict[str, Any]], *, terminal: bool) -> dict[str, Any]:
             gross += Decimal(str(source["gross_pnl_quote"]))
             fees += Decimal(str(source["total_fees_quote"]))
             net += Decimal(str(source["net_pnl_quote"]))
-        if new["holding_lower_seconds"] is not None:
-            lower.append(Decimal(str(new["holding_lower_seconds"])))
-            upper.append(Decimal(str(new["holding_upper_seconds"])))
+        if new["natural_closed"] and new["holding_lower_seconds"] is not None:
+            closed_lower.append(Decimal(str(new["holding_lower_seconds"])))
+            closed_upper.append(Decimal(str(new["holding_upper_seconds"])))
             seconds = Decimal(str(new["holding_upper_seconds"]))
             label = (
                 "LE_30M"
@@ -473,22 +474,22 @@ def _metrics(rows: list[dict[str, Any]], *, terminal: bool) -> dict[str, Any]:
                 if seconds <= 86400
                 else "GT_24H"
             )
-            bins[label] += 1
+            closed_bins[label] += 1
         elif not new["natural_closed"] and row["entry"] is not None:
             entry_at = datetime.fromisoformat(str(row["entry"]["fill_at"]))
             terminal_at = datetime.fromisoformat(str(valuation["valuation_at"]))
             age = Decimal(str((terminal_at - entry_at).total_seconds()))
-            upper.append(age)
-            lower.append(age)
-            bins["STILL_OPEN"] += 1
+            open_ages.append(age)
     with localcontext(_DECIMAL_CONTEXT):
         positive = sum((value for value in values if value > 0), Decimal(0))
         negative = -sum((value for value in values if value < 0), Decimal(0))
         mean = None if not values else sum(values, Decimal(0)) / Decimal(len(values))
         pf = None if negative == 0 else positive / negative
-    ordered_lower = sorted(lower)
-    ordered_upper = sorted(upper)
-    p90_index = max(0, (len(ordered_upper) * 9 + 9) // 10 - 1) if ordered_upper else 0
+    ordered_lower = sorted(closed_lower)
+    ordered_upper = sorted(closed_upper)
+    ordered_open = sorted(open_ages)
+    closed_p90 = max(0, (len(ordered_upper) * 9 + 9) // 10 - 1) if ordered_upper else 0
+    open_p90 = max(0, (len(ordered_open) * 9 + 9) // 10 - 1) if ordered_open else 0
     return {
         "denominator": len(rows),
         "valued": len(values),
@@ -504,11 +505,20 @@ def _metrics(rows: list[dict[str, Any]], *, terminal: bool) -> dict[str, Any]:
             bool(row["terminal_valuation"].get("depends_on_open_position")) for row in rows
         ),
         "status_counts": dict(sorted(triggers.items())),
-        "holding_lower_median_seconds": None if not ordered_lower else median(ordered_lower),
-        "holding_upper_median_seconds": None if not ordered_upper else median(ordered_upper),
-        "holding_upper_p90_seconds": None if not ordered_upper else ordered_upper[p90_index],
-        "holding_upper_max_seconds": None if not ordered_upper else ordered_upper[-1],
-        "holding_bins": dict(sorted(bins.items())),
+        "closed_holding": {
+            "denominator": len(ordered_upper),
+            "lower_median_seconds": None if not ordered_lower else median(ordered_lower),
+            "upper_median_seconds": None if not ordered_upper else median(ordered_upper),
+            "upper_p90_seconds": (None if not ordered_upper else ordered_upper[closed_p90]),
+            "upper_max_seconds": None if not ordered_upper else ordered_upper[-1],
+            "bins": dict(sorted(closed_bins.items())),
+        },
+        "censored_open_age": {
+            "denominator": len(ordered_open),
+            "median_seconds": None if not ordered_open else median(ordered_open),
+            "p90_seconds": None if not ordered_open else ordered_open[open_p90],
+            "max_seconds": None if not ordered_open else ordered_open[-1],
+        },
     }
 
 
@@ -520,7 +530,10 @@ def _peak_concurrency(rows: list[dict[str, Any]]) -> int:
             continue
         start = datetime.fromisoformat(str(entry["fill_at"]))
         upper = row["new"]["holding_upper_seconds"]
-        end = FOLLOWUP_END if upper is None else start + timedelta(seconds=float(upper))
+        if upper is None:
+            end = datetime.fromisoformat(str(row["terminal_valuation"]["valuation_at"]))
+        else:
+            end = start + timedelta(seconds=float(upper))
         events.extend(((start, 1), (end, -1)))
     active = peak = 0
     for _, change in sorted(events, key=lambda item: (item[0], item[1])):
@@ -656,15 +669,18 @@ def run(
     parent: Path | None = None,
     parent_authority: ParentAuthority = DEFAULT_PARENT_AUTHORITY,
     followup_end: datetime = FOLLOWUP_END,
+    expected_protocol_sha256: str | None = None,
 ) -> dict[str, Any]:
     repo = repo.resolve(strict=True)
     output = output.resolve()
     if output.exists():
         raise NoTimeExitError("output already exists")
     _clean_sha(repo, executable_sha)
-    parent_projection, parent_rows = load_parent(repo, parent, authority=parent_authority)
     protocol = protocol_record(parent_authority, followup_end=followup_end)
     protocol_sha256 = _sha(_canonical(protocol))
+    if expected_protocol_sha256 is not None and protocol_sha256 != expected_protocol_sha256:
+        raise NoTimeExitError("effective invocation protocol differs from its declared identity")
+    parent_projection, parent_rows = load_parent(repo, parent, authority=parent_authority)
     output.mkdir(parents=True)
     _replace(
         output / "run-identity.json",
