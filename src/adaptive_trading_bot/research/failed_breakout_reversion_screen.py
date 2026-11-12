@@ -282,7 +282,7 @@ class AcceptedInput:
         self.report = self._json_once("report.json", authority.report_sha256)
         self._exact(self.root / "plan.json", authority.plan_sha256)
         self._validate_common()
-        self._cache: dict[str, tuple[_MemoryStore, tuple[Last5mBar, ...]]] = {}
+        self._cache: dict[tuple[str, datetime], tuple[_MemoryStore, tuple[Last5mBar, ...]]] = {}
 
     def _exact(self, path: Path, expected: str) -> bytes:
         body = path.read_bytes()
@@ -312,9 +312,21 @@ class AcceptedInput:
         ):
             raise ScreenError("accepted corpus authority is contradictory")
 
-    def load(self, wire: str) -> tuple[_MemoryStore, tuple[Last5mBar, ...]]:
-        if wire in self._cache:
-            return self._cache[wire]
+    def load(
+        self, wire: str, *, tail_end: datetime | None = None
+    ) -> tuple[_MemoryStore, tuple[Last5mBar, ...]]:
+        effective_tail = self.authority.tail_end if tail_end is None else tail_end
+        report_end = datetime.fromisoformat(self.authority.report_end.replace("Z", "+00:00"))
+        if (
+            not isinstance(effective_tail, datetime)
+            or effective_tail.tzinfo is None
+            or effective_tail.utcoffset() != timedelta(0)
+            or not self.authority.context_start < effective_tail <= report_end
+        ):
+            raise ScreenError("requested follow-up end exceeds accepted corpus authority")
+        cache_key = (wire, effective_tail)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         shards = self.authority.shard_map
         if wire not in shards:
             raise ScreenError("screen symbol is outside BTC/ETH")
@@ -410,10 +422,10 @@ class AcceptedInput:
                 row.base_volume,
             )
             for row in rows.values()
-            if self.authority.context_start <= _instant(row.open_time_ms) < self.authority.tail_end
+            if self.authority.context_start <= _instant(row.open_time_ms) < effective_tail
         )
         value = (_MemoryStore(symbol, candles, source_id=self.authority.source_id), five)
-        self._cache[wire] = value
+        self._cache[cache_key] = value
         return value
 
 

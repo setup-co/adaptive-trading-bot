@@ -71,6 +71,7 @@ class ExitPolicy(StrEnum):
 
     FIXED_2R = "BREAKOUT_RETEST_FIXED_2R_V1"
     FROZEN_TARGET_30M = "FAILED_BREAKOUT_FROZEN_TARGET_30M_V1"
+    FROZEN_TARGET_NO_TIME_EXIT = "FROZEN_TARGET_NO_TIME_EXIT_V1"
 
 
 class Last5mExecutionStatus(StrEnum):
@@ -210,6 +211,16 @@ class Last5mProtectionConfiguration:
             ):
                 raise Last5mProtectiveExecutionError(
                     "frozen-target policy requires a positive target and exactly 30 minutes"
+                )
+        elif self.exit_policy is ExitPolicy.FROZEN_TARGET_NO_TIME_EXIT:
+            if (
+                not isinstance(self.frozen_target_price, Decimal)
+                or not self.frozen_target_price.is_finite()
+                or self.frozen_target_price <= 0
+                or self.holding_period is not None
+            ):
+                raise Last5mProtectiveExecutionError(
+                    "no-time-exit policy requires a positive frozen target and no holding period"
                 )
         else:
             raise Last5mProtectiveExecutionError("an explicit supported exit policy is required")
@@ -721,6 +732,65 @@ def run_last_5m_protective_execution(
         ),
         protection_active_at=active_at,
     )
+
+
+def select_no_time_exit_prefix(
+    *,
+    intent: EntryOrderIntent,
+    bars: tuple[Last5mBar, ...],
+    configuration: Last5mProtectionConfiguration,
+) -> tuple[Last5mBar, ...]:
+    """Return the exact prefix consumed through a natural terminal event.
+
+    This is a bounded preparation optimization for the no-time-exit policy.  It applies the same
+    entry, geometry, activation, gap and conservative intrabar trigger predicates as the shared
+    executor, but performs no accounting or pricing of an exit.  The returned prefix is always
+    passed back through :func:`run_last_5m_protective_execution`, which remains authoritative.
+    """
+
+    if configuration.exit_policy is not ExitPolicy.FROZEN_TARGET_NO_TIME_EXIT:
+        raise Last5mProtectiveExecutionError("prefix selection requires no-time-exit policy")
+    configuration.__post_init__()
+    if not isinstance(intent, EntryOrderIntent) or not intent.authorized_for_execution:
+        raise TypeError("an authorized EntryOrderIntent is required")
+    if not isinstance(bars, tuple) or not bars:
+        raise Last5mProtectiveExecutionError("5m series must be a non-empty immutable tuple")
+    eligible_at = intent.authorized_at + configuration.costs.latency
+    entry_index = next((i for i, bar in enumerate(bars) if bar.open_time >= eligible_at), None)
+    if entry_index is None:
+        return bars
+    entry_bar = bars[entry_index]
+    entry = _compact_fill(
+        fill_id=_fill_id(intent, "entry"),
+        side=_execution_side(intent.side),
+        quantity=intent.quantity,
+        fill_at=entry_bar.open_time,
+        reference_price=entry_bar.open,
+        costs=configuration.costs,
+    )
+    assert configuration.frozen_target_price is not None
+    target = configuration.frozen_target_price
+    try:
+        _frozen_target_geometry(intent.side, entry.fill_price, intent.stop_basis, target)
+    except Last5mProtectiveExecutionError:
+        return bars[: min(entry_index + 2, len(bars))]
+    if configuration.acknowledgement is not ProtectionAcknowledgement.ACCEPTED:
+        return bars[: entry_index + 1]
+    active_at = entry.fill_at + configuration.activation_latency
+    for index in range(entry_index, len(bars)):
+        bar = bars[index]
+        if active_at >= bar.close_time:
+            continue
+        inside = bar.open_time < active_at < bar.close_time
+        stop_touch, target_touch = _touches(intent.side, bar, intent.stop_basis, target)
+        if inside:
+            if stop_touch or target_touch:
+                return bars[: index + 1]
+            continue
+        open_kind, _ = _open_trigger(intent.side, bar.open, intent.stop_basis, target)
+        if open_kind is not None or stop_touch or target_touch:
+            return bars[: index + 1]
+    return bars
 
 
 def _validate_series(binding: Last5mExecutionBinding, bars: tuple[Last5mBar, ...]) -> None:

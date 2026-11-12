@@ -1,7 +1,7 @@
 # Bollinger Method II price/MFI entry ablation
 
-Status: the completed 15m comparison is retained below; the distinct hourly successor protocol is
-implemented but has not been run on historical data.
+Status: the completed 15m and hourly 30-minute comparisons are retained below. A distinct paired
+hourly no-time-exit diagnosis is implemented but has not yet been run on historical data.
 
 ## Source mapping and adaptation boundary
 
@@ -67,6 +67,25 @@ identical and are not independent confirmation. All three chronological block me
 for each asset, arm and scenario. The result is **`NEGATIVE_ADAPTATION / NO_PROMOTION`**. Full
 economics, exit/holding facts, selection partitions, blocks and immutable hashes are retained in
 `data/research_evidence/pr-236-bollinger-method2-mfi-1h-v1/`.
+
+## Paired hourly no-time-exit diagnosis (not historically executed)
+
+- Protocol: `BTC_ETH_BB_METHOD2_1H_NO_TIME_EXIT_PAIRED_V1`.
+- Comparator: the immutable saved rows from the hourly 30-minute run above; that arm is never
+  resimulated.
+- Treatment: the exact same admitted decisions, entry fills, quantities, approved risk, frozen
+  stops, decision-time targets, BASE/STRESS costs and shared authorization chain. The only change
+  is opt-in `FROZEN_TARGET_NO_TIME_EXIT_V1`: follow each filled entry until stop, target or the
+  fixed accepted-corpus end `2026-10-14T00:00:00Z`.
+- Open treatment positions at the corpus endpoint remain `DATA_END_CENSORED`. Their last-close
+  valuation and hypothetical shared-pricing exit fee are reported separately and do not become a
+  realized close.
+- Reports retain natural-close and terminal-valued views, parent TIME_EXIT transitions, paired
+  terminal-minus-parent R, duration bins, chronological blocks, MFI retained/excluded partitions
+  and peak concurrency. Funding remains unavailable/not modeled.
+
+This diagnosis is post-result and exploratory. It neither replaces the negative parent result nor
+approves the entry strategy, a timer replacement, runtime activation or trading.
 
 ## Archived 15m comparison
 

@@ -32,6 +32,7 @@ from adaptive_trading_bot.research.last_5m_protective_execution import (
     TriggerBasis,
     TriggerKind,
     run_last_5m_protective_execution,
+    select_no_time_exit_prefix,
 )
 from adaptive_trading_bot.research.research_v2_corpus import Row, _table
 from adaptive_trading_bot.risk import OperationalSafetyGate, RiskManager, RiskPortfolioSnapshot
@@ -178,6 +179,102 @@ def run_frozen_target(
             holding_period=timedelta(minutes=30),
         ),
     )
+
+
+def run_no_time_exit(
+    bars: tuple[Last5mBar, ...],
+    *,
+    target: str = "110",
+    latency: timedelta = timedelta(0),
+    order_intent: EntryOrderIntent | None = None,
+) -> Last5mProtectiveExecutionResult:
+    selected_intent = order_intent or intent()
+    configuration = Last5mProtectionConfiguration(
+        SimulatedExecutionCostConfiguration(latency=latency),
+        ExitPolicy.FROZEN_TARGET_NO_TIME_EXIT,
+        frozen_target_price=Decimal(target),
+        holding_period=None,
+    )
+    prefix = select_no_time_exit_prefix(
+        intent=selected_intent,
+        bars=bars,
+        configuration=configuration,
+    )
+    return run_last_5m_protective_execution(
+        intent=selected_intent,
+        binding=binding(len(prefix)),
+        bars=prefix,
+        configuration=configuration,
+    )
+
+
+def test_no_time_exit_preserves_predeadline_result_and_follows_late_target() -> None:
+    stopped = (
+        bar(0, high="104", low="99"),
+        bar(1, open_price="99", high="100", low="70", close="90"),
+    )
+    treatment_stopped = run_no_time_exit(stopped)
+    baseline_stopped = run_frozen_target(stopped)
+    assert (
+        treatment_stopped.status,
+        treatment_stopped.trigger,
+        treatment_stopped.exit_fill,
+        treatment_stopped.closed_net_pnl_quote,
+        treatment_stopped.closed_net_approved_risk_r,
+    ) == (
+        baseline_stopped.status,
+        baseline_stopped.trigger,
+        baseline_stopped.exit_fill,
+        baseline_stopped.closed_net_pnl_quote,
+        baseline_stopped.closed_net_approved_risk_r,
+    )
+
+    late_target = (
+        *(bar(index, high="105", low="95") for index in range(7)),
+        bar(7, high="111", low="99", close="110"),
+    )
+    baseline = run_frozen_target(late_target)
+    treatment = run_no_time_exit(late_target)
+    assert baseline.trigger is not None
+    assert baseline.trigger.kind is TriggerKind.TIME_EXIT
+    assert treatment.trigger is not None
+    assert treatment.trigger.kind is TriggerKind.TARGET_INTRABAR
+    assert treatment.exit_fill is not None
+    assert treatment.exit_fill.fill_at == NOW + timedelta(minutes=40)
+
+
+@pytest.mark.parametrize("short", [False, True])
+def test_no_time_exit_keeps_direction_latency_gap_and_dual_touch_rules(short: bool) -> None:
+    order_intent = unit_intent(
+        short=short,
+        reference="75" if short else "125",
+        stop="100",
+    )
+    target = "90" if short else "110"
+    bars = (
+        bar(0, open_price="100", high="105", low="95"),
+        bar(1, open_price="95" if short else "105", high="115", low="85"),
+        bar(2, open_price="100", high="105", low="95"),
+    )
+    result = run_no_time_exit(
+        bars,
+        target=target,
+        latency=timedelta(minutes=5),
+        order_intent=order_intent,
+    )
+    assert result.trigger is not None
+    assert result.trigger.kind is TriggerKind.DUAL_TOUCH_STOP_FIRST
+    assert result.trigger.alternate_trigger is TriggerKind.TARGET_INTRABAR
+    assert result.entry_fill is not None
+    assert result.entry_fill.fill_at == NOW + timedelta(minutes=5)
+
+
+def test_no_time_exit_can_end_with_censored_open_exposure() -> None:
+    bars = tuple(bar(index, high="105", low="95") for index in range(12))
+    result = run_no_time_exit(bars)
+    assert result.status is Last5mExecutionStatus.TERMINAL_OPEN
+    assert result.exit_fill is None
+    assert result.closed_net_approved_risk_r is None
 
 
 @pytest.mark.parametrize(

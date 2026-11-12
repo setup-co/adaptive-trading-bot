@@ -1831,6 +1831,28 @@ Approved:
 - Approved: Architect instruction in Issue #233; one bounded historical screen only. No
   Paper/Shadow/Live activation or trading is authorized.
 
+### 2026-11-12 — Paired research-only removal of the hourly holding timer
+
+- Date: 2026-11-12
+- Change ID: PR #236 / `BTC_ETH_BB_METHOD2_1H_NO_TIME_EXIT_PAIRED_V1`
+- Old Decision: The retained hourly Bollinger Method-II comparison forcibly closed each filled
+  admission after 30 modeled minutes.
+- New Decision: Permit one opt-in paired diagnosis that reuses the immutable 30-minute outcomes
+  and reconstructs their exact authorized entries, while following only treatment entries to the
+  unchanged frozen stop/target or the fixed accepted-corpus endpoint. Endpoint exposures remain
+  censored; hypothetical last-close valuations are separate from realized economics.
+- Reason: Isolate whether the predeclared 30-minute adaptation, rather than the frozen entries and
+  geometry, materially shaped the negative hourly evidence.
+- Expected Benefit: Exact paired transition, duration, concurrency and terminal-exposure evidence
+  without regenerating the parent arm or changing any signal, risk, cost or accounting authority.
+- Risk: This is post-result exploratory analysis on the same selected history. Endpoint valuation,
+  5m intrabar uncertainty and absent funding cannot establish venue execution or profitable edge.
+- Affected Modules: One opt-in exit-policy value, bounded prefix selector, paired runner/CLI,
+  focused synthetic tests and research documentation. Runtime registries and defaults are intact.
+- Target Version: Research diagnosis / Master Plan v1.12
+- Approved: Architect instruction on PR #236; one bounded paired run only. No strategy promotion,
+  Paper/Shadow/Live activation or trading is authorized.
+
 ---
 
 # 38. Next action
