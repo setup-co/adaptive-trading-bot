@@ -1624,6 +1624,21 @@ Approved:
 
 ## Change Log
 
+### 2026-11-13 — Raschke-informed first-pullback depth ablation (research only)
+
+- Change ID: Issue #237 / `BTC_ETH_RASCHKE_PULLBACK_FIB_ABLATION_15M_V1`.
+- Added three isolated research identities: `raschke_pullback_reference:0.1.0`,
+  `raschke_pullback_fib_zone:0.1.0` and `raschke_pullback_round_zone:0.1.0`.
+- Scope is BTC/ETH completed-15m decisions with one shared causal first-pullback opportunity
+  stream, optional frozen pivot anchor, structural pullback stop, frozen pre-touch retest target,
+  and the accepted 5m-LAST no-time-exit execution/accounting path through the fixed endpoint.
+- Fibonacci and rounded bands are selection filters only; they cannot change opportunity timing,
+  geometry, sizing or economics shared with the reference arm. Results are exploratory and always
+  `NO_PROMOTION`.
+- This adaptation does not replace the accepted Trend Pullback strategy, alter runtime registries,
+  enable ML, or change historical evidence. Source and project-choice boundaries are recorded in
+  `docs/research/raschke_pullback_fib_ablation.md`.
+
 ### 2026-11-12 — Bollinger Method II hourly research successor (not executed)
 
 - Change ID: PR #236 / `BTC_ETH_BB_METHOD2_MFI_ABLATION_1H_30M_V1`

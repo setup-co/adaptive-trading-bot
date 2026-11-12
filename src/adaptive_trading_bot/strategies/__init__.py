@@ -58,6 +58,12 @@ from adaptive_trading_bot.strategies.range_mean_reversion import (
     RangeMeanReversionSide,
     RangeMeanReversionStrategy,
 )
+from adaptive_trading_bot.strategies.raschke_pullback import (
+    RaschkePullbackArm,
+    RaschkePullbackAudit,
+    RaschkePullbackReasonCode,
+    RaschkePullbackStrategy,
+)
 from adaptive_trading_bot.strategies.trend_impulse_pullback import (
     BASE_COSTS as TREND_IMPULSE_PULLBACK_BASE_COSTS,
 )
@@ -186,6 +192,10 @@ __all__ = [
     "RangeReasonCode",
     "RangeStateError",
     "RangeStatus",
+    "RaschkePullbackArm",
+    "RaschkePullbackAudit",
+    "RaschkePullbackReasonCode",
+    "RaschkePullbackStrategy",
     "SourceIdentity",
     "Strategy",
     "StrategyContextError",

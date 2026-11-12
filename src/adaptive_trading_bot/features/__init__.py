@@ -25,6 +25,7 @@ from adaptive_trading_bot.features.market_structure import (
     StructureSnapshot,
 )
 from adaptive_trading_bot.features.replay_adapter import observed_candles_from_replay
+from adaptive_trading_bot.features.wilder_adx import WilderAdxCalculator, WilderAdxSnapshot
 
 __all__ = [
     "ConfirmedPivot",
@@ -46,6 +47,8 @@ __all__ = [
     "StructureRelation",
     "StructureSeriesError",
     "StructureSnapshot",
+    "WilderAdxCalculator",
+    "WilderAdxSnapshot",
     "observed_candles_from_live",
     "observed_candles_from_replay",
 ]
