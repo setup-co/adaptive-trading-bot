@@ -1,14 +1,35 @@
+import gzip
 import json
 import runpy
 import subprocess
-from dataclasses import replace
-from decimal import Decimal
+from dataclasses import asdict, replace
+from datetime import timedelta
+from decimal import Context, Decimal, localcontext
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from adaptive_trading_bot.execution import SimulatedExecutionCostConfiguration
 from adaptive_trading_bot.features import PivotKind
 from adaptive_trading_bot.features.wilder_adx import WilderAdxCalculator, WilderAdxSnapshot
-from adaptive_trading_bot.research.raschke_pullback_screen import ARMS, _capacity
+from adaptive_trading_bot.research.bollinger_method2_no_time_exit import _terminal_valuation
+from adaptive_trading_bot.research.failed_breakout_reversion_screen import _text
+from adaptive_trading_bot.research.last_5m_protective_execution import (
+    ExitPolicy,
+    Last5mProtectionConfiguration,
+    Last5mProtectiveExecutionResult,
+    ProtectionAcknowledgement,
+    run_last_5m_protective_execution,
+)
+from adaptive_trading_bot.research.raschke_pullback_screen import (
+    ARMS,
+    PROTOCOL_SHA256,
+    _capacity,
+    _same_opportunity,
+    protocol_record,
+)
 from adaptive_trading_bot.strategies.core import CandidateAction
 from adaptive_trading_bot.strategies.raschke_pullback import (
     Evaluation,
@@ -26,6 +47,12 @@ _write_authority = FIXTURE["_write_authority"]
 CLI = runpy.run_path(
     str(Path(__file__).parents[2] / "scripts" / "research" / "raschke_pullback_screen.py")
 )
+EXECUTION_FIXTURE = runpy.run_path(
+    str(Path(__file__).with_name("test_last_5m_protective_execution.py"))
+)
+make_intent = EXECUTION_FIXTURE["intent"]
+bar = EXECUTION_FIXTURE["bar"]
+binding = EXECUTION_FIXTURE["binding"]
 
 
 class _Adx:
@@ -234,10 +261,230 @@ def test_actual_cli_reads_canonical_parquet_and_writes_final_report(tmp_path: Pa
     assert set(projection["members"][0]["counts"]) == set(ARMS)
 
 
+def _execute(
+    *, target: str, prices: tuple[str, ...], costs: SimulatedExecutionCostConfiguration
+) -> tuple[Last5mProtectiveExecutionResult, tuple[Any, ...]]:
+    intent = make_intent()
+    bars = tuple(
+        bar(
+            index,
+            open_price=price,
+            high=str(Decimal(price) + 1),
+            low=str(Decimal(price) - 1),
+            close=price,
+        )
+        for index, price in enumerate(prices)
+    )
+    result = run_last_5m_protective_execution(
+        intent=intent,
+        binding=binding(len(bars)),
+        bars=bars,
+        configuration=Last5mProtectionConfiguration(
+            costs,
+            ExitPolicy.FROZEN_TARGET_NO_TIME_EXIT,
+            ProtectionAcknowledgement.ACCEPTED,
+            timedelta(0),
+            frozen_target_price=Decimal(target),
+            holding_period=None,
+        ),
+    )
+    return result, bars
+
+
+def _saved_row(
+    result: Last5mProtectiveExecutionResult,
+    terminal_bar: Any,
+    *,
+    arm: str,
+    episode: str,
+    scenario: str,
+) -> dict[str, Any]:
+    target = result.configuration.frozen_target_price
+    assert target is not None
+    valuation = _terminal_valuation(result, terminal_bar)
+    return {
+        "pair_key": ["BTCUSDT", arm, scenario, episode],
+        "opportunity_key": [
+            "BTCUSDT",
+            episode,
+            result.decision_identity.observed_at.isoformat(),
+        ],
+        "symbol": "BTCUSDT",
+        "arm": arm,
+        "scenario": scenario,
+        "decision_at": result.decision_identity.observed_at.isoformat(),
+        "side": result.intent_audit.side.value,
+        "audit": {"frozen_target": str(target), "depth_available": True},
+        "entry": None if result.entry_fill is None else _text(asdict(result.entry_fill)),
+        "authority": {
+            "approved_risk_quote": str(result.approved_risk_quote),
+            "quantity": str(result.intent_audit.quantity),
+            "stop_basis": str(result.original_stop_basis),
+            "intended_target_price": str(target),
+            "configured_target_price": str(target),
+            "execution_target_price": None
+            if result.target_price is None
+            else str(result.target_price),
+            "configuration": _text(asdict(result.configuration)),
+        },
+        "new": {
+            "status": result.status.value,
+            "trigger": None if result.trigger is None else result.trigger.kind.value,
+            "natural_closed": result.position_closed,
+            "gross_pnl_quote": str(result.realized_gross_pnl),
+            "total_fees_quote": str(result.total_fees),
+            "net_pnl_quote": str(result.realized_net_pnl),
+            "closed_net_r": None
+            if result.closed_net_approved_risk_r is None
+            else str(result.closed_net_approved_risk_r),
+            "unresolved_quantity": str(result.unresolved_quantity),
+            "holding_lower_seconds": None
+            if result.holding_duration_lower is None
+            else str(result.holding_duration_lower.total_seconds()),
+            "holding_upper_seconds": None
+            if result.holding_duration_upper is None
+            else str(result.holding_duration_upper.total_seconds()),
+        },
+        "terminal_valuation": _text(valuation),
+    }
+
+
+def test_saved_row_cli_proves_recovery_ordinary_open_and_strict_equality(
+    tmp_path: Path,
+) -> None:
+    base = SimulatedExecutionCostConfiguration(Decimal(0), Decimal(0), Decimal(8))
+    stress = SimulatedExecutionCostConfiguration(Decimal(4), Decimal(4), Decimal(16))
+    delayed = SimulatedExecutionCostConfiguration(
+        Decimal(0), Decimal(0), Decimal(8), timedelta(minutes=11)
+    )
+    recovered, recovered_bars = _execute(target="105", prices=("105", "104"), costs=stress)
+    ordinary, ordinary_bars = _execute(target="105.5", prices=("105",), costs=base)
+    opened, open_bars = _execute(target="120", prices=("105", "106"), costs=base)
+    unfilled, unfilled_bars = _execute(target="120", prices=("105", "106"), costs=delayed)
+    assert recovered.status.value == "INVALID_GEOMETRY_RECOVERED"
+    assert recovered.target_price is None
+    assert ordinary.status.value == "ORDINARY_CLOSED"
+    assert opened.status.value == "TERMINAL_OPEN"
+    assert unfilled.status.value == "ENTRY_UNFILLED"
+    assert unfilled.entry_fill is None
+
+    quantity = recovered.intent_audit.quantity
+    # Four-bps total spread contributes two bps per side, plus four-bps slippage.
+    expected_entry = Decimal("105.0630")
+    expected_recovery = Decimal("103.9376")
+    with localcontext(Context(prec=34)):
+        expected_fees = (expected_entry + expected_recovery) * quantity * Decimal("0.0016")
+        expected_gross = (expected_recovery - expected_entry) * quantity
+    assert recovered.entry_fill is not None and recovered.exit_fill is not None
+    assert recovered.entry_fill.fill_price == expected_entry
+    assert recovered.exit_fill.fill_price == expected_recovery
+    assert recovered.total_fees == expected_fees
+    assert recovered.realized_net_pnl == expected_gross - expected_fees
+
+    rows: list[dict[str, Any]] = []
+    for arm in ARMS:
+        rows.extend(
+            (
+                _saved_row(
+                    recovered,
+                    recovered_bars[-1],
+                    arm=arm,
+                    episode="recovered",
+                    scenario="STRESS",
+                ),
+                _saved_row(
+                    ordinary,
+                    ordinary_bars[-1],
+                    arm=arm,
+                    episode="ordinary",
+                    scenario="BASE",
+                ),
+                _saved_row(
+                    opened,
+                    open_bars[-1],
+                    arm=arm,
+                    episode="open",
+                    scenario="BASE",
+                ),
+                _saved_row(
+                    unfilled,
+                    unfilled_bars[-1],
+                    arm=arm,
+                    episode="unfilled",
+                    scenario="BASE",
+                ),
+            )
+        )
+    raw = b"".join(
+        json.dumps(row, sort_keys=True, separators=(",", ":")).encode() + b"\n" for row in rows
+    )
+    saved = tmp_path / "rows.jsonl.gz"
+    saved.write_bytes(gzip.compress(raw, mtime=0))
+    output = tmp_path / "validation.json"
+    assert (
+        CLI["main"](
+            [
+                "--output",
+                str(output),
+                "--saved-rows",
+                str(saved),
+                "--expected-gzip-sha256",
+                sha256(saved.read_bytes()).hexdigest(),
+                "--expected-raw-sha256",
+                sha256(raw).hexdigest(),
+                "--expected-rows",
+                str(len(rows)),
+                "--report-path-proof",
+            ]
+        )
+        == 0
+    )
+    report = json.loads(output.read_text())
+    assert report["rows"] == 12
+    assert report["recovered_records"] == 3
+    assert report["recovered_underlying_opportunities"] == 1
+    recovered_geometry = report["report_path_proof"][
+        f"BTCUSDT:{RaschkePullbackArm.REFERENCE.value}:STRESS"
+    ]["metrics"]["geometry"]
+    assert recovered_geometry["execution_target_unavailable"] == 1
+    assert recovered_geometry["valid_executed_reward_risk_denominator"] == 0
+    open_metrics = report["report_path_proof"][
+        f"BTCUSDT:{RaschkePullbackArm.REFERENCE.value}:BASE"
+    ]["metrics"]
+    assert open_metrics["data_end_censored"] == 2
+    assert (
+        report["counts"][f"BTCUSDT:{RaschkePullbackArm.REFERENCE.value}:BASE:ENTRY_UNFILLED"] == 1
+    )
+
+    disagreement = json.loads(json.dumps(rows))
+    disagreement[3]["new"]["total_fees_quote"] = "999"
+    with pytest.raises(Exception, match="outcome economics"):
+        _same_opportunity(disagreement)
+    target_disagreement = json.loads(json.dumps(rows))
+    target_disagreement[0]["authority"]["configured_target_price"] = "106"
+    with pytest.raises(Exception, match="target authorities disagree"):
+        _same_opportunity(target_disagreement)
+    unexpected_null = json.loads(json.dumps(rows))
+    unexpected_null[1]["authority"]["execution_target_price"] = None
+    with pytest.raises(Exception, match="unexpectedly unavailable"):
+        _same_opportunity(unexpected_null)
+
+
+def test_default_protocol_binds_october_14_endpoint() -> None:
+    protocol = protocol_record()
+    assert protocol["calendar"]["followup_end"] == "2026-10-14T00:00:00+00:00"  # type: ignore[index]
+    assert (
+        sha256(
+            json.dumps(protocol, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+        == PROTOCOL_SHA256
+    )
+
+
 def test_capacity_conservatively_rejects_equal_boundary() -> None:
-    def row(opened: str, holding: int) -> dict[str, object]:
+    def row(decided: str, opened: str, holding: int) -> dict[str, object]:
         return {
-            "decision_at": opened,
+            "decision_at": decided,
             "entry": {"fill_at": opened},
             "new": {
                 "natural_closed": True,
@@ -260,10 +507,10 @@ def test_capacity_conservatively_rejects_equal_boundary() -> None:
         }
 
     values: list[dict[str, Any]] = [
-        row("2026-01-01T00:00:00+00:00", 900),
-        row("2026-01-01T00:10:00+00:00", 300),
-        row("2026-01-01T00:15:00+00:00", 300),
+        row("2026-01-01T00:00:00+00:00", "2026-01-01T00:05:00+00:00", 600),
+        row("2026-01-01T00:15:00+00:00", "2026-01-01T00:20:00+00:00", 300),
+        row("2026-01-01T00:16:00+00:00", "2026-01-01T00:21:00+00:00", 300),
     ]
     result = _capacity(values)
-    assert result["selected"] == 1
-    assert result["overlap_rejected"] == 2
+    assert result["selected"] == 2
+    assert result["overlap_rejected"] == 1

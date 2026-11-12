@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
+import hashlib
+import json
 from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, localcontext
+from decimal import Decimal, DecimalException, localcontext
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -173,7 +176,9 @@ def _row(
             "approved_risk_quote": result.approved_risk_quote,
             "quantity": result.intent_audit.quantity,
             "stop_basis": result.original_stop_basis,
-            "frozen_target_price": result.target_price,
+            "intended_target_price": audit.frozen_target,
+            "configured_target_price": result.configuration.frozen_target_price,
+            "execution_target_price": result.target_price,
             "exit_policy": result.exit_policy.value,
             "decision_identity": _text(asdict(result.decision_identity)),
             "configuration": _text(asdict(result.configuration)),
@@ -200,34 +205,264 @@ def _row(
     }
 
 
+def _required_decimal(value: object, *, field: str) -> Decimal:
+    if value is None or isinstance(value, bool):
+        raise ScreenError(f"{field} is unavailable")
+    try:
+        result = Decimal(str(value))
+    except (DecimalException, ValueError) as error:
+        raise ScreenError(f"{field} is not a Decimal value") from error
+    if not result.is_finite():
+        raise ScreenError(f"{field} is not finite")
+    return result
+
+
+def _optional_decimal(value: object, *, field: str) -> Decimal | None:
+    return None if value is None else _required_decimal(value, field=field)
+
+
+def _intended_target(row: dict[str, Any]) -> Decimal:
+    audit = row.get("audit")
+    authority = row.get("authority")
+    if not isinstance(audit, dict) or not isinstance(authority, dict):
+        raise ScreenError("row target authorities are malformed")
+    configuration = authority.get("configuration")
+    if not isinstance(configuration, dict):
+        raise ScreenError("row execution configuration is malformed")
+    candidates = {
+        "audit.frozen_target": audit.get("frozen_target"),
+        "configuration.frozen_target_price": configuration.get("frozen_target_price"),
+    }
+    if "intended_target_price" in authority:
+        candidates["authority.intended_target_price"] = authority["intended_target_price"]
+    if "configured_target_price" in authority:
+        candidates["authority.configured_target_price"] = authority["configured_target_price"]
+    parsed = {name: _required_decimal(value, field=name) for name, value in candidates.items()}
+    values = set(parsed.values())
+    if len(values) != 1:
+        raise ScreenError("decision-frozen target authorities disagree")
+    target = values.pop()
+    if target <= 0:
+        raise ScreenError("decision-frozen intended target is not positive")
+    return target
+
+
+def _execution_target(row: dict[str, Any]) -> Decimal | None:
+    authority = row.get("authority")
+    new = row.get("new")
+    if not isinstance(authority, dict) or not isinstance(new, dict):
+        raise ScreenError("row execution target facts are malformed")
+    value = (
+        authority.get("execution_target_price")
+        if "execution_target_price" in authority
+        else authority.get("frozen_target_price")
+    )
+    target = _optional_decimal(value, field="authority.execution_target_price")
+    status = str(new.get("status"))
+    nullable = {
+        "ENTRY_UNFILLED",
+        "INVALID_GEOMETRY_RECOVERED",
+        "INVALID_GEOMETRY_UNRESOLVED",
+    }
+    if target is None and status not in nullable:
+        raise ScreenError("execution target is unexpectedly unavailable")
+    if target is not None and target != _intended_target(row):
+        raise ScreenError("execution target differs from the decision-frozen target")
+    return target
+
+
+def _equal_optional_decimal(left: object, right: object, *, field: str) -> bool:
+    return _optional_decimal(left, field=field) == _optional_decimal(right, field=field)
+
+
 def _same_opportunity(rows: list[dict[str, Any]]) -> None:
     """Require common-arm admissions to retain identical geometry/economics."""
 
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in rows:
         groups.setdefault((row["symbol"], row["scenario"], str(row["pair_key"][3])), []).append(row)
-    fields = ("approved_risk_quote", "quantity", "stop_basis", "frozen_target_price")
+    decimal_fields = ("approved_risk_quote", "quantity", "stop_basis")
+    outcome_decimal_fields = (
+        "gross_pnl_quote",
+        "total_fees_quote",
+        "net_pnl_quote",
+        "closed_net_r",
+        "unresolved_quantity",
+    )
     for values in groups.values():
+        for row in values:
+            _intended_target(row)
+            _execution_target(row)
         if len(values) < 2:
             continue
         reference = values[0]
         for value in values[1:]:
             if any(
-                Decimal(str(reference["authority"][field]))
-                != Decimal(str(value["authority"][field]))
-                for field in fields
+                _required_decimal(reference["authority"][field], field=field)
+                != _required_decimal(value["authority"][field], field=field)
+                for field in decimal_fields
             ):
                 raise ScreenError("shared opportunity changed its risk or geometry across arms")
+            if _intended_target(reference) != _intended_target(
+                value
+            ) or not _equal_optional_decimal(
+                reference["authority"].get(
+                    "execution_target_price", reference["authority"].get("frozen_target_price")
+                ),
+                value["authority"].get(
+                    "execution_target_price", value["authority"].get("frozen_target_price")
+                ),
+                field="execution_target_price",
+            ):
+                raise ScreenError("shared opportunity changed its intended/execution target")
             left, right = reference["entry"], value["entry"]
+            if (left is None) != (right is None):
+                raise ScreenError("shared opportunity changed its entry economics across arms")
+            if left is None and reference["new"]["status"] != "ENTRY_UNFILLED":
+                raise ScreenError("filled outcome is missing its entry facts")
             if (
-                left is None
-                or right is None
-                or any(
-                    Decimal(str(left[field])) != Decimal(str(right[field]))
-                    for field in ("reference_price", "fill_price", "quantity", "fee_quote")
+                left is not None
+                and right is not None
+                and (
+                    any(str(left[field]) != str(right[field]) for field in ("side", "fill_at"))
+                    or any(
+                        _required_decimal(left[field], field=f"entry.{field}")
+                        != _required_decimal(right[field], field=f"entry.{field}")
+                        for field in ("reference_price", "fill_price", "quantity", "fee_quote")
+                    )
                 )
             ):
                 raise ScreenError("shared opportunity changed its entry economics across arms")
+            left_new, right_new = reference["new"], value["new"]
+            if any(
+                left_new[field] != right_new[field]
+                for field in ("status", "trigger", "natural_closed")
+            ) or any(
+                not _equal_optional_decimal(
+                    left_new.get(field), right_new.get(field), field=f"new.{field}"
+                )
+                for field in outcome_decimal_fields
+            ):
+                raise ScreenError("shared opportunity changed its outcome economics across arms")
+            left_terminal, right_terminal = (
+                reference["terminal_valuation"],
+                value["terminal_valuation"],
+            )
+            if any(
+                left_terminal.get(field) != right_terminal.get(field)
+                for field in ("status", "valuation_at", "depends_on_open_position")
+            ) or any(
+                not _equal_optional_decimal(
+                    left_terminal.get(field),
+                    right_terminal.get(field),
+                    field=f"terminal_valuation.{field}",
+                )
+                for field in (
+                    "reference_price",
+                    "fill_price",
+                    "hypothetical_exit_fee_quote",
+                    "gross_pnl_quote",
+                    "total_fees_quote",
+                    "net_pnl_quote",
+                    "net_approved_risk_r",
+                )
+            ):
+                raise ScreenError("shared opportunity changed its terminal valuation economics")
+
+
+def validate_saved_rows(
+    rows_path: Path,
+    output: Path,
+    *,
+    expected_gzip_sha256: str,
+    expected_raw_sha256: str,
+    expected_rows: int,
+    include_report_path_proof: bool = False,
+) -> dict[str, Any]:
+    """Validate one retained compact row file without loading market data or replaying outcomes."""
+
+    rows_path = rows_path.resolve(strict=True)
+    output = output.resolve()
+    if output.exists():
+        raise ScreenError("saved-row validation output already exists")
+    if rows_path.stat().st_size > 2_000_000:
+        raise ScreenError("saved-row validation input exceeds its bounded compressed size")
+    if _file_sha(rows_path) != expected_gzip_sha256:
+        raise ScreenError("saved-row compressed hash differs from its authority")
+    raw_hash = hashlib.sha256()
+    raw_bytes = 0
+    rows: list[dict[str, Any]] = []
+    with gzip.open(rows_path, "rb") as source:
+        for raw_line in source:
+            raw_hash.update(raw_line)
+            raw_bytes += len(raw_line)
+            if raw_bytes > 2_000_000 or len(rows) >= 10_000:
+                raise ScreenError("saved-row validation input exceeds its bounded raw size")
+            value = json.loads(raw_line)
+            if not isinstance(value, dict):
+                raise ScreenError("saved-row validation encountered a non-object row")
+            rows.append(value)
+    if raw_hash.hexdigest() != expected_raw_sha256 or len(rows) != expected_rows:
+        raise ScreenError("saved-row raw identity/count differs from its authority")
+    pair_keys = [tuple(str(item) for item in row["pair_key"]) for row in rows]
+    if len(set(pair_keys)) != len(rows):
+        raise ScreenError("saved-row pair keys are not unique")
+    _same_opportunity(rows)
+    counts: Counter[str] = Counter()
+    recovered_keys: set[tuple[str, str]] = set()
+    for row in rows:
+        label = f"{row['symbol']}:{row['arm']}:{row['scenario']}:{row['new']['status']}"
+        counts[label] += 1
+        if row["new"]["status"] == "INVALID_GEOMETRY_RECOVERED":
+            recovered_keys.add((str(row["symbol"]), str(row["pair_key"][3])))
+    report = {
+        "schema": "raschke-pullback-saved-row-validation-v1",
+        "status": "VALIDATED_PARTIAL_BTC_ROWS",
+        "not_a_final_study_report": True,
+        "compressed_sha256": expected_gzip_sha256,
+        "raw_sha256": expected_raw_sha256,
+        "raw_bytes": raw_bytes,
+        "rows": len(rows),
+        "unique_pair_keys": len(set(pair_keys)),
+        "unique_opportunity_ids": len({key[3] for key in pair_keys}),
+        "recovered_records": sum(
+            row["new"]["status"] == "INVALID_GEOMETRY_RECOVERED" for row in rows
+        ),
+        "recovered_underlying_opportunities": len(recovered_keys),
+        "counts": dict(sorted(counts.items())),
+        "checks": {
+            "intended_target_authorities_agree": True,
+            "nullable_execution_target_status_semantics": True,
+            "common_arm_entry_target_outcome_economics_equal": True,
+            "fees_and_pnl_retained": True,
+        },
+        "limitations": [
+            "BTC_ONLY_PARTIAL_ROWS",
+            "ETH_NOT_PROCESSED",
+            "NO_FINAL_PROJECTION",
+            "NO_ECONOMIC_CLASSIFICATION",
+        ],
+    }
+    if include_report_path_proof:
+        report_path_proof: dict[str, Any] = {}
+        for symbol, arm, scenario in sorted(
+            {(str(row["symbol"]), str(row["arm"]), str(row["scenario"])) for row in rows}
+        ):
+            group = [
+                row
+                for row in rows
+                if row["symbol"] == symbol and row["arm"] == arm and row["scenario"] == scenario
+            ]
+            report_path_proof[f"{symbol}:{arm}:{scenario}"] = {
+                "metrics": _extra_metrics(group),
+                "capacity": _capacity(group),
+            }
+        report["report_path_proof"] = report_path_proof
+    _replace(output, report)
+    read_back = json.loads(output.read_bytes())
+    if _canonical(read_back) != _canonical(_text(report)):
+        raise ScreenError("saved-row validation report write/read-back differs")
+    return report
 
 
 def run_member(
@@ -379,14 +614,15 @@ def _capacity(rows: list[dict[str, Any]]) -> dict[str, Any]:
     rejected = 0
     free_at: datetime | None = None
     for row in sorted(rows, key=lambda value: str(value["decision_at"])):
+        decision_at = datetime.fromisoformat(str(row["decision_at"]))
+        if free_at is not None and decision_at <= free_at:
+            rejected += 1
+            continue
+        selected.append(row)
         entry = row["entry"]
         if entry is None:
             continue
         opened = datetime.fromisoformat(str(entry["fill_at"]))
-        if free_at is not None and opened <= free_at:
-            rejected += 1
-            continue
-        selected.append(row)
         upper = row["new"]["holding_upper_seconds"]
         free_at = (
             datetime.fromisoformat(str(row["terminal_valuation"]["valuation_at"]))
@@ -417,19 +653,40 @@ def _extra_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         positive_quote = sum((value for value in quote_values if value > 0), Decimal(0))
         negative_quote = -sum((value for value in quote_values if value < 0), Decimal(0))
         stop_distances: list[Decimal] = []
+        intended_target_distances: list[Decimal] = []
         target_distances: list[Decimal] = []
         reward_risks: list[Decimal] = []
+        execution_target_unavailable = 0
+        invalid_executed_geometry = 0
+        recovered_excluded = 0
         for row in rows:
             entry = row["entry"]
             if entry is None:
                 continue
-            fill = Decimal(str(entry["fill_price"]))
-            stop_distance = abs(fill - Decimal(str(row["authority"]["stop_basis"])))
-            target_distance = abs(Decimal(str(row["authority"]["frozen_target_price"])) - fill)
+            fill = _required_decimal(entry["fill_price"], field="entry.fill_price")
+            stop = _required_decimal(row["authority"]["stop_basis"], field="stop_basis")
+            intended = _intended_target(row)
+            execution = _execution_target(row)
+            stop_distance = abs(fill - stop)
+            intended_target_distances.append(abs(intended - fill))
             stop_distances.append(stop_distance)
+            if execution is None:
+                execution_target_unavailable += 1
+                if row["new"]["status"] in {
+                    "INVALID_GEOMETRY_RECOVERED",
+                    "INVALID_GEOMETRY_UNRESOLVED",
+                }:
+                    recovered_excluded += 1
+                continue
+            valid = (
+                stop < fill < execution if str(row["side"]) == "BUY" else execution < fill < stop
+            )
+            if not valid or stop_distance <= 0:
+                invalid_executed_geometry += 1
+                continue
+            target_distance = abs(execution - fill)
             target_distances.append(target_distance)
-            if stop_distance > 0:
-                reward_risks.append(target_distance / stop_distance)
+            reward_risks.append(target_distance / stop_distance)
     base.update(
         {
             "natural_mean_net_r": None
@@ -448,8 +705,16 @@ def _extra_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if not losses
             else sum(losses, Decimal(0)) / Decimal(len(losses)),
             "geometry": {
-                "denominator": len(stop_distances),
+                "entry_denominator": len(stop_distances),
+                "intended_target_denominator": len(intended_target_distances),
+                "valid_executed_reward_risk_denominator": len(reward_risks),
+                "execution_target_unavailable": execution_target_unavailable,
+                "invalid_executed_geometry": invalid_executed_geometry,
+                "recovered_excluded_from_executed_reward_risk": recovered_excluded,
                 "median_stop_distance": None if not stop_distances else median(stop_distances),
+                "median_intended_target_distance": None
+                if not intended_target_distances
+                else median(intended_target_distances),
                 "median_target_distance": None
                 if not target_distances
                 else median(target_distances),
