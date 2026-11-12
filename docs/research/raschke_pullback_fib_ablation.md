@@ -40,3 +40,14 @@ The result report includes the unrestricted paired comparison, valid-anchor refe
 rounded common core, Fibonacci outer strips, three fixed chronological blocks, holding/censoring,
 largest-winner concentration, overlap and a descriptive one-position-per-asset/arm/scenario
 capacity diagnostic. That diagnostic is not a funded portfolio, compounding curve or account ROI.
+
+## Authorized execution result
+
+Executable `c956bfb41659404f88a87f23022b4b47cb8359e6` was invoked exactly once under run UUID
+`e6a0bf8d-6fe4-45e3-9382-4e5e8c69192f`. It exited `1` with an
+`INCOMPLETE_TECHNICAL_BLOCKER` after writing partial BTC rows: a cross-arm validator attempted to
+parse a nullable recovered-result target as Decimal. ETH and the final projection were not
+produced, so there is no valid economic comparison or strategy classification. The immutable
+partial record and exact traceback are retained under
+`data/research_evidence/issue-237-raschke-pullback-c956bfb4/`. No retry was performed; promotion
+remains `NO_PROMOTION`.
