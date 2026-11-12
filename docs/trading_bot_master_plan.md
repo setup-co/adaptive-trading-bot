@@ -1624,6 +1624,32 @@ Approved:
 
 ## Change Log
 
+### 2026-11-12 — Bollinger Method II hourly research successor (not executed)
+
+- Change ID: PR #236 / `BTC_ETH_BB_METHOD2_MFI_ABLATION_1H_30M_V1`
+- Added distinct research identities `bb_price_control_1h:0.2.0` and
+  `bb_mfi10_hourly:0.2.0`; the existing 15m identities and results remain immutable.
+- BB(20, 2 population standard deviations) and MFI(10) now consume completed 1h OHLCV derived
+  from the accepted canonical 5m authority, with 4,320 hourly decisions per asset and arm over the
+  unchanged 180-day calendar.
+- Thresholds, Risk/Safety/authorization, BASE/STRESS costs, 5m execution, fixed-2R target and the
+  30-minute modeled holding deadline are unchanged. Runtime eligibility is not expanded.
+- No historical execution is authorized or represented by this implementation change.
+
+### 2026-11-11 — Bollinger Method II price/MFI entry ablation (research only)
+
+- Change ID: Issue #235 / `BTC_ETH_BB_METHOD2_MFI_ABLATION_15M_30M_V1`
+- Added two isolated research identities: `bb_price_control:0.1.0` and
+  `bb_mfi10_short_horizon:0.1.0`.
+- Scope: BTC/ETH closed-15m entry selection only, with identical shared Risk/Safety,
+  authorization, BASE/STRESS costs, fixed-2R target and existing 5m-LAST 30-minute execution.
+- The MFI arm is required to be a strict subset of the price arm and reports selection effect
+  separately from profitability. The book entry source and project exit adaptations remain
+  explicit in `docs/research/bollinger_method2_mfi_ablation.md`.
+- No legacy strategy, registry, runtime default, corpus, evidence or activation boundary changes.
+- Approved: Issue #235 authorizes one bounded historical comparison after synthetic CLI proof and
+  a clean executable freeze. It does not authorize tuning, Paper/Shadow/Live activation or orders.
+
 ### 2026-09-09 — Initial plan
 
 - Python Modular Monolith selected.
@@ -1804,6 +1830,33 @@ Approved:
 - Target Version: Research hypothesis / Master Plan v1.12
 - Approved: Architect instruction in Issue #233; one bounded historical screen only. No
   Paper/Shadow/Live activation or trading is authorized.
+
+### 2026-11-12 — Paired research-only removal of the hourly holding timer
+
+- Date: 2026-11-12
+- Change ID: PR #236 / `BTC_ETH_BB_METHOD2_1H_NO_TIME_EXIT_PAIRED_V1`
+- Old Decision: The retained hourly Bollinger Method-II comparison forcibly closed each filled
+  admission after 30 modeled minutes.
+- New Decision: Permit one opt-in paired diagnosis that reuses the immutable 30-minute outcomes
+  and reconstructs their exact authorized entries, while following only treatment entries to the
+  unchanged frozen stop/target or the fixed accepted-corpus endpoint. Endpoint exposures remain
+  censored; hypothetical last-close valuations are separate from realized economics.
+- Reason: Isolate whether the predeclared 30-minute adaptation, rather than the frozen entries and
+  geometry, materially shaped the negative hourly evidence.
+- Expected Benefit: Exact paired transition, duration, concurrency and terminal-exposure evidence
+  without regenerating the parent arm or changing any signal, risk, cost or accounting authority.
+- Risk: This is post-result exploratory analysis on the same selected history. Endpoint valuation,
+  5m intrabar uncertainty and absent funding cannot establish venue execution or profitable edge.
+- Affected Modules: One opt-in exit-policy value, bounded prefix selector, paired runner/CLI,
+  focused synthetic tests and research documentation. Runtime registries and defaults are intact.
+- Target Version: Research diagnosis / Master Plan v1.12
+- Approved: Architect instruction on PR #236; one bounded paired run only. No strategy promotion,
+  Paper/Shadow/Live activation or trading is authorized.
+- Correction: the first completed invocation inherited the legacy `2026-10-07T00:40:00Z` tail
+  and is preserved only as an off-protocol shorter-follow-up diagnostic. Its exit 0 does not
+  complete the intended October-14 protocol. The default CLI now fails closed on effective
+  protocol identity and resolves the prospective endpoint independently; no historical rerun or
+  continuation was authorized by the correction.
 
 ---
 

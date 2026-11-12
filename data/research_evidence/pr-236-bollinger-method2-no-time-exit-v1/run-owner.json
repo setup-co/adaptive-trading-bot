@@ -1,0 +1,8 @@
+{
+  "schema": "pr-236-bollinger-method2-no-time-exit-owner-v1",
+  "executable_sha": "a392c72ac12981734717027fdf5bdb7cf393178a",
+  "run_id": "2de5c8b3-afc5-4654-bad9-d5856df3f7f5",
+  "root_pid": 11596,
+  "started_at": "2026-11-12T00:32:00.1906846+00:00",
+  "command": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-216-ci-env\\Scripts\\python.exe \"-m\" \"scripts.research.bollinger_method2_no_time_exit\" \"--repo\" \"C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2\" \"--output\" \"C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-236-no-time-exit-run\\output\" \"--run-id\" \"2de5c8b3-afc5-4654-bad9-d5856df3f7f5\" \"--executable-sha\" \"a392c72ac12981734717027fdf5bdb7cf393178a\""
+}

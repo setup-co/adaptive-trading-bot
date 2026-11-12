@@ -1,0 +1,19 @@
+{
+  "schema": "pr-236-bollinger-method2-no-time-exit-preflight-v1",
+  "checkout": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2",
+  "branch": "issue-235-bb-method2",
+  "executable_sha": "a392c72ac12981734717027fdf5bdb7cf393178a",
+  "tree_sha": "806f716d16fa3cd111b505d2576291f0fc842034",
+  "run_id": "2de5c8b3-afc5-4654-bad9-d5856df3f7f5",
+  "interpreter": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-216-ci-env\\Scripts\\python.exe",
+  "package_origin": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2\\src\\adaptive_trading_bot\\__init__.py",
+  "cli_origin": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-235-bb-method2\\scripts\\research\\bollinger_method2_no_time_exit.py",
+  "protocol_id": "BTC_ETH_BB_METHOD2_1H_NO_TIME_EXIT_PAIRED_V1",
+  "protocol_sha256": "a2e9d441a9da1b135154d82add231464e44e36926a0dc610e8be7ce3e46ecc9e",
+  "parent_manifest_sha256": "190dd9eafdba3b924a560769b3089c8e4b8ab77a8b9566801dab4d2aa1348f5a",
+  "parent_projection_sha256": "6ecc6eae280738dd800bc2076116aa4d54a79ab0109c53eddf41f612c69ac416",
+  "prior_attempt_found": false,
+  "active_worker_found": false,
+  "pip_check": "NO_BROKEN_REQUIREMENTS",
+  "pyarrow_version": "25.0.1"
+}

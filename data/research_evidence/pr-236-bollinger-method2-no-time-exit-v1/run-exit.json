@@ -1,0 +1,25 @@
+{
+  "schema": "pr-236-bollinger-method2-no-time-exit-exit-v1",
+  "executable_sha": "a392c72ac12981734717027fdf5bdb7cf393178a",
+  "run_id": "2de5c8b3-afc5-4654-bad9-d5856df3f7f5",
+  "started_at": "2026-11-12T00:32:00.1906846+00:00",
+  "ended_at": "2026-11-12T00:32:57.9346471+00:00",
+  "elapsed_seconds": 57.7439625,
+  "limit_seconds": 600,
+  "memory_limit_bytes": 1073741824,
+  "root_pid": 11596,
+  "observed_process_ids": [
+    11596,
+    14828,
+    20284,
+    24500
+  ],
+  "observed_process_count": 4,
+  "peak_tree_working_set_bytes": 413777920,
+  "timed_out": false,
+  "memory_exceeded": false,
+  "worker_exit_code": 0,
+  "exit_code": 0,
+  "stdout_sha256": "de85dd266e7c2f40a7757f07b3e302e092c19910e727090112af9e08deda96a7",
+  "stderr_sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+}

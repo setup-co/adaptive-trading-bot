@@ -1,0 +1,20 @@
+{
+  "mode": "historical",
+  "executable_sha": "717691b7ce461f6b1ff716df381914969cf3bece",
+  "run_id": "5c844e1a-6dbd-4e0a-969d-da5562c65dd7",
+  "started_at": "2026-11-11T17:53:21.2115456+00:00",
+  "ended_at": "2026-11-11T17:55:20.1228847+00:00",
+  "elapsed_seconds": 118.9113391,
+  "limit_seconds": 600,
+  "root_pid": 19068,
+  "observed_process_ids": [
+    19068,
+    21180
+  ],
+  "observed_process_count": 2,
+  "peak_tree_working_set_bytes": 414556160,
+  "timed_out": false,
+  "exit_code": 0,
+  "stdout_sha256": "e67dcc7de4195c82526fdb0c992222fdaab51329459e5a447c6ec8c464b8f781",
+  "stderr_sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+}

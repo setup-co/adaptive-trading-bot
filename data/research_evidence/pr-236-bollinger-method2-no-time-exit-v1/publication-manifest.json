@@ -1,0 +1,36 @@
+{
+  "schema": "pr-236-bollinger-method2-no-time-exit-publication-v1",
+  "run_id": "2de5c8b3-afc5-4654-bad9-d5856df3f7f5",
+  "executable_sha": "a392c72ac12981734717027fdf5bdb7cf393178a",
+  "protocol_sha256": "a2e9d441a9da1b135154d82add231464e44e36926a0dc610e8be7ce3e46ecc9e",
+  "classification": "POST_RESULT_EXPLORATORY_MIXED",
+  "promotion": "NO_PROMOTION",
+  "parent": {
+    "run_id": "63964675-0ab4-4b46-89c3-1b034b69dfbd",
+    "executable_sha": "706c7818573c566e9a6a78e542887e7916c03612",
+    "projection_sha256": "6ecc6eae280738dd800bc2076116aa4d54a79ab0109c53eddf41f612c69ac416",
+    "publication_manifest_sha256": "190dd9eafdba3b924a560769b3089c8e4b8ab77a8b9566801dab4d2aa1348f5a",
+    "execution": "NOT_RERUN"
+  },
+  "paired_rows_decompressed": {
+    "bytes": 15234067,
+    "sha256": "f961e8e7e93143ecf2d1d382a96d959f05bf6df32ccb7f642c3d2d97efd56199"
+  },
+  "files": {
+    "README.md": "4c687fbb76234ee68946b569fb401d319b44474b9fb9e1158862b17f1547ac29",
+    "btcusdt-member.json": "0203d6acf197f461ac8e374ad9a8cf08cab9b438e709a36e6b096e0434e59cbf",
+    "complete.json": "cd095b39cfe2ea7d592e24b35ea6806228d908c63d5753a2a71d7e71d58c5202",
+    "ethusdt-member.json": "2cc6f019de7d5b868ebb6fcff8c1f6669283f2112527bb2c1b03cbe8d2888813",
+    "owned-tree-runner.ps1": "ecb6b023d491c5ee4256ffb38e3afade28aaacf5a0c3b91881e5b696d91b02c4",
+    "paired-rows.jsonl.gz": "bb74c02eaff15a16c8e7f520732f819342ec3baded7e913e32acfbdb3f1e855f",
+    "preflight.json": "3460c1a85d17f3a9edf97205545288d32fd11387a69ac8ca608e24f7e1ed7f41",
+    "progress.json": "e8766be79a64f90770c4685a86d514b6cf8533fd0989f4db531e3446b177d3d2",
+    "projection.json": "c703edb89dd0c9f9145720546e14ffb1f645cf4d120ac3cc19e2a31518f3dc90",
+    "protocol.json": "e525a2cb503abb2fc90f7f7dead79a1769e3ec759ae71b6551e6a37a613cc127",
+    "run-exit.json": "2ea6547cc777b2dedc7394c9b10440751e27ed3837021dec0b07888ce3656b01",
+    "run-identity.json": "f73efe92610e77eff9ec9a2341cd71bf2aa84bdbd9b98e968b5eee99e9d81c68",
+    "run-owner.json": "128bd844c6d867f161abb6202cc8b420d40a821dc47190fe16519ff7c9bf2a34",
+    "run-stderr.log": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+    "run-stdout.log": "de85dd266e7c2f40a7757f07b3e302e092c19910e727090112af9e08deda96a7"
+  }
+}
