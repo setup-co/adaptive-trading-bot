@@ -129,6 +129,21 @@ The composite must contain the same 5,152 unique pair keys and explicitly label 
 open at October 14 remain separately terminal-valued and censored. This selective post-result
 completion is descriptive, is not an independent sample, and cannot promote the strategy.
 
+The single authorized completion used executable
+`c706baf6dc6cfb05cb46e0059bfae95adcc50ee2` and UUID
+`79844d61-29fe-4f45-bb9c-236b2717892b`. It exited 0 in 25.8045814 seconds, with a
+461,512,704-byte peak owned-tree working set. It reused all 4,970 saved natural closes and replayed
+exactly 182 previously open scenario keys. Of those, 118 closed by October 14 and 64 remained
+censored (BTC PRICE 40/26 closed/open, BTC MFI 12/18, ETH PRICE 50/10, ETH MFI 16/10).
+
+BTC terminal-valued mean R remained negative in every arm/scenario: PRICE/MFI
+`-0.217494/-0.155959` BASE and `-0.389255/-0.282286` STRESS. ETH BASE was slightly positive at
+`+0.009853/+0.004229`, while ETH STRESS remained negative at `-0.130295/-0.084880`. This is
+**`COMPOSITE_COMPLETION_MIXED / NO_PROMOTION`**: 64 rows still rely on censored endpoint valuation,
+BTC remains negative throughout, and ETH does not survive STRESS. Immutable completion evidence
+is retained under
+`data/research_evidence/pr-236-bollinger-method2-no-time-exit-completion-v1/`.
+
 ## Archived 15m comparison
 
 - Protocol: `BTC_ETH_BB_METHOD2_MFI_ABLATION_15M_30M_V1`.
