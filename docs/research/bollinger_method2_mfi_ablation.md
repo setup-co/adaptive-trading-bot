@@ -1,7 +1,8 @@
 # Bollinger Method II price/MFI entry ablation
 
-Status: the completed 15m and hourly 30-minute comparisons are retained below. A distinct paired
-hourly no-time-exit diagnosis is implemented but has not yet been run on historical data.
+Status: the completed 15m and hourly 30-minute comparisons and the qualified shorter no-time-exit
+diagnostic are retained below. Selective completion of only its censored positions is separately
+preregistered; it does not rewrite either predecessor.
 
 ## Source mapping and adaptation boundary
 
@@ -110,6 +111,23 @@ The diagnostic remains **`NO_PROMOTION`**; endpoint-valued open positions are no
 Exact captured bytes and hashes are retained in
 `data/research_evidence/pr-236-bollinger-method2-no-time-exit-v1/`.
 See the [append-only qualification](bollinger_method2_no_time_exit_shorter_followup_addendum.md).
+
+### Selective October-14 completion
+
+Protocol `BTC_ETH_BB_METHOD2_1H_NO_TIME_EXIT_COMPLETION_V1` (SHA-256
+`6ac2876371acccbc92cfaf73189ccddd37dde33ad6a90b53ca8ca0e6a3cf4e18`) binds both immutable
+parents above and the fixed shorter-result partition. Exactly 4,970 `natural_closed=true` scenario
+rows are copied byte-for-byte as economic records. Only the 182 `TERMINAL_OPEN` scenario keys are
+replayed from their retained authorized entries to `2026-10-14T00:00:00Z`; they comprise 33
+distinct BTC and 30 distinct ETH admission times. Entry fill, quantity, approved risk, frozen stop
+and target, scenario costs, and the Strategy/Risk/Safety/authorization chain must match both saved
+authorities. A replayed exit before the shorter cutoff is rejected, and the entry commission is
+not accumulated a second time.
+
+The composite must contain the same 5,152 unique pair keys and explicitly label each row
+`REUSED_NATURAL_CLOSE` or `REPLAYED_PREVIOUSLY_OPEN`. Natural closes are realized; positions still
+open at October 14 remain separately terminal-valued and censored. This selective post-result
+completion is descriptive, is not an independent sample, and cannot promote the strategy.
 
 ## Archived 15m comparison
 
