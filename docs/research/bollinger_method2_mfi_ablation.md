@@ -68,7 +68,7 @@ for each asset, arm and scenario. The result is **`NEGATIVE_ADAPTATION / NO_PROM
 economics, exit/holding facts, selection partitions, blocks and immutable hashes are retained in
 `data/research_evidence/pr-236-bollinger-method2-mfi-1h-v1/`.
 
-## Paired hourly no-time-exit diagnosis (not historically executed)
+## Paired hourly no-time-exit diagnosis
 
 - Protocol: `BTC_ETH_BB_METHOD2_1H_NO_TIME_EXIT_PAIRED_V1`.
 - Comparator: the immutable saved rows from the hourly 30-minute run above; that arm is never
@@ -86,6 +86,22 @@ economics, exit/holding facts, selection partitions, blocks and immutable hashes
 
 This diagnosis is post-result and exploratory. It neither replaces the negative parent result nor
 approves the entry strategy, a timer replacement, runtime activation or trading.
+
+The single authorized invocation used executable
+`a392c72ac12981734717027fdf5bdb7cf393178a`, protocol
+`a2e9d441a9da1b135154d82add231464e44e36926a0dc610e8be7ce3e46ecc9e` and UUID
+`2de5c8b3-afc5-4654-bad9-d5856df3f7f5`. It completed 5,152 exact paired rows in 57.7439625
+seconds, with a 413,777,920-byte peak owned-tree working set. Natural closes/open rows were
+BTC PRICE 965/33, BTC MFI 259/15, ETH PRICE 960/30 and ETH MFI 301/13 per scenario.
+
+BTC terminal-valued mean R remained negative in every arm/scenario (`-0.203704/-0.129982` BASE
+PRICE/MFI; `-0.375494/-0.256344` STRESS). ETH BASE became slightly positive (`+0.005236` PRICE,
+`+0.051890` MFI), while ETH STRESS remained negative (`-0.134964/-0.037271`). Peak concurrency
+ranged from 20 to 49 and median upper holding duration from 102,000 to 193,500 seconds. The result
+is therefore mixed and remains **`NO_PROMOTION`**; endpoint-valued open positions are not realized
+closes. Exact paired economics, natural-close views, transitions, blocks, selection partitions,
+duration bins and hashes are retained in
+`data/research_evidence/pr-236-bollinger-method2-no-time-exit-v1/`.
 
 ## Archived 15m comparison
 
