@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-237-raschke-pullback\scripts\research\raschke_pullback_screen.py", line 52, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-237-raschke-pullback\scripts\research\raschke_pullback_screen.py", line 32, in main
+    run(
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-237-raschke-pullback\src\adaptive_trading_bot\research\raschke_pullback_screen.py", line 668, in run
+    member, values = run_member(wire, store, five, output, authority=authority)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-237-raschke-pullback\src\adaptive_trading_bot\research\raschke_pullback_screen.py", line 366, in run_member
+    _same_opportunity(rows)
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-237-raschke-pullback\src\adaptive_trading_bot\research\raschke_pullback_screen.py", line 215, in _same_opportunity
+    if any(
+       ^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-237-raschke-pullback\src\adaptive_trading_bot\research\raschke_pullback_screen.py", line 216, in <genexpr>
+    Decimal(str(reference["authority"][field]))
+decimal.InvalidOperation: [<class 'decimal.ConversionSyntax'>]
+

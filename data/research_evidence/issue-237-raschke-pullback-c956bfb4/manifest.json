@@ -1,0 +1,35 @@
+{
+  "schema": "issue-237-raschke-pullback-blocker-manifest-v1",
+  "status": "INCOMPLETE_TECHNICAL_BLOCKER",
+  "promotion": "NO_PROMOTION",
+  "dependency_sha": "d1772874cc1414a192e7b94fc296b27cf04993dc",
+  "executable_sha": "c956bfb41659404f88a87f23022b4b47cb8359e6",
+  "executable_tree": "3c61a332cebbeba2336c22a407faecc161dcdb72",
+  "protocol_sha256": "933e892b9ab448a0e906093e40e22d3d9237b72963627c9a3dde4b2be1ceb402",
+  "run_id": "e6a0bf8d-6fe4-45e3-9382-4e5e8c69192f",
+  "historical_invocations": 1,
+  "exit_code": 1,
+  "raw_trade_rows": {
+    "rows": 174,
+    "bytes": 624742,
+    "sha256": "f261e385d261433dee1af9ed5a40a03684ce35d32522e4c11c46aa6c2f745fca"
+  },
+  "files": {
+    "README.md": {"bytes": 3077, "sha256": "974555731aa01238204f2891c0e1fa4193fe6759419e343c3f7cf5a3369fa3c6"},
+    "execution/owned-tree-runner.ps1": {"bytes": 4840, "sha256": "db757a140fc96a6a7a7e7563045603d302ced7a9c9bbfdc6b5c735171419b5e3"},
+    "execution/run-exit.json": {"bytes": 920, "sha256": "894191f4e4aefad70ba4c190f495a11e9540db55a2e02be2b07a0eb29e71e033"},
+    "execution/run-owner.json": {"bytes": 905, "sha256": "3f8f7e2d255b65024f10d1fa0995b189ccfd4d4c25f30e1e796bcebe6f79adef"},
+    "execution/run-stderr.log": {"bytes": 1543, "sha256": "17af412c20fff2b5a5de8329622529141a90847512f0a1a99065082b6c0ae58a"},
+    "execution/run-stdout.log": {"bytes": 2, "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"},
+    "partial-output/progress.json": {"bytes": 1494, "sha256": "0aa01be10f99a15e0c415e0c2a84f82ff250c57f9af4e23f378c31b173b0df52"},
+    "partial-output/protocol.json": {"bytes": 2676, "sha256": "933e892b9ab448a0e906093e40e22d3d9237b72963627c9a3dde4b2be1ceb402"},
+    "partial-output/run-identity.json": {"bytes": 265, "sha256": "9b16721531612db991453be33dd299367b5e59670027709b729fc13a2ef5d5aa"},
+    "partial-output/trade-rows.jsonl.gz": {"bytes": 49266, "sha256": "7c62c0db5e9da5af9a18cb3d87208358a67ee6eb91005ba65d83d1c3a06ade20"}
+  },
+  "missing": [
+    "btcusdt-member.json",
+    "ethusdt-member.json",
+    "projection.json",
+    "complete.json"
+  ]
+}

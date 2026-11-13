@@ -1,0 +1,10 @@
+{
+  "schema": "issue-237-raschke-completion-owner-v1",
+  "executable_sha": "8d38df1bf3f8749a3392a3e64d277bd3d981230a",
+  "protocol_sha256": "78fcd7c8e08694475a7508279fe7367941b9df8313afdc37eb4e39c9a4f6f23c",
+  "run_id": "af5af71c-6465-48b4-a416-9ae42a0cf0d8",
+  "scope": "REUSE_BTC_PROCESS_ETH_ONLY",
+  "root_pid": 24196,
+  "started_at": "2026-11-13T08:07:29.6790465+00:00",
+  "command": "C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-216-ci-env\\Scripts\\python.exe \"-m\" \"scripts.research.raschke_pullback_completion\" \"--repo\" \"C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-237-raschke-pullback\" \"--parent-rows\" \"C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\work\\issue-237-raschke-pullback\\data\\research_evidence\\issue-237-raschke-pullback-c956bfb4\\partial-output\\trade-rows.jsonl.gz\" \"--output\" \"C:\\Users\\elect\\Documents\\Codex\\2026-09-09\\x20\\issue-237-completion-run\\output\" \"--run-id\" \"af5af71c-6465-48b4-a416-9ae42a0cf0d8\" \"--executable-sha\" \"8d38df1bf3f8749a3392a3e64d277bd3d981230a\" \"--protocol-sha256\" \"78fcd7c8e08694475a7508279fe7367941b9df8313afdc37eb4e39c9a4f6f23c\""
+}

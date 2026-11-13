@@ -1,0 +1,26 @@
+{
+  "schema": "issue-237-raschke-pullback-exit-v1",
+  "executable_sha": "c956bfb41659404f88a87f23022b4b47cb8359e6",
+  "protocol_sha256": "933e892b9ab448a0e906093e40e22d3d9237b72963627c9a3dde4b2be1ceb402",
+  "run_id": "e6a0bf8d-6fe4-45e3-9382-4e5e8c69192f",
+  "started_at": "2026-11-12T21:47:25.4487908+00:00",
+  "ended_at": "2026-11-12T21:48:24.8690013+00:00",
+  "elapsed_seconds": 59.4202105,
+  "limit_seconds": 600,
+  "memory_limit_bytes": 1073741824,
+  "root_pid": 13588,
+  "observed_process_ids": [
+    13588,
+    14996,
+    20472,
+    21340
+  ],
+  "observed_process_count": 4,
+  "peak_tree_working_set_bytes": 275308544,
+  "timed_out": false,
+  "memory_exceeded": false,
+  "worker_exit_code": 1,
+  "exit_code": 1,
+  "stdout_sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+  "stderr_sha256": "17af412c20fff2b5a5de8329622529141a90847512f0a1a99065082b6c0ae58a"
+}

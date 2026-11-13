@@ -1,0 +1,41 @@
+{
+  "schema": "issue-237-raschke-composite-completion-publication-v1",
+  "status": "COMPLETE",
+  "classification": "SPARSE",
+  "promotion": "NO_PROMOTION",
+  "executable_sha": "8d38df1bf3f8749a3392a3e64d277bd3d981230a",
+  "executable_tree": "5f9f9776caefd88bf48a756d9af8c530da7dc263",
+  "protocol_sha256": "78fcd7c8e08694475a7508279fe7367941b9df8313afdc37eb4e39c9a4f6f23c",
+  "run_id": "af5af71c-6465-48b4-a416-9ae42a0cf0d8",
+  "parent_executable_sha": "c956bfb41659404f88a87f23022b4b47cb8359e6",
+  "parent_run_id": "e6a0bf8d-6fe4-45e3-9382-4e5e8c69192f",
+  "rows": {
+    "reused_btc": 174,
+    "new_eth": 218,
+    "total": 392
+  },
+  "files": {
+    "README.md": {"bytes": 4083, "sha256": "5e28c88cc3f41493cc4d990242f59ce2a24a6506af74269d4783b8a67376e5d9"},
+    "execution/run-exit.json": {"bytes": 898, "sha256": "34972e0258af087ae9a1852c62611699ea4a5023f7e5a6523fc9799f2a3b20e5"},
+    "execution/run-once.ps1": {"bytes": 5051, "sha256": "47c20ee0cfad075765d75f7335179d7dd4baf32864726ec55d97c18ab01b4cb7"},
+    "execution/run-owner.json": {"bytes": 1171, "sha256": "c045094b964c684142596b2f0a5f76b476a9437b57a5f09261fbba31aaa34632"},
+    "execution/run-stderr.log": {"bytes": 2, "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"},
+    "execution/run-stdout.log": {"bytes": 2, "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"},
+    "output/btc-parent-integrity.json": {"bytes": 217, "sha256": "dd6bf690f1acc78a88b99cb0b1b43c84c39ff747327006c17b6f4311073b27de"},
+    "output/btcusdt-member.json": {"bytes": 1141, "sha256": "0b1136a8973264cd9149c59d5518b2907f07d9c78ea9494d726d7e88607310da"},
+    "output/complete.json": {"bytes": 257, "sha256": "1ce18ba6ad17b22af1f475e79bc0285184ee9f1c9c2ee995df63b1a3d7cae9d2"},
+    "output/composite-rows.jsonl.gz": {"bytes": 106442, "sha256": "63e632ef4d73ffbb94559c00bc11876ba66c15f738276998efdd17ae19f59c3a"},
+    "output/ethusdt-member.json": {"bytes": 5514, "sha256": "347de17aef8af14c2feb547076f74c56b561172c972914e9721c6575ce54031a"},
+    "output/progress.json": {"bytes": 1366, "sha256": "45e5f15887aa6640ad1dbd25e2aedd5470aed0bc46823b20c56fa59e4469e6e0"},
+    "output/projection.json": {"bytes": 211717, "sha256": "0c4bef6e97a6042db3f4627bc3197fc6e1d3935d5a739dbf82bfe46bcdce0103"},
+    "output/protocol.json": {"bytes": 3599, "sha256": "78fcd7c8e08694475a7508279fe7367941b9df8313afdc37eb4e39c9a4f6f23c"},
+    "output/run-identity.json": {"bytes": 231, "sha256": "eadd2164c6a2c23ab83e137bad3bed6c16b6da88693e1d617f07a3cd534efd82"},
+    "saved-btc-validation.json": {"bytes": 1331, "sha256": "2f94985ab2a58ca0a9c9c138521e1b3545b37d97d6cff49adfb653b554f53bdb"}
+  },
+  "limitations": [
+    "BTC_FINAL_FUNNEL_METADATA_NOT_RETAINED",
+    "COMPOSITE_REUSES_PARENT_BTC_OUTCOMES",
+    "SELECTION_INFORMED_EXPLORATORY_DATA_NOT_UNTOUCHED_HOLDOUT",
+    "PRE_FUNDING_MARK_LIQUIDATION_UNQUALIFIED"
+  ]
+}
