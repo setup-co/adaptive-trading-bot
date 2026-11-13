@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None, *, authority: ScreenInputAuthority | Non
             executable_sha=args.executable_sha,
             authority=authority,
             followup_end=datetime.fromisoformat(authority.report_end.replace("Z", "+00:00")),
+            expected_protocol_sha256=args.protocol_sha256,
         )
     return 0
 

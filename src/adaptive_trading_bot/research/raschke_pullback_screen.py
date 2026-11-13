@@ -609,6 +609,64 @@ def run_member(
     )
 
 
+def _study_metrics(rows: list[dict[str, Any]], *, terminal: bool) -> dict[str, Any]:
+    """Report admissions without treating an unfilled order as open exposure."""
+
+    economic_rows: list[dict[str, Any]] = []
+    execution_statuses: Counter[str] = Counter()
+    incomplete_statuses: Counter[str] = Counter()
+    filled = 0
+    unfilled = 0
+    endpoint_open = 0
+    recovered = 0
+    closed_statuses = {"ORDINARY_CLOSED", "INVALID_GEOMETRY_RECOVERED"}
+    for row in rows:
+        new = row["new"]
+        status = str(new["status"])
+        entry = row["entry"]
+        natural_closed = bool(new["natural_closed"])
+        execution_statuses[status] += 1
+        if entry is not None:
+            filled += 1
+        if status == "ENTRY_UNFILLED":
+            if entry is not None or natural_closed:
+                raise ScreenError("ENTRY_UNFILLED row has filled or closed position facts")
+            unfilled += 1
+            continue
+        if status == "TERMINAL_OPEN":
+            if entry is None or natural_closed:
+                raise ScreenError("TERMINAL_OPEN row lacks open filled-position facts")
+            if not bool(row["terminal_valuation"].get("depends_on_open_position")):
+                raise ScreenError("TERMINAL_OPEN row lacks dependent terminal valuation")
+            endpoint_open += 1
+            economic_rows.append(row)
+            continue
+        if status in closed_statuses:
+            if entry is None or not natural_closed:
+                raise ScreenError(f"{status} row lacks closed filled-position facts")
+            if status == "INVALID_GEOMETRY_RECOVERED":
+                recovered += 1
+            economic_rows.append(row)
+            continue
+        incomplete_statuses[status] += 1
+
+    result = _metrics(economic_rows, terminal=terminal)
+    result.update(
+        {
+            "denominator": len(rows),
+            "economic_denominator": len(economic_rows),
+            "filled_admissions": filled,
+            "entry_unfilled": unfilled,
+            "ordinary_endpoint_open": endpoint_open,
+            "recovered_closed": recovered,
+            "incomplete_or_error": sum(incomplete_statuses.values()),
+            "execution_status_counts": dict(sorted(execution_statuses.items())),
+            "incomplete_or_error_status_counts": dict(sorted(incomplete_statuses.items())),
+        }
+    )
+    return result
+
+
 def _capacity(rows: list[dict[str, Any]]) -> dict[str, Any]:
     selected: list[dict[str, Any]] = []
     rejected = 0
@@ -633,14 +691,19 @@ def _capacity(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "all_admissions": len(rows),
         "selected": len(selected),
         "overlap_rejected": rejected,
-        "natural": _metrics(selected, terminal=False),
-        "terminal": _metrics(selected, terminal=True),
+        "natural": _study_metrics(selected, terminal=False),
+        "terminal": _study_metrics(selected, terminal=True),
     }
 
 
 def _extra_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    base = _metrics(rows, terminal=True)
-    closed = [row for row in rows if row["new"]["natural_closed"]]
+    base = _study_metrics(rows, terminal=True)
+    closed = [
+        row
+        for row in rows
+        if row["new"]["natural_closed"]
+        and row["new"]["status"] in {"ORDINARY_CLOSED", "INVALID_GEOMETRY_RECOVERED"}
+    ]
     with localcontext(_CONTEXT):
         values = [Decimal(str(row["new"]["closed_net_r"])) for row in closed]
         quote_values = [Decimal(str(row["new"]["net_pnl_quote"])) for row in closed]
@@ -672,10 +735,7 @@ def _extra_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             stop_distances.append(stop_distance)
             if execution is None:
                 execution_target_unavailable += 1
-                if row["new"]["status"] in {
-                    "INVALID_GEOMETRY_RECOVERED",
-                    "INVALID_GEOMETRY_UNRESOLVED",
-                }:
+                if row["new"]["status"] == "INVALID_GEOMETRY_RECOVERED":
                     recovered_excluded += 1
                 continue
             valid = (
@@ -732,8 +792,8 @@ def _extra_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _views(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "count": len(rows),
-        "natural": _metrics(rows, terminal=False),
-        "terminal": _metrics(rows, terminal=True),
+        "natural": _study_metrics(rows, terminal=False),
+        "terminal": _study_metrics(rows, terminal=True),
     }
 
 
@@ -789,7 +849,7 @@ def _projection(
                 ]
                 key = f"{wire}:{arm}:{scenario.value}"
                 table[key] = {
-                    "natural": _metrics(values, terminal=False),
+                    "natural": _study_metrics(values, terminal=False),
                     "terminal": _extra_metrics(values),
                 }
                 capacity[key] = _capacity(values)
@@ -805,8 +865,8 @@ def _projection(
                         == name
                     ]
                     blocks[f"{key}:{name}"] = {
-                        "natural": _metrics(subset, terminal=False),
-                        "terminal": _metrics(subset, terminal=True),
+                        "natural": _study_metrics(subset, terminal=False),
+                        "terminal": _study_metrics(subset, terminal=True),
                     }
         for scenario in Scenario:
             comparison_rows = [
