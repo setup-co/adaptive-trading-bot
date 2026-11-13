@@ -14,7 +14,8 @@ This document defines **how work is planned, delegated, reviewed, validated, and
 
 - `docs/trading_bot_master_plan.md` — product/architecture source of truth;
 - `AGENTS.md` — mandatory coding-agent rules;
-- `docs/project_state.md` — concise current project handoff/status;
+- `docs/project_state.md` — preserved historical project snapshot;
+- `docs/project_state_current.md` — concise current project handoff/status;
 - the active GitHub Issue / PR and the latest architect instruction posted there.
 
 If these sources conflict, do not guess. Stop and surface the conflict for architect review.
@@ -29,9 +30,12 @@ For normal work, use this order:
 2. `AGENTS.md` for mandatory implementation and repository rules.
 3. This document for collaboration/review workflow.
 4. The active Issue/PR and the **latest architect instruction** for task-specific requirements.
-5. `docs/project_state.md` for current handoff/status only.
+5. `docs/project_state.md` for required historical context only.
+6. `docs/project_state_current.md` for current handoff/status.
 
-`docs/project_state.md` is intentionally descriptive and may become stale between milestones. It must never silently override an Issue, PR instruction, `AGENTS.md`, or the Master Plan.
+`docs/project_state.md` is now an intentionally preserved historical snapshot. The current handoff
+lives in `docs/project_state_current.md`; neither may silently override an Issue, PR instruction,
+`AGENTS.md`, or the Master Plan.
 
 ---
 
@@ -240,7 +244,8 @@ Before making a project decision in a fresh session, read at minimum:
 2. `docs/trading_bot_master_plan.md`
 3. `docs/architect_workflow.md`
 4. `docs/project_state.md`
-5. the active Issue/PR and its latest architect instruction/comments
+5. `docs/project_state_current.md`
+6. the active Issue/PR and its latest architect instruction/comments
 
 Then verify current `main` and active PR/Issue state from GitHub rather than assuming the snapshot is still current.
 
@@ -248,9 +253,10 @@ A fresh chat should continue the established workflow; it must not invent a new 
 
 ---
 
-## 10. Maintaining `project_state.md`
+## 10. Maintaining current project state
 
-Update `docs/project_state.md` at meaningful handoff points, especially after:
+Preserve `docs/project_state.md` byte-for-byte because predecessor evidence binds its historical
+snapshot. Update `docs/project_state_current.md` at meaningful handoff points, especially after:
 
 - an important PR is merged;
 - a research study completes/stops;
@@ -268,4 +274,5 @@ Keep it concise. It should answer:
 - What is the next expected review/action?
 - Which immutable dataset/protocol identities matter right now?
 
-Do not turn `project_state.md` into a duplicate history log; detailed evidence belongs in Issues, PRs and research documents.
+Do not turn `project_state_current.md` into a duplicate history log; detailed evidence belongs in
+Issues, PRs and research documents.

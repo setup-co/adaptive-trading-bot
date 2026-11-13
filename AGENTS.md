@@ -8,7 +8,9 @@ Before implementing any issue or changing architecture:
 
 1. Read `docs/trading_bot_master_plan.md`.
 2. Read `docs/architect_workflow.md`.
-3. Read `docs/project_state.md`, then verify its snapshot against current GitHub `main`, active Issues/PRs and latest architect comments.
+3. Read the preserved historical `docs/project_state.md` and the active handoff in
+   `docs/project_state_current.md`, then verify both against current GitHub `main`, active
+   Issues/PRs and latest architect comments.
 4. Read the GitHub issue assigned to the task in full, including the latest architect instruction when present.
 5. Inspect existing interfaces and tests relevant to the task.
 6. Do not expand scope beyond the issue.
@@ -22,20 +24,25 @@ If an issue conflicts with the Master Plan, STOP and report the conflict. Do not
 - Primary DB: PostgreSQL.
 - Historical/large research datasets: Parquet.
 - Exchange access must be behind `ExchangeAdapter`.
-- Current V1 runtime/execution allowlists and tested trading instruments: BTC and ETH only; do not widen them implicitly.
+- Current runtime/execution allowlists and tested trading instruments remain BTC and ETH only; do
+  not widen them implicitly. The active research target is also BTC/ETH only.
 - A separately qualified, versioned research-only universe of at least ten assets is permitted before Live acceptance; the first bounded panel targets exactly ten. It requires a reviewed research allowlist and locked data. Membership is not Paper/Shadow/Live eligibility, ten concurrent trades, or permission to bypass Risk/Safety. See Master Plan v1.8, `RESEARCH_V2_CHARTER_V1`, and its selection-only current-snapshot exploratory annex.
-- Entry timeframe: 15m.
-- Context timeframes: 1h and 4h.
+- Active new-research decision timeframe: closed `4h` candles.
+- Legacy `15m` strategy/runtime implementations and their `1h`/`4h` context remain preserved until
+  separately changed and reviewed; do not relabel frozen studies or globally replace timeframe
+  literals.
 - Qualified WEEX perpetual 5m LAST may be canonical historical input to derive those research frames; 5m is not a V1 entry strategy.
-- V1 strategy families only:
-  - Trend Pullback
-  - Breakout + Retest
-  - Range Mean Reversion
+- Active research program: one subsequently frozen Grid protocol only. Existing Trend Pullback,
+  Breakout + Retest, Range Mean Reversion and other research hypotheses remain historical/legacy
+  implementations, not deleted or silently converted to Grid.
 - V1 primary trading mode: leveraged WEEX perpetual futures; Spot is secondary.
 - Leverage is permitted only as an explicit, bounded, versioned configuration owned and capped by `RiskManager`; it is never strategy- or LLM-owned.
 - Risk budget is independent of leverage. Position size follows approved risk and stop geometry; leverage must not increase approved risk.
 - Isolated margin is preferred for controlled V1 live readiness where supported. Cross margin requires a separate explicit architecture decision.
 - Live trading remains disabled until representative leveraged validation covers margin, funding, mark-price and liquidation behavior and every acceptance gate passes.
+- The new multi-year Binance USD-M archive is an external research price authority with explicit
+  WEEX cost assumptions. Binance MARK/funding are source-venue facts or proxies, not historical
+  WEEX mechanics and not proof of executable WEEX profitability.
 - Machine Learning: OFF in V1 unless a later approved issue explicitly enables a research-only experiment.
 - Deep Learning: OFF in V1.
 - Reinforcement Learning: OFF in V1.

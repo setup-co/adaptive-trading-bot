@@ -4,10 +4,13 @@ Safety-first, explainable, adaptive crypto trading research and execution platfo
 
 ## Current status
 
-**Version 1 research and validation in progress.** The three V1 candidate families,
-deterministic Replay/Backtest, Risk/Safety, journal, Paper simulation, and read-only
-Dashboard boundaries exist, but the accepted signal-edge screens have not established
-a sustainable trading edge or representative leveraged-perpetual Live readiness.
+**Research and validation in progress.** The active program is now a BTC/ETH-only Grid route with
+closed-4h decisions and separately qualified multi-year external history. Legacy strategy/runtime
+implementations remain preserved, and prior screens have not established a sustainable trading
+edge or representative leveraged-perpetual Live readiness.
+
+The live handoff is [`docs/project_state_current.md`](docs/project_state_current.md).
+[`docs/project_state.md`](docs/project_state.md) is a preserved, hash-bound historical snapshot.
 
 Real-money live trading is **disabled by design** during V1 development.
 
@@ -17,6 +20,9 @@ Before changing code, read:
 
 1. [`AGENTS.md`](AGENTS.md) — mandatory operating rules for Codex/coding agents.
 2. [`docs/trading_bot_master_plan.md`](docs/trading_bot_master_plan.md) — architecture, V1 scope, acceptance gates, and maturity roadmap.
+3. [`docs/architect_workflow.md`](docs/architect_workflow.md) — review and handoff workflow.
+4. [`docs/project_state.md`](docs/project_state.md) — required preserved historical snapshot.
+5. [`docs/project_state_current.md`](docs/project_state_current.md) — current verified handoff.
 
 ## V1 baseline
 
@@ -25,11 +31,9 @@ Before changing code, read:
 - BTC / ETH only in current runtime/execution allowlists; a separately qualified
   ten-asset research panel is designed in [`RESEARCH_V2_CHARTER_V1`](docs/research/research_v2_charter.md),
   not yet implemented, qualified or authorized for a study or trading
-- 15m entry timeframe
-- 1h / 4h context
-- Trend Pullback
-- Breakout + Retest
-- Range Mean Reversion
+- Active research: closed-4h BTC/ETH Grid route on separately qualified external history
+- Legacy runtime/research implementations: 15m decisions with 1h/4h context, preserved unchanged
+- Historical families: Trend Pullback, Breakout + Retest, and Range Mean Reversion
 - Independent Risk Manager
 - Backtest / Replay / Paper / Shadow before controlled Live
 - Statistical/Bayesian Experience Engine before ML
@@ -37,6 +41,10 @@ Before changing code, read:
 - WEEX perpetual futures as the primary V1 target; leverage is bounded,
   predeclared, and Risk-owned, not a strategy-selected parameter
 - `NO_TRADE` is a valid first-class decision
+
+The external-history contract and limits for the new route are recorded in
+[`docs/research/btc_eth_grid_4h_external_history.md`](docs/research/btc_eth_grid_4h_external_history.md).
+No Grid strategy backtest is authorized by the data acquisition itself.
 
 ## Development workflow
 
