@@ -12,7 +12,10 @@ from adaptive_trading_bot.research import binance_grid_history as corpus
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "preflight", "capture", "qualify", "verify"))
+    parser.add_argument(
+        "command",
+        choices=("plan", "preflight", "capture", "qualify", "verify", "qualify-v2", "verify-v2"),
+    )
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--repo", type=Path, default=Path("."))
     args = parser.parse_args()
@@ -37,7 +40,10 @@ def main() -> int:
         return 0
     plan = corpus.read_json(root / "plan.json")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    corpus.validate_plan(plan, revision)
+    if args.command in {"capture", "qualify", "verify", "preflight"}:
+        corpus.validate_plan(plan, revision)
+    else:
+        corpus.validate_plan(plan)
     if args.command == "preflight":
         usage = subprocess.check_output(
             ["powershell", "-NoProfile", "-Command", f"(Get-PSDrive -Name '{root.drive[0]}').Free"],
@@ -50,13 +56,23 @@ def main() -> int:
         )
     elif args.command == "capture":
         print(json.dumps(corpus.capture(root, plan), sort_keys=True))
-    elif args.command == "qualify":
-        result = corpus.qualify(root, plan)
+    elif args.command in {"qualify", "qualify-v2"}:
+        result = corpus.qualify(
+            root,
+            plan,
+            generation="v2" if args.command == "qualify-v2" else "v1",
+            qualification_executable_sha=revision,
+        )
         print(
             json.dumps({"classification": result["classification"], "files": len(result["files"])})
         )
     else:
-        print(json.dumps(corpus.verify(root, plan), sort_keys=True))
+        print(
+            json.dumps(
+                corpus.verify(root, plan, generation="v2" if args.command == "verify-v2" else "v1"),
+                sort_keys=True,
+            )
+        )
     return 0
 
 

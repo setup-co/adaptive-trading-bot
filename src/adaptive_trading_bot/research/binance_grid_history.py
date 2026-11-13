@@ -454,12 +454,16 @@ KLINE_NAMES = (
 )
 
 
-def _decimal(text: str, *, positive: bool = False) -> Decimal:
+def _decimal(text: str, *, positive: bool = False, nonnegative: bool = True) -> Decimal:
     try:
         value = Decimal(text)
     except InvalidOperation as exc:
         raise CorpusError(f"invalid decimal: {text!r}") from exc
-    if not value.is_finite() or (positive and value <= 0) or (not positive and value < 0):
+    if (
+        not value.is_finite()
+        or (positive and value <= 0)
+        or (not positive and nonnegative and value < 0)
+    ):
         raise CorpusError(f"decimal outside bounds: {text!r}")
     return value
 
@@ -537,7 +541,7 @@ def parse_funding(path: Path) -> list[dict[str, Any]]:
         interval = int(row[1])
         if interval <= 0:
             raise CorpusError("funding interval is not positive")
-        _decimal(row[2])
+        _decimal(row[2], nonnegative=False)
         parsed.append(
             {
                 "calc_time_ms": timestamp,
@@ -639,10 +643,32 @@ def _pair_valid(root: Path, component: str, symbol: str, month: str) -> tuple[Pa
     return archive, actual
 
 
-def qualify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+def qualify(
+    root: Path,
+    plan: dict[str, Any],
+    *,
+    generation: str = "v1",
+    qualification_executable_sha: str | None = None,
+) -> dict[str, Any]:
     validate_plan(plan)
-    if (root / "qualification-manifest.json").exists():
+    if generation not in {"v1", "v2"}:
+        raise CorpusError("unknown qualification generation")
+    manifest_path = root / (
+        "qualification-manifest.json" if generation == "v1" else "qualification-manifest-v2.json"
+    )
+    if manifest_path.exists():
         raise CorpusError("qualification already exists")
+    output_prefix = (
+        Path("normalized") if generation == "v1" else Path("derived-generations/v2/normalized")
+    )
+    predecessor_sha: str | None = None
+    if generation == "v2":
+        predecessor = root / "qualification-manifest.json"
+        if not predecessor.is_file():
+            raise CorpusError("v2 requires the preserved v1 qualification manifest")
+        predecessor_sha = sha256_file(predecessor)
+        if not qualification_executable_sha:
+            raise CorpusError("v2 requires its executable identity")
     coverage: dict[str, dict[str, Any]] = {}
     files: dict[str, dict[str, Any]] = {}
     for symbol in SYMBOLS:
@@ -670,7 +696,7 @@ def qualify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
                     if any(not start_ms <= int(row[key]) < end_ms for row in rows):
                         raise CorpusError("row outside named month")
                     parsed_by_month.setdefault(month, {})[component] = rows
-                    relative = Path("normalized") / component / symbol / f"{month}.parquet"
+                    relative = output_prefix / component / symbol / f"{month}.parquet"
                     _write_parquet(
                         root / relative,
                         rows,
@@ -731,7 +757,7 @@ def qualify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             try:
                 parsed = parsed_by_month[month]
                 rows = derive_and_reconcile(parsed["trade_price_1m"], parsed["native_4h"])
-                relative = Path("normalized") / "derived_4h" / symbol / f"{month}.parquet"
+                relative = output_prefix / "derived_4h" / symbol / f"{month}.parquet"
                 _write_parquet(
                     root / relative,
                     rows,
@@ -772,6 +798,10 @@ def qualify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         "schema": "binance-usdm-qualification-manifest-v1",
         "protocol": PROTOCOL,
         "dataset_version": DATASET_VERSION,
+        "generation": generation,
+        "capture_executable_sha": plan["executable_sha"],
+        "qualification_executable_sha": qualification_executable_sha or plan["executable_sha"],
+        "predecessor_manifest_sha256": predecessor_sha,
         "plan_sha256": sha256_file(root / "plan.json"),
         "created_at": datetime.now(UTC).isoformat(),
         "classification": "PRICE_CORPUS_QUALIFIED" if price_qualified else "PRICE_CORPUS_PARTIAL",
@@ -784,14 +814,19 @@ def qualify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             "prior_market_period_exposure": "SELECTION_INFORMED_NOT_UNTOUCHED_HOLDOUT",
         },
     }
-    durable_new(root / "qualification-manifest.json", canonical(manifest))
+    durable_new(manifest_path, canonical(manifest))
     return manifest
 
 
-def verify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+def verify(root: Path, plan: dict[str, Any], *, generation: str = "v1") -> dict[str, Any]:
     validate_plan(plan)
     capture_state = audit_capture(root, plan)
-    manifest = read_json(root / "qualification-manifest.json")
+    manifest_path = root / (
+        "qualification-manifest.json" if generation == "v1" else "qualification-manifest-v2.json"
+    )
+    manifest = read_json(manifest_path)
+    if manifest.get("generation") != generation:
+        raise CorpusError("qualification generation differs")
     if manifest.get("plan_sha256") != sha256_file(root / "plan.json"):
         raise CorpusError("qualification plan binding differs")
     for relative, record in manifest["files"].items():
@@ -807,7 +842,7 @@ def verify(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         "status": "VERIFIED",
         "classification": manifest["classification"],
         "plan_sha256": manifest["plan_sha256"],
-        "manifest_sha256": sha256_file(root / "qualification-manifest.json"),
+        "manifest_sha256": sha256_file(manifest_path),
         "capture": capture_state,
         "files": len(manifest["files"]),
     }

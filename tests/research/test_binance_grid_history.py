@@ -112,6 +112,14 @@ def test_funding_preserves_event_schedule_and_decimal_lexeme(tmp_path: Path) -> 
     ]
 
 
+def test_funding_accepts_signed_rates_without_weakening_volume_validation(tmp_path: Path) -> None:
+    path = tmp_path / "funding.zip"
+    path.write_bytes(_zip("f.csv", "1577836800000,8,-0.0001235900\n"))
+    assert subject.parse_funding(path)[0]["last_funding_rate"] == "-0.0001235900"
+    with pytest.raises(subject.CorpusError, match="outside bounds"):
+        subject._decimal("-1")
+
+
 class _Response:
     status = 200
 
