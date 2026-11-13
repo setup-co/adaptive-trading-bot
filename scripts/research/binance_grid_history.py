@@ -14,7 +14,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("plan", "preflight", "capture", "qualify", "verify", "qualify-v2", "verify-v2"),
+        choices=(
+            "plan",
+            "preflight",
+            "capture",
+            "qualify",
+            "verify",
+            "qualify-v2",
+            "verify-v2",
+            "report-v2",
+        ),
     )
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--repo", type=Path, default=Path("."))
@@ -66,10 +75,22 @@ def main() -> int:
         print(
             json.dumps({"classification": result["classification"], "files": len(result["files"])})
         )
-    else:
+    elif args.command in {"verify", "verify-v2"}:
         print(
             json.dumps(
                 corpus.verify(root, plan, generation="v2" if args.command == "verify-v2" else "v1"),
+                sort_keys=True,
+            )
+        )
+    else:
+        report = corpus.publication_report(root, plan)
+        print(
+            json.dumps(
+                {
+                    "classification": report["classification"],
+                    "raw_inventory_sha256": report["raw_inventory_sha256"],
+                    "qualification_manifest_sha256": report["qualification_manifest_sha256"],
+                },
                 sort_keys=True,
             )
         )

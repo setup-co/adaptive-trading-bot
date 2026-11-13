@@ -846,3 +846,135 @@ def verify(root: Path, plan: dict[str, Any], *, generation: str = "v1") -> dict[
         "capture": capture_state,
         "files": len(manifest["files"]),
     }
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat().replace("+00:00", "Z")
+
+
+def _grid_intervals(values: list[int], step_ms: int) -> dict[str, Any]:
+    expected_start = int(START.timestamp() * 1000)
+    expected_end = int(END.timestamp() * 1000)
+    actual = sorted(set(values))
+    gaps: list[dict[str, Any]] = []
+    epochs: list[dict[str, Any]] = []
+    cursor = expected_start
+    epoch_start: int | None = None
+    previous: int | None = None
+    for at in actual:
+        if at < expected_start or at >= expected_end or at % step_ms:
+            raise CorpusError("reported grid timestamp is outside the frozen interval")
+        if at > cursor:
+            gaps.append(
+                {
+                    "start": _iso(cursor),
+                    "end_exclusive": _iso(at),
+                    "missing_rows": (at - cursor) // step_ms,
+                }
+            )
+        if previous is None or at != previous + step_ms:
+            if epoch_start is not None and previous is not None:
+                epochs.append(
+                    {"start": _iso(epoch_start), "end_exclusive": _iso(previous + step_ms)}
+                )
+            epoch_start = at
+        previous = at
+        cursor = max(cursor, at + step_ms)
+    if cursor < expected_end:
+        gaps.append(
+            {
+                "start": _iso(cursor),
+                "end_exclusive": _iso(expected_end),
+                "missing_rows": (expected_end - cursor) // step_ms,
+            }
+        )
+    if epoch_start is not None and previous is not None:
+        epochs.append({"start": _iso(epoch_start), "end_exclusive": _iso(previous + step_ms)})
+    return {
+        "observed_rows": len(actual),
+        "missing_rows": sum(item["missing_rows"] for item in gaps),
+        "gap_count": len(gaps),
+        "gaps": gaps,
+        "maximal_valid_epochs": epochs,
+    }
+
+
+def publication_report(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Write compact, reproducible coverage and raw-hash inventories for publication."""
+
+    verified = verify(root, plan, generation="v2")
+    manifest = read_json(root / "qualification-manifest-v2.json")
+    raw_inventory: list[dict[str, Any]] = []
+    for item in plan["resources"]:
+        successes = [row for row in _attempts(root, item["id"]) if row.get("outcome") == "HTTP_OK"]
+        if len(successes) != 1:
+            raise CorpusError(f"publication requires one successful resource: {item['id']}")
+        row = successes[0]
+        raw_inventory.append(
+            {
+                **item,
+                "attempt": row["attempt"],
+                "bytes": row["bytes"],
+                "sha256": row["sha256"],
+                "request_time": row["started_at"],
+                "finished_at": row["finished_at"],
+                "http_status": row["http_status"],
+            }
+        )
+    inventory = {
+        "schema": "binance-usdm-raw-inventory-v1",
+        "plan_sha256": sha256_file(root / "plan.json"),
+        "resources": raw_inventory,
+        "resource_count": len(raw_inventory),
+        "payload_bytes": sum(row["bytes"] for row in raw_inventory),
+    }
+    durable_new(root / "raw-inventory.json", canonical(inventory))
+    grids: dict[str, dict[str, Any]] = {}
+    for symbol in SYMBOLS:
+        grids[symbol] = {}
+        for component, step in (
+            ("trade_price_1m", 60_000),
+            ("mark_1m", 60_000),
+            ("native_4h", 14_400_000),
+            ("derived_4h", 14_400_000),
+        ):
+            values: list[int] = []
+            prefix = f"derived-generations/v2/normalized/{component}/{symbol}/"
+            for relative, record in manifest["files"].items():
+                if not relative.startswith(prefix):
+                    continue
+                path = root / relative
+                if sha256_file(path) != record["sha256"]:
+                    raise CorpusError("publication partition hash differs")
+                raw_values = (
+                    pq.read_table(path, columns=["open_time_ms"]).column("open_time_ms").to_pylist()
+                )
+                if any(value is None for value in raw_values):
+                    raise CorpusError("publication partition contains a null open time")
+                values.extend(int(value) for value in raw_values if value is not None)
+            grids[symbol][component] = _grid_intervals(values, step)
+    report = {
+        "schema": "binance-grid-history-publication-report-v1",
+        "protocol": PROTOCOL,
+        "dataset_version": DATASET_VERSION,
+        "capture_executable_sha": plan["executable_sha"],
+        "qualification_executable_sha": manifest["qualification_executable_sha"],
+        "plan_sha256": sha256_file(root / "plan.json"),
+        "raw_inventory_sha256": sha256_file(root / "raw-inventory.json"),
+        "qualification_manifest_sha256": sha256_file(root / "qualification-manifest-v2.json"),
+        "verification": verified,
+        "classification": manifest["classification"],
+        "component_coverage": manifest["component_coverage"],
+        "grids": grids,
+        "weex_cost_reference": {
+            "as_of": "2026-11-14",
+            "public_standard_maker_rate": "0.0002",
+            "public_standard_taker_rate": "0.0008",
+            "account_or_api_rates_verified": False,
+            "current_exchange_info_requests_made": 0,
+        },
+        "strategy_evaluation_performed": False,
+        "next_action": "freeze one finite-capital Grid protocol before economic evaluation",
+    }
+    durable_new(root / "publication-report.json", canonical(report))
+    return report

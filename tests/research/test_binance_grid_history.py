@@ -159,3 +159,18 @@ def test_capture_reuses_verified_success_and_never_resets_budget(tmp_path: Path)
     assert first["outcome"] == "HTTP_OK"
     assert second["outcome"] == "REUSED_SUCCESS"
     assert transport.calls == [item["url"]]
+
+
+def test_grid_report_preserves_gaps_and_half_open_epochs() -> None:
+    start = int(subject.START.timestamp() * 1000)
+    result = subject._grid_intervals([start, start + 60_000, start + 180_000], 60_000)
+    assert result["gap_count"] == 2
+    assert result["gaps"][0] == {
+        "start": "2020-01-01T00:02:00Z",
+        "end_exclusive": "2020-01-01T00:03:00Z",
+        "missing_rows": 1,
+    }
+    assert result["maximal_valid_epochs"][0] == {
+        "start": "2020-01-01T00:00:00Z",
+        "end_exclusive": "2020-01-01T00:02:00Z",
+    }
