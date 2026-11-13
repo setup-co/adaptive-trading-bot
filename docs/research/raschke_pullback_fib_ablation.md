@@ -67,3 +67,10 @@ than being inferred from the 53 retained admitted REFERENCE episodes or the stal
 Expected calendar slots remain a protocol fact, not a recovered measurement. Composite results
 retain the parent executable/run identity on BTC rows, the completion executable/run identity on
 ETH rows, the accepted status-aware reporting semantics and unconditional `NO_PROMOTION`.
+
+The authorized completion executable `8d38df1bf3f8749a3392a3e64d277bd3d981230a` ran once under UUID
+`af5af71c-6465-48b4-a416-9ae42a0cf0d8`, exited 0 in 60.3875622 seconds and combined all 174
+retained BTC rows with 218 new ETH rows. All 12 asset/arm/scenario cells had negative mean net R
+and profit factor below one after commissions. The final result is `SPARSE / NO_PROMOTION`; exact
+economics and provenance are retained under
+`data/research_evidence/issue-237-raschke-pullback-completion-8d38df1b/`.

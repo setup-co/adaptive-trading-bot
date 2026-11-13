@@ -1,0 +1,24 @@
+{
+  "schema": "issue-237-raschke-completion-exit-v1",
+  "executable_sha": "8d38df1bf3f8749a3392a3e64d277bd3d981230a",
+  "protocol_sha256": "78fcd7c8e08694475a7508279fe7367941b9df8313afdc37eb4e39c9a4f6f23c",
+  "run_id": "af5af71c-6465-48b4-a416-9ae42a0cf0d8",
+  "started_at": "2026-11-13T08:07:29.6790465+00:00",
+  "ended_at": "2026-11-13T08:08:30.0666087+00:00",
+  "elapsed_seconds": 60.3875622,
+  "limit_seconds": 300,
+  "memory_limit_bytes": 1073741824,
+  "root_pid": 24196,
+  "observed_process_ids": [
+    21592,
+    24196
+  ],
+  "observed_process_count": 2,
+  "peak_tree_working_set_bytes": 269975552,
+  "timed_out": false,
+  "memory_exceeded": false,
+  "worker_exit_code": 0,
+  "exit_code": 0,
+  "stdout_sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+  "stderr_sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+}
