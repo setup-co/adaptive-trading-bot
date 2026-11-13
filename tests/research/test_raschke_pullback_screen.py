@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import adaptive_trading_bot.research.raschke_pullback_completion as COMPLETION
 import adaptive_trading_bot.research.raschke_pullback_screen as SCREEN_MODULE
 from adaptive_trading_bot.execution import SimulatedExecutionCostConfiguration
 from adaptive_trading_bot.features import PivotKind
@@ -21,6 +22,7 @@ from adaptive_trading_bot.research.failed_breakout_reversion_screen import (
     DEFAULT_INPUT_AUTHORITY,
     Scenario,
     ScreenError,
+    _canonical,
     _text,
 )
 from adaptive_trading_bot.research.last_5m_protective_execution import (
@@ -581,6 +583,162 @@ def test_saved_row_cli_proves_recovery_ordinary_open_and_strict_equality(
     unexpected_null[1]["authority"]["execution_target_price"] = None
     with pytest.raises(Exception, match="unexpectedly unavailable"):
         _same_opportunity(unexpected_null)
+
+
+def _closed_completion_rows() -> list[dict[str, Any]]:
+    base = SimulatedExecutionCostConfiguration(Decimal(0), Decimal(0), Decimal(8))
+    stress = SimulatedExecutionCostConfiguration(
+        Decimal(4), Decimal(4), Decimal(16), timedelta(seconds=1)
+    )
+    rows: list[dict[str, Any]] = []
+    for arm in RaschkePullbackArm:
+        for scenario, prices, costs in (
+            (Scenario.BASE, ("105",), base),
+            (Scenario.STRESS, ("105", "105"), stress),
+        ):
+            row, result = _production_row(
+                arm=arm,
+                episode="completion",
+                scenario=scenario,
+                target="105.5",
+                prices=prices,
+                costs=costs,
+            )
+            assert result.status.value == "ORDINARY_CLOSED"
+            rows.append(row)
+    return rows
+
+
+def test_completion_parent_integrity_rejects_missing_and_duplicate_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = _closed_completion_rows()
+
+    def write_and_bind(name: str, values: list[dict[str, Any]]) -> Path:
+        raw = b"".join(_canonical(_text(row)) + b"\n" for row in values)
+        path = tmp_path / name
+        path.write_bytes(gzip.compress(raw, mtime=0))
+        monkeypatch.setattr(COMPLETION, "PARENT_ROWS", len(values))
+        monkeypatch.setattr(COMPLETION, "PARENT_RAW_BYTES", len(raw))
+        monkeypatch.setattr(COMPLETION, "PARENT_RAW_SHA256", sha256(raw).hexdigest())
+        monkeypatch.setattr(COMPLETION, "PARENT_GZIP_BYTES", path.stat().st_size)
+        monkeypatch.setattr(COMPLETION, "PARENT_GZIP_SHA256", sha256(path.read_bytes()).hexdigest())
+        return path
+
+    monkeypatch.setattr(
+        COMPLETION,
+        "EXPECTED_PARENT_COUNTS",
+        {(arm, scenario.value): 1 for arm in ARMS for scenario in Scenario},
+    )
+    monkeypatch.setattr(COMPLETION, "EXPECTED_RECOVERED_COUNTS", {})
+    valid = write_and_bind("valid.gz", rows)
+    loaded, integrity = COMPLETION.load_parent_rows(valid)
+    assert len(loaded) == 6
+    assert integrity["unique_pair_keys"] == 6
+
+    missing = write_and_bind("missing.gz", rows[:-1])
+    with pytest.raises(ScreenError, match="arm/scenario population differs"):
+        COMPLETION.load_parent_rows(missing)
+
+    duplicate_rows = [*rows[:-1], rows[0]]
+    duplicate = write_and_bind("duplicate.gz", duplicate_rows)
+    with pytest.raises(ScreenError, match="missing or duplicated"):
+        COMPLETION.load_parent_rows(duplicate)
+
+
+def test_completion_reuses_btc_and_calls_only_eth_member_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(("git", "init", "-q"), cwd=repo, check=True)
+    subprocess.run(("git", "config", "user.email", "fixture@example.invalid"), cwd=repo, check=True)
+    subprocess.run(("git", "config", "user.name", "Fixture"), cwd=repo, check=True)
+    marker = repo / "marker"
+    marker.write_text("completion")
+    subprocess.run(("git", "add", "."), cwd=repo, check=True)
+    subprocess.run(("git", "commit", "-qm", "fixture"), cwd=repo, check=True)
+    executable = subprocess.run(
+        ("git", "rev-parse", "HEAD"), cwd=repo, check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+    btc_rows = _closed_completion_rows()
+    eth_rows = json.loads(json.dumps(_text(btc_rows)))
+    for row in eth_rows:
+        row["symbol"] = "ETHUSDT"
+        row["pair_key"][0] = "ETHUSDT"
+        row["opportunity_key"][0] = "ETHUSDT"
+    parent_integrity = {
+        "metadata_complete": False,
+        "funnel_metadata": "NOT_RETAINED",
+        "rows": len(btc_rows),
+        "unique_pair_keys": len(btc_rows),
+    }
+    calls: list[str] = []
+
+    class _Accepted:
+        def __init__(self, _repo: Path, _authority: Any) -> None:
+            pass
+
+        def load(self, wire: str, *, tail_end: datetime) -> tuple[object, tuple[object, ...]]:
+            assert tail_end.isoformat() == "2026-10-14T00:00:00+00:00"
+            calls.append(wire)
+            return object(), ()
+
+    def fake_member(
+        wire: str, _store: object, _five: tuple[object, ...], _output: Path, *, authority: Any
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        assert wire == "ETHUSDT"
+        assert authority is DEFAULT_INPUT_AUTHORITY
+        counts = {
+            arm: {
+                "observations": 17_280,
+                "underlying_opportunities": 1,
+                "anchor_valid_opportunities": 1,
+                "signals": 1,
+                "admitted": 1,
+            }
+            for arm in ARMS
+        }
+        return {
+            "symbol": wire,
+            "counts": counts,
+            "underlying_opportunity_ids": ["completion"],
+        }, eth_rows
+
+    monkeypatch.setattr(COMPLETION, "load_parent_rows", lambda _path: (btc_rows, parent_integrity))
+    monkeypatch.setattr(COMPLETION, "PARENT_ROWS", len(btc_rows))
+    monkeypatch.setattr(COMPLETION, "AcceptedInput", _Accepted)
+    monkeypatch.setattr(COMPLETION, "run_member", fake_member)
+    output = tmp_path / "output"
+    projection = COMPLETION.run_completion(
+        repo,
+        tmp_path / "parent.gz",
+        output,
+        run_id="synthetic-completion",
+        executable_sha=executable,
+        expected_protocol_sha256=COMPLETION._sha(  # type: ignore[attr-defined]
+            COMPLETION._canonical(COMPLETION.protocol_record())  # type: ignore[attr-defined]
+        ),
+    )
+    assert calls == ["ETHUSDT"]
+    assert projection["composite_provenance"]["reused_btc_rows"] == 6
+    assert projection["composite_provenance"]["new_eth_rows"] == 6
+    assert projection["members"][0]["counts"][ARMS[0]]["observations"] is None
+    assert projection["members"][0]["counts"][ARMS[0]]["admitted"] == 1
+    complete = json.loads((output / "complete.json").read_text())
+    assert complete["status"] == "COMPLETE"
+    assert complete["total_rows"] == 12
+    with pytest.raises(ScreenError, match="effective completion protocol differs"):
+        COMPLETION.run_completion(
+            repo,
+            tmp_path / "parent.gz",
+            tmp_path / "wrong-protocol",
+            run_id="synthetic-mismatch",
+            executable_sha=executable,
+            expected_protocol_sha256="f" * 64,
+        )
+    assert calls == ["ETHUSDT"]
 
 
 def test_default_protocol_binds_october_14_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

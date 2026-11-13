@@ -51,3 +51,19 @@ produced, so there is no valid economic comparison or strategy classification. T
 partial record and exact traceback are retained under
 `data/research_evidence/issue-237-raschke-pullback-c956bfb4/`. No retry was performed; promotion
 remains `NO_PROMOTION`.
+
+## Authorized composite completion
+
+Protocol `BTC_ETH_RASCHKE_PULLBACK_FIB_COMPLETION_V1` preserves the original scientific rules but
+uses two explicitly separated sources: all 174 immutable BTC scenario outcomes from the failed
+parent capture are reused as `REUSED_BTC_PARENT_OUTCOME`, while only ETH is newly processed as
+`NEW_ETH_OUTCOME`. The completion validates the parent compressed/raw identities and complete
+paired population, then calls the accepted loader and member path for `ETHUSDT` only. It never
+loads BTC candles or regenerates BTC decisions or executions.
+
+The final BTC funnel was not committed by the parent invocation. BTC observations, raw
+confirmations, rejections and Risk/Safety funnel counts therefore remain `NOT_RETAINED`, rather
+than being inferred from the 53 retained admitted REFERENCE episodes or the stale progress file.
+Expected calendar slots remain a protocol fact, not a recovered measurement. Composite results
+retain the parent executable/run identity on BTC rows, the completion executable/run identity on
+ETH rows, the accepted status-aware reporting semantics and unconditional `NO_PROMOTION`.
