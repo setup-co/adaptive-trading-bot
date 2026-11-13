@@ -24,10 +24,12 @@ remain preserved.
 
 ## Active task and next gate
 
-Issue #239 is the active bounded data task. It freezes and captures the official Binance USD-M
-monthly inventory for BTCUSDT/ETHUSDT over `[2020-01-01, 2026-11-01)`, independently qualifies
-trade-price, native/derived 4h, MARK and funding components, and publishes retained provenance.
+Issue #239 completed its bounded acquisition: all 1,312 fixed resources succeeded on their first
+attempt. The BTC/ETH trade-price 1m and native 4h grids are complete, while derived/native 4h
+reconciliation and MARK are partial; funding events are retained and qualified after a separate
+signed-rate parser correction. The combined classification is `PRICE_CORPUS_PARTIAL`. See
+[`btc_eth_grid_4h_external_history_result.md`](research/btc_eth_grid_4h_external_history_result.md).
 
-No strategy evaluation is authorized. After data review, a separate issue must freeze the specific
+No strategy evaluation occurred. After data review, a separate issue must freeze the specific
 Grid model, finite capital/risk/inventory rules, 4h decision and 1m standing-order chronology,
 complete costs/funding, terminal valuation and chronological evaluation partitions.

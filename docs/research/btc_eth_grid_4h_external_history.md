@@ -45,3 +45,11 @@ every fee/spread/slippage/reset/emergency/final-exit cost; funding; total equity
 and chronological development, validation and protected evaluation. Closed 4h is the decision
 cadence, not a holding duration or proof of low turnover. BTC and ETH report separately; a combined
 result requires real shared-capital accounting.
+
+## Completed data result
+
+The actual bounded result is documented in
+[`btc_eth_grid_4h_external_history_result.md`](btc_eth_grid_4h_external_history_result.md). The
+trade-price and native-4h grids are complete, but derived/native reconciliation and auxiliary MARK
+coverage are partial, so the overall classification is `PRICE_CORPUS_PARTIAL` rather than a
+qualified combined perpetual corpus.

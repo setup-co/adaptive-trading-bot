@@ -44,7 +44,9 @@ Before changing code, read:
 
 The external-history contract and limits for the new route are recorded in
 [`docs/research/btc_eth_grid_4h_external_history.md`](docs/research/btc_eth_grid_4h_external_history.md).
-No Grid strategy backtest is authorized by the data acquisition itself.
+The bounded result is [`PRICE_CORPUS_PARTIAL`](docs/research/btc_eth_grid_4h_external_history_result.md):
+trade-price/native-4h coverage is complete, while reconciliation and MARK remain partial. No Grid
+strategy backtest is authorized by the data acquisition itself.
 
 ## Development workflow
 

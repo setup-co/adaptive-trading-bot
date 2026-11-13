@@ -1,0 +1,8 @@
+{
+  "command": "verify-v2",
+  "executable_sha": "a5ae0048f0efcccaf800042b0e0192c78e638893",
+  "started_at": "2026-11-13T22:46:12.4555748+00:00",
+  "ended_at": "2026-11-13T22:46:16.1546683+00:00",
+  "elapsed_seconds": 3.6990935,
+  "exit_code": 0
+}
