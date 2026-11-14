@@ -73,6 +73,7 @@ class PositionAccountingFillBatch:
 
     observed_at: datetime
     fills: tuple[PositionAccountingFill, ...]
+    sequence: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -82,6 +83,10 @@ class PositionAccountingFillBatch:
             raise TypeError("accounting fills must be an immutable tuple")
         if not self.fills:
             raise PositionAccountingCoreError("accounting fill batch must not be empty")
+        if type(self.sequence) is not int or self.sequence < 0:
+            raise PositionAccountingCoreError(
+                "accounting batch sequence must be a non-negative int"
+            )
         object.__setattr__(self, "fills", tuple(sorted(self.fills, key=_fill_order)))
 
 
@@ -125,18 +130,26 @@ class PositionAccountingTransitionBatch:
     observed_at: datetime
     transitions: tuple[PositionAccountingTransition, ...]
     positions: tuple[tuple[TradingSymbol, PositionAccountingState], ...]
+    sequence: int = 0
 
 
 class PositionAccountingCore:
     """Apply validated fills atomically using one average-cost implementation."""
 
-    __slots__ = ("_last_fill_at", "_seen_fill_ids", "_states", "_transitions")
+    __slots__ = (
+        "_last_fill_at",
+        "_last_fill_sequence",
+        "_seen_fill_ids",
+        "_states",
+        "_transitions",
+    )
 
     def __init__(self) -> None:
         self._states: dict[TradingSymbol, PositionAccountingState] = {}
         self._seen_fill_ids: set[str] = set()
         self._transitions: tuple[PositionAccountingTransition, ...] = ()
         self._last_fill_at: datetime | None = None
+        self._last_fill_sequence = -1
 
     @property
     def last_fill_at(self) -> datetime | None:
@@ -178,6 +191,7 @@ class PositionAccountingCore:
             _copy_transition(transition) for transition in self._transitions
         )
         cloned._last_fill_at = self._last_fill_at
+        cloned._last_fill_sequence = self._last_fill_sequence
         return cloned
 
     def process(self, batch: PositionAccountingFillBatch) -> PositionAccountingTransitionBatch:
@@ -188,9 +202,13 @@ class PositionAccountingCore:
         observed_at = require_utc(batch.observed_at, field="batch observed_at")
         if not isinstance(batch.fills, tuple) or not batch.fills:
             raise PositionAccountingCoreError("accounting fill batch must not be empty")
-        if self._last_fill_at is not None and observed_at <= self._last_fill_at:
+        if self._last_fill_at is not None and (
+            observed_at < self._last_fill_at
+            or (observed_at == self._last_fill_at and batch.sequence <= self._last_fill_sequence)
+        ):
             raise PositionAccountingCoreError(
-                "fill batches must advance strictly; submit equal-time fills together"
+                "fill batches must advance strictly by timestamp and opt-in sequence; "
+                "submit ordinary equal-time fills together"
             )
 
         for fill in batch.fills:
@@ -221,10 +239,12 @@ class PositionAccountingCore:
         self._seen_fill_ids.update(batch_ids)
         self._transitions = (*self._transitions, *transitions)
         self._last_fill_at = observed_at
+        self._last_fill_sequence = batch.sequence
         return PositionAccountingTransitionBatch(
             observed_at,
             tuple(_copy_transition(transition) for transition in transitions),
             self.positions(),
+            batch.sequence,
         )
 
 

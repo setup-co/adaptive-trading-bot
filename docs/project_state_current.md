@@ -1,4 +1,4 @@
-# Current project state — 2026-11-14
+# Current project state — 2026-11-15
 
 This is the live handoff. [`project_state.md`](project_state.md) is a required, hash-bound historical
 snapshot and must remain byte-for-byte unchanged.
@@ -31,6 +31,22 @@ multi-year external history. WEEX remains the intended future execution venue; R
 remain sovereign; Live stays disabled. Existing 15m/runtime strategies and all predecessor evidence
 remain preserved.
 
+## Issue #243 — synthetic-only Grid V1 implementation
+
+- Protocol `0.2.0-proposed` now has a distinct opt-in
+  `0.1.0-synthetic-only` research state machine for supplied BTC/ETH facts. It has no dataset
+  loader, network client, strategy registry hook, or Paper/Shadow/Live activation path.
+- The implementation preserves independent 10,000-USDT symbol ledgers and delegates plan gates,
+  safety, deterministic fill costs, position accounting and decision identity to existing project
+  authorities through narrow adapters. Equal-time accounting transitions require an explicit
+  sequence; every legacy caller retains strict timestamp-only behavior by default.
+- Focused synthetic integration covers the accepted boundary, funding, ownership/netting,
+  post-only, ambiguity, gap, scheduled flatten, termination, idempotence and BASE/STRESS examples.
+  Audit reports retain order/lot provenance, fill/funding/fee decomposition and marked equity.
+- This is implementation preparation only. It is not a historical Grid result, an executable
+  exchange model, a profitability claim, or authorization for Paper, Shadow, Live, deployment or
+  data access. OHLC paths, all-or-unfilled limits and source-venue funding remain modeled proxies.
+
 ## Active task and next gate
 
 Issue #239 completed its bounded acquisition: all 1,312 fixed resources succeeded on their first
@@ -47,6 +63,6 @@ correction now fails closed before network continuation when prior received-byte
 unresolved and durably charges a received block even when it crosses the payload cap; it was
 validated with local fake transports only. No accepted capture or qualification evidence changed.
 
-No strategy evaluation occurred. After data review, a separate issue must freeze the specific
-Grid model, finite capital/risk/inventory rules, 4h decision and 1m standing-order chronology,
-complete costs/funding, terminal valuation and chronological evaluation partitions.
+No Grid strategy evaluation occurred. After independent review of the synthetic-only engine and
+exact CI identity, a separate issue must freeze the executable/input identities and explicitly
+authorize any bounded historical evaluation. No such authorization exists here.
