@@ -1524,7 +1524,9 @@ def verify(root: Path, plan: dict[str, Any], *, generation: str = "v1") -> dict[
     }
 
 
-def verify_v3(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+def verify_v3(
+    root: Path, plan: dict[str, Any], *, verification_executable_sha: str | None = None
+) -> dict[str, Any]:
     """Verify v3 bindings, file identities and reported scientific invariants."""
 
     _validate_retained_raw(root, plan)
@@ -1621,6 +1623,9 @@ def verify_v3(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         if discrepancy_rows[symbol] != reported["reconciliation"]["discrepancies"]:
             raise CorpusError("v3 discrepancy details differ from retained rows")
         funding_result = funding[symbol].finish()
+        funding_result["reported_interval_hours"] = {
+            str(key): value for key, value in funding_result["reported_interval_hours"].items()
+        }
         for field in (
             "observed_events",
             "reported_interval_hours",
@@ -1644,6 +1649,7 @@ def verify_v3(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         "manifest_sha256": sha256_file(manifest_path),
         "plan_sha256": ACCEPTED_PLAN_SHA256,
         "raw_inventory_sha256": ACCEPTED_RAW_INVENTORY_SHA256,
+        "verification_executable_sha": verification_executable_sha,
         "files": len(manifest["files"]),
     }
 
@@ -1780,9 +1786,17 @@ def publication_report(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
-def publication_report_v3(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
-    verified = verify_v3(root, plan)
+def publication_report_v3(
+    root: Path, plan: dict[str, Any], verified: dict[str, Any]
+) -> dict[str, Any]:
     manifest = read_json(root / "qualification-manifest-v3.json")
+    if (
+        verified.get("status") != "VERIFIED"
+        or verified.get("manifest_sha256") != sha256_file(root / "qualification-manifest-v3.json")
+        or verified.get("plan_sha256") != ACCEPTED_PLAN_SHA256
+        or verified.get("raw_inventory_sha256") != ACCEPTED_RAW_INVENTORY_SHA256
+    ):
+        raise CorpusError("v3 publication requires the matching successful verifier result")
     report = {
         "schema": "binance-grid-history-publication-report-v3",
         "protocol": V3_PROTOCOL,

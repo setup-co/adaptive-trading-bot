@@ -30,6 +30,7 @@ def main() -> int:
     )
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--repo", type=Path, default=Path("."))
+    parser.add_argument("--verification-json", type=Path)
     args = parser.parse_args()
     repo = args.repo.resolve()
     root = args.root.resolve()
@@ -91,7 +92,11 @@ def main() -> int:
             )
         )
     elif args.command == "verify-v3":
-        print(json.dumps(corpus.verify_v3(root, plan), sort_keys=True))
+        print(
+            json.dumps(
+                corpus.verify_v3(root, plan, verification_executable_sha=revision), sort_keys=True
+            )
+        )
     elif args.command == "report-v2":
         report = corpus.publication_report(root, plan)
         print(
@@ -105,7 +110,10 @@ def main() -> int:
             )
         )
     else:
-        report = corpus.publication_report_v3(root, plan)
+        if args.verification_json is None:
+            raise corpus.CorpusError("report-v3 requires --verification-json")
+        verified = corpus.read_json(args.verification_json.resolve())
+        report = corpus.publication_report_v3(root, plan, verified)
         print(
             json.dumps(
                 {
