@@ -3,6 +3,15 @@
 This is the live handoff. [`project_state.md`](project_state.md) is a required, hash-bound historical
 snapshot and must remain byte-for-byte unchanged.
 
+## Issue #241 — proposed BTC/ETH 4h finite-capital Grid protocol
+
+- `BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1` is specified as **PROPOSED / NOT EXECUTABLE** only. It is not registered, runtime-eligible, historically evaluated, tuned, or approved for deployment.
+- BTCUSDT and ETHUSDT have independent 10,000-USDT research ledgers with identical frozen formulas; cross-asset capital transfer and pooled conclusions are prohibited.
+- The accepted Issue #239 v3 authority remains `PRICE_CORPUS_PARTIAL_RECONCILIATION` with manifest SHA-256 `9d63123b073e35a010c130308452fd554f707de0e1967f82a752ff44b6155214` and report SHA-256 `22b4cde1ba87f4acdd11efd232b1d0db11f9b9ebdbc6e884cc5d6edf50f7396d`.
+- A metadata-only calendar enumerates 356 fixed weekly episodes per symbol: BTC has 338 eligible/18 ineligible and ETH has 345 eligible/11 ineligible before any future execution-level funding decision. It reads no candle values and calculates no PnL.
+- Funding continuity remains explicitly partial/uncertain across the accepted interval. Known price disagreements and required active MARK gaps exclude affected weeks; volume-only disagreements are non-exclusionary flags.
+- Any historical execution requires a later exact-SHA grant and narrow standing-ladder adapters through existing Strategy, Risk, Safety, authorization, accounting and journal authorities.
+
 ## Verified starting state
 
 - GitHub `main`: `2e787f3d53599bdb589e23a5d211c466b4577dd0`, tree

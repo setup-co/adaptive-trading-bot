@@ -1,0 +1,37 @@
+{
+  "schema": "btc-eth-grid-4h-v1-accounting-examples",
+  "status": "SYNTHETIC_ONLY_NOT_EXECUTABLE",
+  "protocol_id": "BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1",
+  "examples": [
+    {
+      "id": "LONG_ADJACENT_RUNG_BASE",
+      "inputs": {"quantity": "0.01", "entry": "100", "exit": "101", "entry_fee_rate": "0.0002", "exit_fee_rate": "0.0002"},
+      "outputs": {"gross_pnl": "0.01", "entry_fee": "0.000200", "exit_fee": "0.000202", "net_cash_change": "0.009598"}
+    },
+    {
+      "id": "SHORT_ADJACENT_RUNG_BASE",
+      "inputs": {"quantity": "0.01", "entry": "101", "exit": "100", "entry_fee_rate": "0.0002", "exit_fee_rate": "0.0002"},
+      "outputs": {"gross_pnl": "0.01", "entry_fee": "0.000202", "exit_fee": "0.000200", "net_cash_change": "0.009598"}
+    },
+    {
+      "id": "LONG_LOWER_BOUNDARY_GAP_BASE",
+      "inputs": {"quantity": "0.02", "average_entry": "100", "gap_open": "92", "forced_slippage_rate": "0.0005", "entry_fee_paid": "0.000400", "forced_exit_fee_rate": "0.0008"},
+      "outputs": {"forced_fill_price": "91.9540", "gross_pnl": "-0.160920", "forced_exit_fee": "0.0014712640", "net_cash_change": "-0.1627912640"}
+    },
+    {
+      "id": "AMBIGUOUS_MINUTE_LONG_ADVERSE_ONLY",
+      "inputs": {"starting_quantity": "0.01", "starting_average_entry": "100", "active_buy": "96", "active_sell": "101", "minute_open": "99", "minute_high": "102", "minute_low": "95"},
+      "outputs": {"executed_order": "BUY_96", "deferred_order": "SELL_101", "ending_quantity": "0.02", "ending_average_entry": "98"}
+    },
+    {
+      "id": "FUNDING_LONG_BASE_AND_STRESS",
+      "inputs": {"signed_quantity": "0.02", "mark": "100", "reported_rate": "0.0001", "stress_adverse_addon": "0.0001"},
+      "outputs": {"base_cash_change": "-0.0002", "stress_cash_change": "-0.0004"}
+    },
+    {
+      "id": "SCHEDULED_TERMINAL_FLATTEN_LONG_BASE",
+      "inputs": {"initial_cash": "10000", "quantity": "0.02", "average_entry": "100", "entry_fee_paid": "0.000400", "preclose_mark": "102", "flatten_minute_open": "101.5", "forced_slippage_rate": "0.0005", "forced_exit_fee_rate": "0.0008"},
+      "outputs": {"cash_before_close": "9999.999600", "preclose_equity": "10000.039600", "forced_fill_price": "101.44925", "gross_pnl": "0.0289850", "forced_exit_fee": "0.0016231880", "final_cash": "10000.0269618120", "close_impact_vs_preclose_equity": "-0.0126381880"}
+    }
+  ]
+}
