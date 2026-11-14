@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-239-grid-data\scripts\research\binance_grid_history.py", line 122, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-239-grid-data\scripts\research\binance_grid_history.py", line 94, in main
+    print(json.dumps(corpus.verify_v3(root, plan), sort_keys=True))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\elect\Documents\Codex\2026-09-09\x20\work\issue-239-grid-data\src\adaptive_trading_bot\research\binance_grid_history.py", line 1634, in verify_v3
+    raise CorpusError("v3 funding continuity report differs")
+adaptive_trading_bot.research.binance_grid_history.CorpusError: v3 funding continuity report differs

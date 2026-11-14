@@ -44,9 +44,11 @@ Before changing code, read:
 
 The external-history contract and limits for the new route are recorded in
 [`docs/research/btc_eth_grid_4h_external_history.md`](docs/research/btc_eth_grid_4h_external_history.md).
-The bounded result is [`PRICE_CORPUS_PARTIAL`](docs/research/btc_eth_grid_4h_external_history_result.md):
-trade-price/native-4h coverage is complete, while reconciliation and MARK remain partial. No Grid
-strategy backtest is authorized by the data acquisition itself.
+The corrected bounded result is
+[`PRICE_CORPUS_PARTIAL_RECONCILIATION`](docs/research/btc_eth_grid_4h_external_history_result.md):
+trade-price, native-4h and canonical-derived coverage are complete, while native reconciliation,
+MARK and exact funding continuity remain partial. No Grid strategy backtest is authorized by the
+data acquisition itself.
 
 ## Development workflow
 

@@ -25,9 +25,13 @@ remain preserved.
 ## Active task and next gate
 
 Issue #239 completed its bounded acquisition: all 1,312 fixed resources succeeded on their first
-attempt. The BTC/ETH trade-price 1m and native 4h grids are complete, while derived/native 4h
-reconciliation and MARK are partial; funding events are retained and qualified after a separate
-signed-rate parser correction. The combined classification is `PRICE_CORPUS_PARTIAL`. See
+attempt. Corrected offline v3 qualification preserves every v1/v2 byte and establishes complete
+BTC/ETH trade-price 1m, native 4h and canonical timestamp-derived 4h grids. Native reconciliation
+remains partial with 15 BTC and 17 ETH exact per-bar discrepancies; MARK remains partial and funding
+events are parsed but exact schedule continuity is partial/uncertain because retained timestamps
+carry millisecond offsets. The combined classification is `PRICE_CORPUS_PARTIAL_RECONCILIATION`.
+The verified v3 manifest is
+`9d63123b073e35a010c130308452fd554f707de0e1967f82a752ff44b6155214`. See
 [`btc_eth_grid_4h_external_history_result.md`](research/btc_eth_grid_4h_external_history_result.md).
 
 No strategy evaluation occurred. After data review, a separate issue must freeze the specific

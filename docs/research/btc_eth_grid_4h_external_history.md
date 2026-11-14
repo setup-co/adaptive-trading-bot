@@ -48,8 +48,8 @@ result requires real shared-capital accounting.
 
 ## Completed data result
 
-The actual bounded result is documented in
+The actual corrected bounded result is documented in
 [`btc_eth_grid_4h_external_history_result.md`](btc_eth_grid_4h_external_history_result.md). The
-trade-price and native-4h grids are complete, but derived/native reconciliation and auxiliary MARK
-coverage are partial, so the overall classification is `PRICE_CORPUS_PARTIAL` rather than a
-qualified combined perpetual corpus.
+trade-price, native-4h and canonical timestamp-derived grids are complete, but exact native
+reconciliation, auxiliary MARK coverage and funding schedule continuity remain partial. The v3
+classification is `PRICE_CORPUS_PARTIAL_RECONCILIATION`, not a qualified combined perpetual corpus.
