@@ -1,0 +1,156 @@
+{
+  "schema": "btc-eth-grid-4h-v1-parameters",
+  "protocol_id": "BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1",
+  "protocol_version": "0.2.0-proposed",
+  "status": "PROPOSED_NOT_EXECUTABLE",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "quote_currency": "USDT",
+  "initial_capital_per_symbol": "10000",
+  "cross_asset_transfers": false,
+  "decision_timeframe": "4h_closed",
+  "execution_timeframe": "1m_trade_price",
+  "episode": {
+    "start_weekday_utc": "MONDAY",
+    "start_time_utc": "00:00:00",
+    "initial_order_activation_delay_minutes": 1,
+    "scheduled_exit_weekday_utc": "SUNDAY",
+    "scheduled_exit_decision_time_utc": "20:00:00",
+    "scheduled_flatten_activation_delay_minutes": 1,
+    "stopped_episode_reentry": "NEXT_SCHEDULED_WEEK_ONLY"
+  },
+  "geometry": {
+    "centre": "close of the completed 4h candle ending at episode start",
+    "lookback_4h_bars": 42,
+    "return_count": 41,
+    "volatility_estimator": "population_standard_deviation_of_41_log_close_returns",
+    "corridor_log_half_width": "max(ln(1.06), 2.5 * sigma_41 * sqrt(42))",
+    "maximum_corridor_log_half_width": "ln(1.35)",
+    "rungs_per_side": 6,
+    "spacing_ratio": "exp(corridor_log_half_width / 6)",
+    "buy_level": "centre / spacing_ratio^j for j=1..6",
+    "sell_level": "centre * spacing_ratio^j for j=1..6",
+    "lower_protective_boundary": "centre / spacing_ratio^7",
+    "upper_protective_boundary": "centre * spacing_ratio^7",
+    "minimum_adjacent_gross_return_fraction": "0.004",
+    "base_quantity_per_rung": "equal_after_rounding"
+  },
+  "sizing": {
+    "episode_loss_budget_fraction_of_start_equity": "0.01",
+    "aggregate_pending_notional_cap_fraction_of_start_equity": "0.80",
+    "stress_funding_reserve_fraction_of_pending_notional": "0.003",
+    "quantity_formula": "floor_to_quantum(min(loss_budget/max(full_long_boundary_loss_per_base,full_short_boundary_loss_per_base),pending_notional_cap/sum(all_12_rung_prices)))",
+    "maximum_absolute_inventory": "6 * base_quantity_per_rung",
+    "maximum_active_entry_rungs": 12,
+    "research_price_quantum_usdt": "0.01",
+    "research_quantity_quantum_base": "0.000001",
+    "research_minimum_order_notional_usdt": "5.00",
+    "rounding": "prices_round_toward_less_aggressive_order; quantity_rounds_down"
+  },
+  "latency_and_fill": {
+    "initial_activation_minutes": 1,
+    "replacement_activation_minutes": 1,
+    "strict_trade_through_required": true,
+    "touch_only_fills": false,
+    "partial_fill_model": "NOT_MODELED_FULL_OR_UNFILLED",
+    "replacement_may_fill_in_parent_minute": false,
+    "activation_policy": "POST_ONLY_AT_MINUTE_OPEN_PROXY",
+    "marketable_activation_policy": "REJECT_AND_REARM_NEXT_MINUTE",
+    "resting_gap_fill_price": "LIMIT_PRICE",
+    "ordinary_fill_booking_time": "MINUTE_END_EXCLUSIVE",
+    "partial_fill_capacity_claim": false
+  },
+  "event_order": {
+    "funding_at_minute_open": "PRE_OPEN_INVENTORY_BEFORE_OPEN_ACTIONS",
+    "open_actions": "DUE_CANCELS_THEN_RESTING_GAP_CROSSINGS_THEN_FORCED_OPEN_EXIT_THEN_POST_ONLY_ACTIVATIONS",
+    "funding_inside_minute": "POST_OPEN_PRE_BAR_COMPLETION_INVENTORY",
+    "bar_completion": "DETERMINISTIC_PATH_CROSSINGS_THEN_BOUNDARY_EXIT_THEN_MARK_AND_RISK_FLOOR",
+    "funding_at_minute_end": "NEXT_MINUTE_PRE_OPEN_AFTER_PRIOR_BAR_COMPLETION"
+  },
+  "netting": {
+    "inventory_lot_consumption": "FIFO_BY_FILL_TIME_THEN_LOT_ID",
+    "owned_exit_priority_at_same_price": true,
+    "owned_exit_may_reverse": false,
+    "opposite_entry_may_reverse": false,
+    "invalid_owned_exit_policy": "CANCEL_OR_REDUCE_TO_REMAINING_OWNER_QUANTITY",
+    "entry_rearm_delay_minutes": 1,
+    "opposite_entry_netting_rearm": "REARM_BOTH_CONSUMED_LOT_SOURCE_RUNG_AND_FILLED_NETTING_ENTRY_RUNG",
+    "maximum_absolute_inventory_enforced_before_each_fill": "6 * base_quantity_per_rung"
+  },
+  "risk": {
+    "account_termination_loss_floor_fraction_of_original_capital": "0.20",
+    "account_termination_equity_floor_fraction_of_original_capital": "0.80",
+    "loss_floor_action": "CANCEL_ENTRIES_AND_EXITS_IMMEDIATELY; FORCED_CLOSE_AT_NEXT_MINUTE_OPEN; TERMINATE_SYMBOL_PERMANENTLY",
+    "running_peak_drawdown": "REPORT_ONLY_NOT_A_TRIGGER",
+    "recenter_with_open_inventory": false,
+    "extra_capital_after_loss": false,
+    "martingale": false,
+    "loss_recovery_leverage_increase": false,
+    "notional_cap_certifies_liquidation_safety": false
+  },
+  "mark_and_funding": {
+    "mark_required_each_active_minute": true,
+    "funding_mark_max_age_milliseconds": 120000,
+    "funding_event_time_policy": "exact_retained_timestamp",
+    "missing_funding_policy": "UNKNOWN_NOT_ZERO",
+    "last_for_mark_substitution": false,
+    "research_proxy_policy": "RETAINED_ACTUAL_SOURCE_VENUE_EVENTS; EACH_SUCCESSFUL_MONTHLY_PAYLOAD_ASSUMED_COMPLETE_FOR_ITS_ARCHIVE_SCOPE",
+    "unusable_event_policy": "INTEGRITY_BLOCKED_UNKNOWN",
+    "required_event_fields": ["event_timestamp", "funding_rate"],
+    "event_order_requirement": "UNIQUE_STRICTLY_INCREASING_TIMESTAMPS_WITHIN_SYMBOL"
+  },
+  "scenarios": {
+    "BASE": {
+      "passive_fill_fee_fraction": "0.0002",
+      "forced_exit_fee_fraction": "0.0008",
+      "passive_fill_slippage_fraction": "0",
+      "forced_exit_slippage_fraction": "0.0005",
+      "adverse_funding_addon_fraction_per_event": "0"
+    },
+    "STRESS": {
+      "passive_fill_fee_fraction": "0.0008",
+      "forced_exit_fee_fraction": "0.0008",
+      "passive_fill_slippage_fraction": "0",
+      "forced_exit_slippage_fraction": "0.0015",
+      "adverse_funding_addon_fraction_per_event": "0.0001"
+    }
+  },
+  "evaluation": {
+    "weekly_return": "(post_unwind_end_equity - pre_episode_start_equity) / pre_episode_start_equity",
+    "eligible_zero_trade_weeks_in_statistics": true,
+    "post_termination_cash_only_weeks_in_statistics": true,
+    "metadata_ineligible_weeks_in_statistics": false,
+    "metadata_ineligible_weeks_break_bootstrap_blocks": true,
+    "cash_continuity": "ONE_CHRONOLOGICAL_SYMBOL_LEDGER_ACROSS_ALL_PARTITIONS",
+    "bootstrap": {
+      "method": "OVERLAPPING_MOVING_BLOCK",
+      "unit": "ELIGIBLE_CALENDAR_WEEK",
+      "block_length_weeks": 4,
+      "blocks_may_cross_partition": false,
+      "blocks_may_cross_ineligible_week": false,
+      "repetitions": 10000,
+      "prng": "PCG64",
+      "seed": 241,
+      "lower_confidence_quantile": "0.025_NEAREST_RANK"
+    },
+    "minimum_validation_eligible_weeks": 80,
+    "minimum_validation_weeks_with_fill": 40,
+    "validation_base_median_weekly_return_must_be_positive": true,
+    "validation_stress_total_net_return_must_be_positive": true,
+    "validation_base_mean_lower_bound_must_be_positive": true,
+    "retrospective_required_positive_metrics": [
+      "BASE_TOTAL_NET_EQUITY_CHANGE",
+      "BASE_MEDIAN_ELIGIBLE_WEEKLY_RETURN",
+      "STRESS_TOTAL_NET_EQUITY_CHANGE",
+      "STRESS_MEDIAN_ELIGIBLE_WEEKLY_RETURN"
+    ],
+    "maximum_running_peak_drawdown_fraction": "0.20",
+    "prospective_confirmation_required": true
+  },
+  "accepted_data": {
+    "interval_start": "2020-01-01T00:00:00Z",
+    "interval_end_exclusive": "2026-11-01T00:00:00Z",
+    "v3_manifest_sha256": "9d63123b073e35a010c130308452fd554f707de0e1967f82a752ff44b6155214",
+    "v3_report_sha256": "22b4cde1ba87f4acdd11efd232b1d0db11f9b9ebdbc6e884cc5d6edf50f7396d",
+    "classification": "PRICE_CORPUS_PARTIAL_RECONCILIATION"
+  }
+}
