@@ -17,6 +17,15 @@ from typing import Any
 SYMBOLS = ("BTCUSDT", "ETHUSDT")
 PRICE_FIELDS = frozenset({"open", "high", "low", "close"})
 VOLUME_FIELDS = frozenset({"volume", "quote_volume"})
+CALENDAR_CONTRACT = {
+    "lookback_4h_bars": 42,
+    "start_weekday_utc": "MONDAY",
+    "start_time_utc": "00:00:00",
+    "initial_order_activation_delay_minutes": 1,
+    "scheduled_exit_weekday_utc": "SUNDAY",
+    "scheduled_exit_decision_time_utc": "20:00:00",
+    "scheduled_flatten_activation_delay_minutes": 1,
+}
 
 
 class CalendarError(ValueError):
@@ -69,6 +78,22 @@ def partition_for(start: datetime) -> str:
 
 def _intervals(rows: list[dict[str, Any]]) -> list[tuple[datetime, datetime]]:
     return [(parse_utc(row["start"]), parse_utc(row["end_exclusive"])) for row in rows]
+
+
+def _validate_calendar_contract(parameters: dict[str, Any]) -> None:
+    actual = {
+        "lookback_4h_bars": parameters["geometry"]["lookback_4h_bars"],
+        **{
+            key: parameters["episode"][key]
+            for key in CALENDAR_CONTRACT
+            if key != "lookback_4h_bars"
+        },
+    }
+    if actual != CALENDAR_CONTRACT:
+        raise CalendarError(
+            "parameters differ from the fixed calendar timing/lookback contract: "
+            f"expected={CALENDAR_CONTRACT!r}, actual={actual!r}"
+        )
 
 
 def _episode(
@@ -135,7 +160,7 @@ def _episode(
                 else "PRICE_DISAGREEMENT_IN_ACTIVE_OR_EXIT_WINDOW"
             )
         if fields & VOLUME_FIELDS:
-            flags.add("VOLUME_ONLY_OR_COMBINED_DISCREPANCY_UNUSED_BY_MODEL")
+            flags.add("VOLUME_DISCREPANCY_PRESENT_UNUSED_BY_MODEL")
 
     if funding_status != "SCHEDULE_COMPLETE_UNDER_REPORTED_INTERVALS":
         flags.add("FUNDING_CONTINUITY_PARTIAL_OR_UNCERTAIN")
@@ -159,6 +184,7 @@ def _episode(
 def generate_calendar(
     manifest: dict[str, Any], parameters: dict[str, Any], parameter_sha: str
 ) -> dict[str, Any]:
+    _validate_calendar_contract(parameters)
     accepted = parameters["accepted_data"]
     if manifest.get("schema") != "binance-usdm-qualification-manifest-v3":
         raise CalendarError("calendar requires the accepted v3 manifest schema")
@@ -209,8 +235,14 @@ def generate_calendar(
         "required_dependencies": {
             "warmup": "42 completed canonical-derived 4h bars; MARK not required",
             "active_and_exit": "complete trade-price 1m, canonical-derived 4h and MARK 1m",
-            "funding": "actual retained timestamps; latest completed MARK maximum age 120000 ms",
-            "volume": "not used by model; volume-only discrepancies are flags",
+            "funding": (
+                "actual retained source-venue events under the explicit archive-completeness "
+                "assumption; latest completed MARK maximum age 120000 ms"
+            ),
+            "volume": (
+                "not used by model; volume-only discrepancies are flags; any OHLC component "
+                "still excludes"
+            ),
         },
         "summary": summaries,
         "episodes": rows,

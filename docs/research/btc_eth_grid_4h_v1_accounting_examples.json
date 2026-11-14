@@ -2,6 +2,7 @@
   "schema": "btc-eth-grid-4h-v1-accounting-examples",
   "status": "SYNTHETIC_ONLY_NOT_EXECUTABLE",
   "protocol_id": "BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1",
+  "protocol_version": "0.2.0-proposed",
   "examples": [
     {
       "id": "LONG_ADJACENT_RUNG_BASE",
@@ -14,6 +15,38 @@
       "outputs": {"gross_pnl": "0.01", "entry_fee": "0.000202", "exit_fee": "0.000200", "net_cash_change": "0.009598"}
     },
     {
+      "id": "FLAT_TO_LOWER_BOUNDARY_BASE",
+      "description": "Already-resting flat ladder, O=100/H=100/L=92. The modeled downward path fills all six buys before the lower boundary; none is erased.",
+      "inputs": {"quantity_per_rung": "3.972392", "buy_prices": ["99.03", "98.07", "97.12", "96.18", "95.26", "94.33"], "lower_boundary": "93.4278792", "passive_fee_rate": "0.0002", "forced_fee_rate": "0.0008", "forced_slippage_rate": "0.0005"},
+      "outputs": {"filled_rungs": 6, "closing_quantity": "23.834352", "average_entry": "96.665", "forced_fill_price": "93.38116526040", "gross_pnl": "-78.26807309345473920", "entry_fees": "0.460789527216", "forced_exit_fee": "1.780543650389236208640", "net_cash_change": "-80.509406271059975408640", "ending_quantity": "0"}
+    },
+    {
+      "id": "EXISTING_LONG_PLUS_NEW_RUNGS_TO_BOUNDARY_BASE",
+      "description": "A long 2q lot stack crosses two additional buys before the same lower boundary; existing and new inventory close together.",
+      "inputs": {"quantity_per_rung": "3.972392", "starting_lots": 2, "starting_average_entry": "97", "new_buy_prices": ["96.18", "95.26"], "forced_fill_price": "93.38116526040", "passive_fee_rate": "0.0002", "forced_fee_rate": "0.0008"},
+      "outputs": {"closing_lots": 4, "preclose_average_entry": "96.36", "gross_pnl": "-47.33239715563649280", "new_entry_fees": "0.152094944896", "forced_exit_fee": "1.187029100259490805760", "incremental_minute_cash_change_excluding_prior_fees": "-48.671521200791983605760", "ending_quantity": "0"}
+    },
+    {
+      "id": "GLOBAL_CROSSING_AND_LOT_OWNERSHIP",
+      "inputs": {"starting_lot_ids": ["L1", "L2"], "starting_side": "LONG", "crossed_sell_exits": [{"price": "99.03", "owner": "L1"}, {"price": "100", "owner": "L2"}], "crossed_sell_entries": ["100.98", "101.97"]},
+      "outputs": {"ordered_events": ["EXIT_L1_99.03", "EXIT_L2_100", "ENTRY_SHORT_100.98", "ENTRY_SHORT_101.97"], "ending_side": "SHORT", "ending_lots": 2, "orphan_exits": 0, "exit_closed_source_rungs_rearm_after_minutes": 1}
+    },
+    {
+      "id": "MARKETABLE_POST_ONLY_ACTIVATION",
+      "inputs": {"minute_open": "98", "new_buy_limit": "99.03", "activation_time": "2026-01-05T00:01:00Z"},
+      "outputs": {"status": "POST_ONLY_REJECTED", "fill_quantity": "0", "fee": "0", "rearm_time": "2026-01-05T00:02:00Z"}
+    },
+    {
+      "id": "FUNDING_AT_OPEN_THEN_CLOSE",
+      "inputs": {"signed_quantity_before_open": "0.02", "mark": "100", "rate": "0.0001", "funding_time": "2026-01-05T08:00:00Z", "forced_close_time": "2026-01-05T08:00:00Z"},
+      "outputs": {"event_order": ["FUNDING", "FORCED_CLOSE"], "base_funding_cash_change": "-0.0002"}
+    },
+    {
+      "id": "CLOSE_AT_OPEN_THEN_LATER_FUNDING",
+      "inputs": {"signed_quantity_before_open": "0.02", "forced_close_time": "2026-01-05T08:00:00Z", "funding_time": "2026-01-05T08:00:00.020000Z", "mark": "100", "rate": "0.0001"},
+      "outputs": {"event_order": ["FORCED_CLOSE", "FUNDING"], "quantity_at_funding": "0", "base_funding_cash_change": "0"}
+    },
+    {
       "id": "LONG_LOWER_BOUNDARY_GAP_BASE",
       "inputs": {"quantity": "0.02", "average_entry": "100", "gap_open": "92", "forced_slippage_rate": "0.0005", "entry_fee_paid": "0.000400", "forced_exit_fee_rate": "0.0008"},
       "outputs": {"forced_fill_price": "91.9540", "gross_pnl": "-0.160920", "forced_exit_fee": "0.0014712640", "net_cash_change": "-0.1627912640"}
@@ -21,12 +54,17 @@
     {
       "id": "AMBIGUOUS_MINUTE_LONG_ADVERSE_ONLY",
       "inputs": {"starting_quantity": "0.01", "starting_average_entry": "100", "active_buy": "96", "active_sell": "101", "minute_open": "99", "minute_high": "102", "minute_low": "95"},
-      "outputs": {"executed_order": "BUY_96", "deferred_order": "SELL_101", "ending_quantity": "0.02", "ending_average_entry": "98"}
+      "outputs": {"selected_path": "OPEN_LOW_HIGH_CLOSE", "executed_first_order": "BUY_96", "replacement_fill_same_minute": false, "ending_quantity_before_later_path_events": "0.02", "ending_average_entry_before_later_path_events": "98"}
     },
     {
       "id": "FUNDING_LONG_BASE_AND_STRESS",
       "inputs": {"signed_quantity": "0.02", "mark": "100", "reported_rate": "0.0001", "stress_adverse_addon": "0.0001"},
       "outputs": {"base_cash_change": "-0.0002", "stress_cash_change": "-0.0004"}
+    },
+    {
+      "id": "ORIGINAL_CAPITAL_FLOOR_TERMINATION",
+      "inputs": {"original_capital": "10000", "completed_minute_equity": "7999.99", "floor_fraction": "0.80", "open_quantity": "0.02", "breach_time": "2026-01-05T08:01:00Z"},
+      "outputs": {"floor_equity": "8000", "immediate_actions": ["CANCEL_ALL_ENTRIES", "CANCEL_ALL_EXITS"], "forced_close_time": "2026-01-05T08:02:00Z", "forced_close_price_source": "NEXT_MINUTE_OPEN_WITH_SCENARIO_COSTS", "subsequent_symbol_state": "PERMANENTLY_TERMINATED_CASH_ONLY"}
     },
     {
       "id": "SCHEDULED_TERMINAL_FLATTEN_LONG_BASE",
