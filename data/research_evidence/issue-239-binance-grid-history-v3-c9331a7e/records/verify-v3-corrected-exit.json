@@ -1,0 +1,10 @@
+{
+  "schema": "issue-239-v3-corrected-verifier-exit-v1",
+  "executable_sha": "038361d5afda5e11c5bfa182252c46371555e0d7",
+  "started_at": "2026-11-14T15:30:20.5253740+00:00",
+  "finished_at": "2026-11-14T15:30:24.8655269+00:00",
+  "elapsed_seconds": 4.34,
+  "exit_code": 0,
+  "stdout_sha256": "a3051df994a4d50d48f670a8552759c6fc6a0184e786b19cd1de84c9f666a65b",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

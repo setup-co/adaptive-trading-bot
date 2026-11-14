@@ -1,0 +1,8 @@
+{
+  "command": "report-v2",
+  "executable_sha": "97b8a5ad3f6ff3717e24cddd18af58b710c9d7b5",
+  "started_at": "2026-11-13T22:48:15.2919224+00:00",
+  "ended_at": "2026-11-13T22:48:29.6041789+00:00",
+  "elapsed_seconds": 14.3122565,
+  "exit_code": 0
+}

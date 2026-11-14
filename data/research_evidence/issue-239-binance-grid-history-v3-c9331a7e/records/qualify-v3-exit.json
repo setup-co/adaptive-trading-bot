@@ -1,0 +1,11 @@
+{
+  "schema": "issue-239-v3-operation-exit-v1",
+  "operation": "qualify-v3",
+  "started_at": "2026-11-14T15:25:31.8494164+00:00",
+  "finished_at": "2026-11-14T15:28:10.2023736+00:00",
+  "elapsed_seconds": 158.353,
+  "exit_code": 0,
+  "peak_process_tree_working_set_bytes": 290021376,
+  "stdout_sha256": "e8ee9e346b698abd0bde0f851f4720daa45bc752523ab595907136096a239d82",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

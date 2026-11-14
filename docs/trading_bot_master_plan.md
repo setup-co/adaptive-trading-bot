@@ -1,7 +1,7 @@
 # Adaptive Trading Bot — Master Plan
 
 **Status:** Project source of truth  
-**Document version:** 1.10
+**Document version:** 1.13
 **Created:** 2026-09-09  
 **Repository:** `setup-co/adaptive-trading-bot`
 
@@ -136,8 +136,9 @@ runtime symbols, strategy economics, or trading. See the
 
 ## Timeframes
 
-- Entry timeframe: `15m`
-- Context: `1h`, `4h`
+- Active new-research decision timeframe: closed `4h` candles.
+- Existing runtime and legacy strategy implementations retain their `15m` decision and `1h`/`4h`
+  context contracts until separately implemented and reviewed.
 
 Very short timeframes such as 1m/3m/5m are not part of the V1 entry strategy. Qualified WEEX perpetual `5m LAST` is the canonical historical input for deterministic derivation of 15m/1h/4h research candles; it is not a 5m decision rule.
 
@@ -152,13 +153,17 @@ Very short timeframes such as 1m/3m/5m are not part of the V1 entry strategy. Qu
 
 ## Strategy families
 
-Only three initial families:
+The active research program is one Grid route for BTC/ETH. Its numerical protocol is not selected
+or implemented by the data-qualification task and must be frozen before economic evaluation.
+
+The three original families remain preserved as legacy/historical implementations:
 
 1. Trend Pullback
 2. Breakout + Retest
 3. Range Mean Reversion
 
-The project must not become a catalog of dozens of strategies before these are measurable and explainable.
+The broader multi-strategy vision is deferred, not completed or deleted. The project must not
+become a catalog of dozens of strategies before the active route is measurable and explainable.
 
 ---
 
@@ -238,7 +243,9 @@ Create a project-owned `ExchangeAdapter` interface. A CCXT-backed adapter may be
 
 - WEEX is the primary V1 venue.
 - Futures/Perpetual is the primary V1 trading mode; Spot is secondary.
-- Research and signal data should come from authoritative WEEX public endpoints when WEEX supplies the required series.
+- The active Grid research route may use separately qualified Binance USD-M public archive history
+  for BTCUSDT/ETHUSDT under explicit WEEX cost assumptions. WEEX remains the intended execution
+  venue. Binance MARK/funding are source-venue facts/proxies, not WEEX historical mechanics.
 - Future execution, account state, positions, order lifecycle, and funding/liquidation-sensitive controls will use WEEX.
 - Other exchanges must not become implicit dependencies of the primary V1 signal path merely to simplify backfill.
 - Strategy, Risk, Safety, Feature, Replay, and accounting contracts remain exchange-neutral. WEEX-specific transport and mapping belong only in exchange/source adapters.
@@ -1805,15 +1812,46 @@ Approved:
 - Approved: Architect instruction in Issue #233; one bounded historical screen only. No
   Paper/Shadow/Live activation or trading is authorized.
 
+### 2026-11-14 — BTC/ETH Grid research pivot with external multi-year history
+
+- Date: 2026-11-14
+- Change ID: Issue #239 / `BTC_ETH_GRID_4H_EXTERNAL_HISTORY_V1` / Master Plan v1.13
+- Old Decision: Active research used 15m decisions across several preserved strategy families and
+  treated WEEX history as the primary historical research authority.
+- New Decision: Focus the active research program on BTC/ETH Grid only, using closed 4h decisions
+  and separately qualified Binance USD-M public archive history from 2020-01-01 through 2026-11-01.
+  Retain WEEX as the future execution venue and apply explicit, dated WEEX cost assumptions in a
+  later frozen Grid protocol. Preserve all legacy implementations and evidence unchanged.
+- Reason: Obtain longer, independently retained BTC/ETH history for the newly selected research
+  direction without pretending cross-venue history proves WEEX execution.
+- Expected Benefit: A fixed, auditable multi-year price/funding/MARK evidence base for a subsequent
+  predeclared Grid evaluation.
+- Risk: The same market periods are selection-informed, Binance venue facts differ from WEEX, and
+  archive availability or auxiliary gaps may prevent complete perpetual qualification. Data
+  qualification is not strategy approval, a profitability claim, or Live readiness.
+- Affected Modules: Governance/current-state documentation, one research-only archive adapter,
+  retained external data/manifests, and focused tests. Runtime strategy/Risk/Safety/execution
+  behavior is unchanged.
+- Target Version: Active Grid research route / Master Plan v1.13
+- Approved: User/architect direction in Issue #239. Acquisition and qualification only; no Grid
+  strategy implementation, historical backtest, account access, order or deployment.
+
 ---
 
 # 38. Next action
 
 The current critical-path sequence is:
 
-1. Issue #173's public-data evidence remains `PARTIAL / NOT QUALIFIED` for historical-as-of membership. Issue #175 completed only the current-snapshot exploratory ten-member selection, with separate KASUSDT completion evidence. It did not qualify the selected instruments' 5m histories, prove historical-as-of membership or authorize a study. The charter remains **not** an execution-ready protocol.
-2. Package B's prospective, versioned `RESEARCH_ALL_FILL_ECONOMICS_V1` offline accounting/report path is merged with synthetic compatibility evidence. Issue #179's original bounded Package A 5m LAST attempt stopped after 15 attempts; its separate C1 continuation stopped after 1,904 previously unattempted attempts on a non-timeout DNS failure. Issue #181's source-frozen C2 tail completed only the remaining 785 never-attempted shapes, never either failed predecessor shape. The verified three-generation data-only projection has eight complete individual grids and a ten-member post-warm-up overlap from `2026-08-02T20:00:00Z`, but preserves the original BTC and C1 BTW holes and remains `PARTIAL_OR_BLOCKED`. Issue #183 adds only the explicit isolated `NORMALIZED_BASE_SIGNAL_V1` research input/admission boundary with synthetic integration evidence; it does not activate a real market-history strategy run, qualify historical WEEX contract quantity, or authorize a study. No request budget was reset, runtime allowlist widened or frozen report rewritten. See the [isolated-admission contract](research/research_v2_isolated_admission.md).
-3. Issue #185's [Research V2 exploratory-screen annex](research/research_v2_exploratory_screen.md) predeclares a bounded current-snapshot-selected, unleveraged/pre-funding implementation and data-only calendar preflight. It does **not** grant historical strategy execution: a later architect handoff must bind the reviewed executable code SHA, protocol hash and exact input/task inventory before a one-time run. Limited signal evidence remains distinct from **representative leveraged-perpetual validation**; the latter and Live still require validated leverage/notional, margin, funding, MARK/liquidation, protective-stop safety and account survival.
+1. Complete Issue #239's bounded BTCUSDT/ETHUSDT Binance USD-M archive acquisition and independent
+   qualification of trade-price 1m, native/derived 4h, MARK 1m and funding event components.
+2. Review the retained source, plan, raw hashes, normalized partitions, coverage/gap report and
+   qualification classification. Missing auxiliary facts do not erase a valid price corpus.
+3. In a separate issue, predeclare one finite-capital Grid model, causal 4h decisions, standing-order
+   execution assumptions, risk/inventory caps, all fill/cost/funding accounting and chronological
+   development/protected evaluation before any strategy result is computed.
+
+All predecessor research remains immutable history. The broader multi-asset, multi-strategy,
+Fundamental and Experience vision is deferred while the BTC/ETH Grid route is evaluated.
 
 Issue #118 is permanently stopped. Frozen #144/#149/#153 and #157/#161 evidence remains unchanged; no old run may be restarted or reinterpreted under new chronology, Range or population policy. Current BTC/ETH runtime/execution validation, Risk/Safety and Live-disabled gates remain. Standing venue stops and durable real-exchange fill reconciliation remain unqualified.
 

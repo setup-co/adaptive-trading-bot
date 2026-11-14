@@ -1,0 +1,11 @@
+{
+  "schema": "issue-239-v3-operation-exit-v1",
+  "operation": "verify-v3",
+  "started_at": "2026-11-14T15:28:44.1202599+00:00",
+  "finished_at": "2026-11-14T15:28:49.0038638+00:00",
+  "elapsed_seconds": 4.884,
+  "exit_code": 1,
+  "peak_process_tree_working_set_bytes": 150736896,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "3ff4ff6e9ea3e3d0b2418ee7c8b67fcc4b9f819910fcabd9eb879221c0fd5f98"
+}

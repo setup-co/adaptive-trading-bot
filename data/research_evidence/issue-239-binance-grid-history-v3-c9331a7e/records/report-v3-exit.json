@@ -1,0 +1,10 @@
+{
+  "schema": "issue-239-v3-report-exit-v1",
+  "executable_sha": "038361d5afda5e11c5bfa182252c46371555e0d7",
+  "started_at": "2026-11-14T15:30:52.1935271+00:00",
+  "finished_at": "2026-11-14T15:30:53.2144259+00:00",
+  "elapsed_seconds": 1.021,
+  "exit_code": 0,
+  "stdout_sha256": "063dba978047a0af4cc4e0a1f51008e5e04ca2daa699e1fa3c9805e34c3a4061",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
