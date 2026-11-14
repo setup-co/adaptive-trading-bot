@@ -351,6 +351,87 @@ def test_partial_payload_bytes_and_budget_survive_restart(tmp_path: Path) -> Non
     assert sum(path.stat().st_size for path in (tmp_path / "partials").rglob("*.bin")) == 72
 
 
+def test_unresolved_started_partial_blocks_every_new_transport_call(tmp_path: Path) -> None:
+    plan = subject.make_plan("a" * 40)
+    subject.durable_new(tmp_path / "plan.json", subject.canonical(plan))
+    item = plan["resources"][0]
+    subject._reserve_attempt(tmp_path, plan, item, 0)
+    target = tmp_path / "raw" / item["relative_path"]
+    pending = target.with_suffix(target.suffix + ".attempt-0.part")
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_bytes(b"x" * 128)
+    transport = _Forbidden()
+
+    with pytest.raises(
+        subject.CorpusError,
+        match=r"known_received_bytes=128.*attempt-0:128",
+    ):
+        subject.capture(tmp_path, plan, transport=transport, sleep=lambda _: None)
+
+    assert transport.calls == 0
+    assert pending.read_bytes() == b"x" * 128
+    assert subject._attempts(tmp_path, item["id"])[0]["status"] == "STARTED"
+
+
+class _OversizedResponse(_Response):
+    def __init__(self) -> None:
+        super().__init__(b"")
+        self.served = False
+
+    def read(self, size: int = -1) -> bytes:
+        if self.served:
+            return b""
+        self.served = True
+        return b"12345678"
+
+
+class _OversizedTransport:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def open(self, url: str, timeout: float) -> _Response:
+        self.calls += 1
+        return _OversizedResponse()
+
+
+def test_cap_crossing_block_is_retained_and_prevents_fresh_allowance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(subject, "MAX_PAYLOAD_BYTES", 4)
+    plan = subject.make_plan("a" * 40)
+    subject.durable_new(tmp_path / "plan.json", subject.canonical(plan))
+    item = plan["resources"][0]
+    first_transport = _OversizedTransport()
+    budget = subject._PayloadBudget(0, Lock())
+
+    with pytest.raises(subject.CorpusError, match="payload cap exceeded"):
+        subject._capture_resource(
+            tmp_path,
+            plan,
+            item,
+            first_transport,
+            budget,
+            lambda _: None,
+            Event(),
+        )
+
+    attempt = subject._attempts(tmp_path, item["id"])[0]
+    partial = tmp_path / attempt["partial_payload_path"]
+    assert first_transport.calls == 1
+    assert budget.used == 8
+    assert attempt["outcome"] == "UNKNOWN_INTERRUPTED"
+    assert attempt["bytes_received"] == 8
+    assert partial.read_bytes() == b"12345678"
+
+    resumed_transport = _Forbidden()
+    with pytest.raises(
+        subject.CorpusError,
+        match=r"known_received_bytes=8.*attempt-0:8",
+    ):
+        subject.capture(tmp_path, plan, transport=resumed_transport, sleep=lambda _: None)
+    assert resumed_transport.calls == 0
+
+
 def test_grid_report_preserves_gaps_and_half_open_epochs() -> None:
     start = int(subject.START.timestamp() * 1000)
     result = subject._grid_intervals([start, start + 60_000, start + 180_000], 60_000)

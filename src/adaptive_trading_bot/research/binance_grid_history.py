@@ -235,20 +235,53 @@ class _PayloadBudget:
     used: int
     lock: Lock
 
-    def add(self, count: int) -> None:
+    def next_read_size(self, maximum: int) -> int:
+        """Bound the next read to the remaining allowance plus one overflow byte."""
+
         with self.lock:
-            if self.used + count > MAX_PAYLOAD_BYTES:
-                raise CorpusError("network payload cap exceeded")
+            remaining = MAX_PAYLOAD_BYTES - self.used
+            return min(maximum, max(1, remaining + 1))
+
+    def add(self, count: int) -> None:
+        if count < 0:
+            raise CorpusError("received-byte count is negative")
+        with self.lock:
             self.used += count
+            if self.used > MAX_PAYLOAD_BYTES:
+                raise CorpusError("network payload cap exceeded")
 
 
 def _accounted_payload_bytes(root: Path, plan: dict[str, Any]) -> int:
-    """Restore the cumulative payload budget from durable attempt evidence."""
+    """Restore known usage and fail closed when any prior usage is unresolved."""
 
     total = 0
+    unresolved: list[str] = []
     for item in plan["resources"]:
         for row in _attempts(root, item["id"]):
-            total += int(row.get("bytes_received", row.get("bytes", 0)))
+            attempt = int(row["attempt"])
+            recorded = int(row.get("bytes_received", row.get("bytes", 0)))
+            if recorded < 0:
+                raise CorpusError("durable received-byte count is negative")
+            target = root / "raw" / item["relative_path"]
+            pending = target.with_suffix(target.suffix + f".attempt-{attempt}.part")
+            retained = root / "partials" / item["id"] / f"attempt-{attempt}.bin"
+            known = max(
+                recorded,
+                pending.stat().st_size if pending.is_file() else 0,
+                retained.stat().st_size if retained.is_file() else 0,
+            )
+            total += known
+            if row.get("status") == "STARTED" or row.get("outcome") == "UNKNOWN_INTERRUPTED":
+                unresolved.append(f"{item['id']}:attempt-{attempt}:{known}")
+    if unresolved:
+        raise CorpusError(
+            "prior received-byte usage is unresolved; no network continuation is allowed "
+            f"(known_received_bytes={total}; attempts={','.join(unresolved)})"
+        )
+    if total > MAX_PAYLOAD_BYTES:
+        raise CorpusError(
+            f"prior received-byte usage exceeds the payload cap: {total}>{MAX_PAYLOAD_BYTES}"
+        )
     return total
 
 
@@ -325,8 +358,7 @@ def _download_once(
         except urllib.error.HTTPError as exc:
             status = exc.code
             retryable = status == 429 or 500 <= status <= 599
-            body = exc.read(1024 * 1024)
-            budget.add(len(body))
+            body = exc.read(budget.next_read_size(1024 * 1024))
             partial_path: str | None = None
             if body:
                 partial = root / "partials" / item["id"] / f"attempt-{attempt}.bin"
@@ -341,6 +373,7 @@ def _download_once(
                 received_sha256=sha256_bytes(body),
                 partial_payload_path=partial_path,
             )
+            budget.add(len(body))
             return record
         with response:
             status = int(response.status)
@@ -357,11 +390,14 @@ def _download_once(
             digest = hashlib.sha256()
             count = 0
             with pending.open("xb") as handle:
-                while block := response.read(1024 * 1024):
-                    budget.add(len(block))
+                while block := response.read(budget.next_read_size(1024 * 1024)):
                     handle.write(block)
                     digest.update(block)
                     count += len(block)
+                    record["bytes_received"] = count
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    budget.add(len(block))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(pending, target)
@@ -398,8 +434,11 @@ def _download_once(
         )
         return record
     except BaseException as exc:
-        count = pending.stat().st_size if pending.exists() else 0
-        interrupted_partial_path: str | None = None
+        count = max(
+            int(record.get("bytes_received", 0)),
+            pending.stat().st_size if pending.exists() else 0,
+        )
+        interrupted_partial_path = record.get("partial_payload_path")
         if pending.exists():
             partial = root / "partials" / item["id"] / f"attempt-{attempt}.bin"
             partial.parent.mkdir(parents=True, exist_ok=True)

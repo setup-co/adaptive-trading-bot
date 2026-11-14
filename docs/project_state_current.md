@@ -33,6 +33,10 @@ carry millisecond offsets. The combined classification is `PRICE_CORPUS_PARTIAL_
 The verified v3 manifest is
 `9d63123b073e35a010c130308452fd554f707de0e1967f82a752ff44b6155214`. See
 [`btc_eth_grid_4h_external_history_result.md`](research/btc_eth_grid_4h_external_history_result.md).
+The architect accepted and froze that v3 data result. The remaining prospective capture-tool
+correction now fails closed before network continuation when prior received-byte usage is
+unresolved and durably charges a received block even when it crosses the payload cap; it was
+validated with local fake transports only. No accepted capture or qualification evidence changed.
 
 No strategy evaluation occurred. After data review, a separate issue must freeze the specific
 Grid model, finite capital/risk/inventory rules, 4h decision and 1m standing-order chronology,
