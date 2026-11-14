@@ -23,6 +23,9 @@ def main() -> int:
             "qualify-v2",
             "verify-v2",
             "report-v2",
+            "qualify-v3",
+            "verify-v3",
+            "report-v3",
         ),
     )
     parser.add_argument("--root", required=True, type=Path)
@@ -75,6 +78,11 @@ def main() -> int:
         print(
             json.dumps({"classification": result["classification"], "files": len(result["files"])})
         )
+    elif args.command == "qualify-v3":
+        result = corpus.qualify_v3(root, plan, qualification_executable_sha=revision)
+        print(
+            json.dumps({"classification": result["classification"], "files": len(result["files"])})
+        )
     elif args.command in {"verify", "verify-v2"}:
         print(
             json.dumps(
@@ -82,13 +90,26 @@ def main() -> int:
                 sort_keys=True,
             )
         )
-    else:
+    elif args.command == "verify-v3":
+        print(json.dumps(corpus.verify_v3(root, plan), sort_keys=True))
+    elif args.command == "report-v2":
         report = corpus.publication_report(root, plan)
         print(
             json.dumps(
                 {
                     "classification": report["classification"],
                     "raw_inventory_sha256": report["raw_inventory_sha256"],
+                    "qualification_manifest_sha256": report["qualification_manifest_sha256"],
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        report = corpus.publication_report_v3(root, plan)
+        print(
+            json.dumps(
+                {
+                    "classification": report["classification"],
                     "qualification_manifest_sha256": report["qualification_manifest_sha256"],
                 },
                 sort_keys=True,
