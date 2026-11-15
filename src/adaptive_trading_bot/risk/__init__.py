@@ -3,6 +3,7 @@
 from adaptive_trading_bot.risk.core import (
     RiskDecision,
     RiskDecisionStatus,
+    RiskDrawdownEnforcement,
     RiskManager,
     RiskManagerConfiguration,
     RiskPortfolioSnapshot,
@@ -40,6 +41,7 @@ __all__ = [
     "OperationalSafetyStatus",
     "RiskDecision",
     "RiskDecisionStatus",
+    "RiskDrawdownEnforcement",
     "RiskManager",
     "RiskManagerConfiguration",
     "RiskPortfolioSnapshot",

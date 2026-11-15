@@ -12,6 +12,7 @@ from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.risk import (
     RiskDecision,
     RiskDecisionStatus,
+    RiskDrawdownEnforcement,
     RiskManager,
     RiskManagerConfiguration,
     RiskPortfolioSnapshot,
@@ -327,6 +328,26 @@ def test_drawdown_boundary_is_exact_and_flags_review(
     assert decision.status is expected
     assert decision.requires_halt_review is halt
     assert (RiskReasonCode.DRAWDOWN_LIMIT_REACHED in decision.reasons) is halt
+
+
+def test_opt_in_report_only_drawdown_preserves_peak_without_halt() -> None:
+    manager = RiskManager(
+        RiskManagerConfiguration(
+            drawdown_enforcement=RiskDrawdownEnforcement.REPORT_ONLY,
+        )
+    )
+    decision = manager.evaluate(
+        _evaluation(),
+        _portfolio(equity=Decimal("9000"), day_start=Decimal("9000"), peak=Decimal("12000")),
+    )
+
+    assert decision.status is RiskDecisionStatus.APPROVED
+    assert decision.peak_equity_quote == Decimal("12000")
+    assert decision.drawdown_fraction == Decimal("0.25")
+    assert decision.drawdown_enforcement is RiskDrawdownEnforcement.REPORT_ONLY
+    assert RiskReasonCode.DRAWDOWN_RECORDED_REPORT_ONLY in decision.reasons
+    assert RiskReasonCode.DRAWDOWN_LIMIT_REACHED not in decision.reasons
+    assert not decision.requires_halt_review
 
 
 @pytest.mark.parametrize(

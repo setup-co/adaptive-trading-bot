@@ -9,7 +9,12 @@ from enum import StrEnum
 
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.domain.clock import require_utc
-from adaptive_trading_bot.risk.core import RiskDecision, RiskDecisionStatus, RiskReasonCode
+from adaptive_trading_bot.risk.core import (
+    RiskDecision,
+    RiskDecisionStatus,
+    RiskDrawdownEnforcement,
+    RiskReasonCode,
+)
 from adaptive_trading_bot.strategies.core import CandidateAction, SourceIdentity
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
@@ -480,13 +485,26 @@ def _approved_account_audit_is_consistent(decision: RiskDecision) -> bool:
         expected_drawdown_fraction = expected_drawdown / decision.peak_equity_quote
     daily_limit_reached = decision.daily_loss_fraction >= decision.max_daily_loss_fraction
     drawdown_limit_reached = decision.drawdown_fraction >= decision.max_drawdown_fraction
+    if decision.drawdown_enforcement is RiskDrawdownEnforcement.ENTRY_HALT:
+        drawdown_policy_consistent = (
+            not drawdown_limit_reached
+            and RiskReasonCode.DRAWDOWN_WITHIN_LIMIT in decision.reasons
+            and RiskReasonCode.DRAWDOWN_RECORDED_REPORT_ONLY not in decision.reasons
+        )
+    elif decision.drawdown_enforcement is RiskDrawdownEnforcement.REPORT_ONLY:
+        drawdown_policy_consistent = (
+            RiskReasonCode.DRAWDOWN_RECORDED_REPORT_ONLY in decision.reasons
+            and RiskReasonCode.DRAWDOWN_WITHIN_LIMIT not in decision.reasons
+        )
+    else:
+        return False
     return (
         decision.daily_loss_quote == expected_daily_loss
         and decision.daily_loss_fraction == expected_daily_loss_fraction
         and decision.drawdown_quote == expected_drawdown
         and decision.drawdown_fraction == expected_drawdown_fraction
         and not daily_limit_reached
-        and not drawdown_limit_reached
+        and drawdown_policy_consistent
         and not decision.requires_halt_review
         and RiskReasonCode.DAILY_LOSS_LIMIT_REACHED not in decision.reasons
         and RiskReasonCode.DRAWDOWN_LIMIT_REACHED not in decision.reasons

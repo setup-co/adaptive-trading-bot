@@ -53,6 +53,15 @@ remain preserved.
   accepted protocol HEAD `58f250a86925a48ed338ef716a621a6594e768b9`, protocol-document SHA-256
   `f0314ed243a2f7784e13d252901802c95b994b59221a2aa67333733be86907fd` and parameter SHA-256
   `960edccc1c40ed63a780734921494646adb45f5532df8ce7872e502dc94147df`.
+- The Grid Risk adapter uses the existing RiskManager/Safety chain with an explicit opt-in
+  `REPORT_ONLY` drawdown policy: the true running peak/drawdown remains audited, while only the
+  protocol's original-capital 80% floor terminates Grid entry. All legacy RiskManager callers keep
+  the default drawdown entry halt.
+- Protocol-defined pre-order geometry/size rejections produce explicit, denominator-retained
+  `NO_TRADE_CASH_ONLY` weeks with unchanged continuous capital and auditable rejection reasons.
+  Permanently terminated weeks bypass geometry and remain `TERMINATED_CASH_ONLY`. Metadata-
+  ineligible rollover is not implemented by this synthetic engine; a future authorized runner must
+  represent it explicitly and must not fabricate price/MARK/funding continuity.
 - This is implementation preparation only. It is not a historical Grid result, an executable
   exchange model, a profitability claim, or authorization for Paper, Shadow, Live, deployment or
   data access. OHLC paths, all-or-unfilled limits and source-venue funding remain modeled proxies.

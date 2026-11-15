@@ -27,10 +27,12 @@ from adaptive_trading_bot.research.grid_v1 import (
     GridGeometry,
     GridLedgerCarry,
     GridMinute,
+    GridNoTradeReason,
     GridScenario,
     GridState,
     GridV1Engine,
     GridV1Error,
+    GridWeekDisposition,
     healthy_grid_health,
     run_synthetic_grid_episode,
     verified_grid_contract_identity,
@@ -47,6 +49,7 @@ def _episode(
     *,
     start: datetime = START,
     carry: GridLedgerCarry | None = None,
+    closes: tuple[Decimal, ...] | None = None,
     code_sha: str = "synthetic-code-sha",
     contract: GridContractIdentity | None = None,
 ) -> GridEpisodeInput:
@@ -55,7 +58,7 @@ def _episode(
         SourceId("synthetic-grid-v1"),
         symbol,
         start,
-        (Decimal(100),) * 42,
+        (Decimal(100),) * 42 if closes is None else closes,
         code_sha,
         verified_grid_contract_identity() if contract is None else contract,
         GridLedgerCarry.initial(symbol) if carry is None else carry,
@@ -146,6 +149,26 @@ def _minute(
 
 def _events(engine: GridV1Engine, event_type: str) -> list[GridAuditEvent]:
     return [event for event in engine.audit if event.event_type == event_type]
+
+
+def _complete_cash_only_week(
+    engine: GridV1Engine,
+    *,
+    episode_start: datetime,
+    mark: str,
+) -> None:
+    for offset in range(6 * 24 * 60 + 20 * 60 + 2):
+        engine.process_minute(
+            _minute(
+                offset,
+                episode_start=episode_start,
+                open_=mark,
+                high=mark,
+                low=mark,
+                close=mark,
+                mark=mark,
+            )
+        )
 
 
 def test_flat_six_rungs_are_booked_before_lower_boundary() -> None:
@@ -525,6 +548,109 @@ def test_terminated_carry_stays_cash_only_without_reauthorization() -> None:
     assert engine.authority is None
     assert not _events(engine, "ORDER_CREATED")
     assert engine.report().authority["authorization_status"] == "TERMINATED_CARRY_IN_NO_PLAN"
+
+
+def test_grid_drawdown_is_report_only_with_real_peak_preserved() -> None:
+    symbol = TradingSymbol("BTC", "USDT")
+    carry = GridLedgerCarry(
+        symbol,
+        Decimal("10000"),
+        Decimal("9000"),
+        Decimal("9000"),
+        Decimal("-1000"),
+        Decimal(0),
+        Decimal(0),
+        Decimal("12000"),
+        False,
+        START,
+    )
+    next_start = START + timedelta(days=7)
+    episode = _episode(start=next_start, carry=carry)
+    engine = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+
+    assert engine.authority is not None
+    for decision in engine.authority.directional_risk_decisions:
+        assert decision.status.value == "APPROVED"
+        assert decision.peak_equity_quote == Decimal("12000")
+        assert decision.drawdown_fraction == Decimal("0.25")
+        assert decision.drawdown_enforcement.value == "REPORT_ONLY"
+        assert not decision.requires_halt_review
+    assert engine.authority.directional_safety_decisions[0].entry_permitted
+    assert engine.snapshot().peak_equity == Decimal("12000")
+    assert engine.snapshot().running_peak_drawdown_fraction == Decimal("0.25")
+
+
+@pytest.mark.parametrize(
+    ("closes", "mark", "reason"),
+    (
+        (
+            tuple(Decimal(value) for value in ("100", "200") * 21),
+            "200",
+            GridNoTradeReason.CORRIDOR_EXCEEDS_MAXIMUM,
+        ),
+        (
+            (Decimal("1000000000000"),) * 42,
+            "1000000000000",
+            GridNoTradeReason.ORDER_SIZE_BELOW_MINIMUM,
+        ),
+    ),
+)
+def test_pre_order_rejection_is_a_complete_audited_cash_only_week(
+    closes: tuple[Decimal, ...],
+    mark: str,
+    reason: GridNoTradeReason,
+) -> None:
+    episode = _episode(closes=closes)
+    engine = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+
+    assert engine.week_disposition is GridWeekDisposition.NO_TRADE_CASH_ONLY
+    assert engine.no_trade_reason is reason
+    assert not _events(engine, "ORDER_CREATED")
+    assert _events(engine, "EPISODE_NO_TRADE_CASH_ONLY")[0].details == (("reason", reason.value),)
+
+    _complete_cash_only_week(engine, episode_start=START, mark=mark)
+    report = engine.report()
+    carry = engine.carry_out()
+    assert report.completion_status == "COMPLETE"
+    assert report.week_disposition == "NO_TRADE_CASH_ONLY"
+    assert report.no_trade_reason == reason.value
+    assert report.geometry == {
+        "status": "REJECTED_PRE_ORDER",
+        "rejection_reason": reason.value,
+    }
+    assert carry.current_cash == Decimal("10000")
+    assert carry.cumulative_gross_realized_pnl == 0
+    assert carry.cumulative_fees == 0
+    assert carry.cumulative_funding == 0
+
+
+def test_terminated_carry_skips_wide_geometry_and_remains_permanent() -> None:
+    symbol = TradingSymbol("BTC", "USDT")
+    carry = GridLedgerCarry(
+        symbol,
+        Decimal("10000"),
+        Decimal("7900"),
+        Decimal("7900"),
+        Decimal("-2100"),
+        Decimal(0),
+        Decimal(0),
+        Decimal("10000"),
+        True,
+        START,
+    )
+    next_start = START + timedelta(days=7)
+    wide = tuple(Decimal(value) for value in ("100", "200") * 21)
+    episode = _episode(start=next_start, carry=carry, closes=wide)
+    engine = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+
+    assert engine.week_disposition is GridWeekDisposition.TERMINATED_CASH_ONLY
+    assert engine.no_trade_reason is None
+    assert engine.authority is None
+    assert not _events(engine, "ORDER_CREATED")
+    _complete_cash_only_week(engine, episode_start=next_start, mark="200")
+    carried = engine.carry_out()
+    assert carried.current_cash == Decimal("7900")
+    assert carried.terminated
 
 
 def test_contract_identity_mismatch_is_rejected_and_supplied_sha_is_not_verified() -> None:

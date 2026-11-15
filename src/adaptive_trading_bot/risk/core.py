@@ -27,6 +27,13 @@ class RiskDecisionStatus(StrEnum):
     REJECTED = "REJECTED"
 
 
+class RiskDrawdownEnforcement(StrEnum):
+    """Whether measured peak drawdown halts entry or remains report-only."""
+
+    ENTRY_HALT = "ENTRY_HALT"
+    REPORT_ONLY = "REPORT_ONLY"
+
+
 class RiskReasonCode(StrEnum):
     """Canonical supporting and rejection evidence for V1 risk decisions."""
 
@@ -34,6 +41,7 @@ class RiskReasonCode(StrEnum):
     CANDIDATE_GEOMETRY_VALID = "CANDIDATE_GEOMETRY_VALID"
     DAILY_LOSS_WITHIN_LIMIT = "DAILY_LOSS_WITHIN_LIMIT"
     DRAWDOWN_WITHIN_LIMIT = "DRAWDOWN_WITHIN_LIMIT"
+    DRAWDOWN_RECORDED_REPORT_ONLY = "DRAWDOWN_RECORDED_REPORT_ONLY"
     SYMBOL_FLAT = "SYMBOL_FLAT"
     SIMULTANEOUS_RISK_AVAILABLE = "SIMULTANEOUS_RISK_AVAILABLE"
     GROSS_EXPOSURE_AVAILABLE = "GROSS_EXPOSURE_AVAILABLE"
@@ -63,6 +71,7 @@ class RiskManagerConfiguration:
     max_daily_loss_fraction: Decimal = Decimal("0.0100")
     max_drawdown_fraction: Decimal = Decimal("0.0500")
     max_gross_exposure_fraction: Decimal = Decimal("1.0000")
+    drawdown_enforcement: RiskDrawdownEnforcement = RiskDrawdownEnforcement.ENTRY_HALT
     risk_policy_version: str = field(init=False, default="1.0.0")
 
     def __post_init__(self) -> None:
@@ -91,6 +100,10 @@ class RiskManagerConfiguration:
                 raise ValueError(f"{name} must be strictly between zero and one")
         if self.max_gross_exposure_fraction <= 0 or self.max_gross_exposure_fraction > 1:
             raise ValueError("max_gross_exposure_fraction must be in (0, 1]")
+        if not isinstance(self.drawdown_enforcement, RiskDrawdownEnforcement):
+            raise TypeError("drawdown_enforcement must be a RiskDrawdownEnforcement")
+        if self.drawdown_enforcement is RiskDrawdownEnforcement.REPORT_ONLY:
+            object.__setattr__(self, "risk_policy_version", "1.1.0-drawdown-report-only")
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +222,7 @@ class RiskDecision:
     drawdown_quote: Decimal
     drawdown_fraction: Decimal
     max_drawdown_fraction: Decimal
+    drawdown_enforcement: RiskDrawdownEnforcement
     current_open_risk_quote: Decimal
     simultaneous_risk_cap_quote: Decimal
     remaining_simultaneous_risk_quote: Decimal
@@ -254,7 +268,11 @@ class RiskManager:
 
         with localcontext(_DECIMAL_CONTEXT):
             metrics = self._metrics(risk_portfolio_snapshot)
-            requires_halt = metrics.drawdown_fraction >= self.configuration.max_drawdown_fraction
+            drawdown_halt = (
+                self.configuration.drawdown_enforcement is RiskDrawdownEnforcement.ENTRY_HALT
+                and metrics.drawdown_fraction >= self.configuration.max_drawdown_fraction
+            )
+            requires_halt = drawdown_halt
             if strategy_evaluation.action is CandidateAction.NO_TRADE:
                 return self._decision(
                     strategy_evaluation,
@@ -282,7 +300,7 @@ class RiskManager:
                 failures.append(RiskReasonCode.INVALIDATION_WRONG_SIDE)
             if metrics.daily_loss_fraction >= self.configuration.max_daily_loss_fraction:
                 failures.append(RiskReasonCode.DAILY_LOSS_LIMIT_REACHED)
-            if metrics.drawdown_fraction >= self.configuration.max_drawdown_fraction:
+            if drawdown_halt:
                 failures.append(RiskReasonCode.DRAWDOWN_LIMIT_REACHED)
             if any(
                 position.symbol == strategy_evaluation.symbol
@@ -316,6 +334,11 @@ class RiskManager:
             quantity_by_risk = available_risk / stop_distance
             quantity_by_exposure = metrics.remaining_gross_exposure_quote / reference
             approved_quantity = min(quantity_by_risk, quantity_by_exposure)
+            if (
+                approved_quantity * stop_distance > available_risk
+                or approved_quantity * reference > metrics.remaining_gross_exposure_quote
+            ):
+                approved_quantity = approved_quantity.next_minus()
             if not approved_quantity.is_finite() or approved_quantity <= 0:
                 return self._decision(
                     strategy_evaluation,
@@ -367,7 +390,12 @@ class RiskManager:
                     RiskReasonCode.STRATEGY_CANDIDATE_ACCEPTED,
                     RiskReasonCode.CANDIDATE_GEOMETRY_VALID,
                     RiskReasonCode.DAILY_LOSS_WITHIN_LIMIT,
-                    RiskReasonCode.DRAWDOWN_WITHIN_LIMIT,
+                    (
+                        RiskReasonCode.DRAWDOWN_WITHIN_LIMIT
+                        if self.configuration.drawdown_enforcement
+                        is RiskDrawdownEnforcement.ENTRY_HALT
+                        else RiskReasonCode.DRAWDOWN_RECORDED_REPORT_ONLY
+                    ),
                     RiskReasonCode.SYMBOL_FLAT,
                     RiskReasonCode.SIMULTANEOUS_RISK_AVAILABLE,
                     RiskReasonCode.GROSS_EXPOSURE_AVAILABLE,
@@ -463,6 +491,7 @@ class RiskManager:
             drawdown_quote=metrics.drawdown_quote,
             drawdown_fraction=metrics.drawdown_fraction,
             max_drawdown_fraction=self.configuration.max_drawdown_fraction,
+            drawdown_enforcement=self.configuration.drawdown_enforcement,
             current_open_risk_quote=metrics.current_open_risk_quote,
             simultaneous_risk_cap_quote=metrics.simultaneous_risk_cap_quote,
             remaining_simultaneous_risk_quote=metrics.remaining_simultaneous_risk_quote,

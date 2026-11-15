@@ -47,6 +47,7 @@ from adaptive_trading_bot.risk import (
     OperationalSafetyStatus,
     RiskDecision,
     RiskDecisionStatus,
+    RiskDrawdownEnforcement,
     RiskManager,
     RiskManagerConfiguration,
     RiskPortfolioSnapshot,
@@ -74,6 +75,12 @@ class GridV1Error(ValueError):
     """A supplied synthetic input violates the frozen protocol."""
 
 
+class _GridPreOrderRejection(GridV1Error):
+    def __init__(self, reason: GridNoTradeReason) -> None:
+        super().__init__(reason.value)
+        self.reason = reason
+
+
 class GridScenario(StrEnum):
     BASE = "BASE"
     STRESS = "STRESS"
@@ -91,6 +98,19 @@ class GridCompletionStatus(StrEnum):
     COMPLETE = "COMPLETE"
     PARTIAL_UNRESOLVED = "PARTIAL_UNRESOLVED"
     INTEGRITY_BLOCKED = "INTEGRITY_BLOCKED"
+
+
+class GridNoTradeReason(StrEnum):
+    CORRIDOR_EXCEEDS_MAXIMUM = "CORRIDOR_EXCEEDS_MAXIMUM"
+    ROUNDED_LEVELS_INVALID = "ROUNDED_LEVELS_INVALID"
+    ADJACENT_RETURN_BELOW_MINIMUM = "ADJACENT_RETURN_BELOW_MINIMUM"
+    ORDER_SIZE_BELOW_MINIMUM = "ORDER_SIZE_BELOW_MINIMUM"
+
+
+class GridWeekDisposition(StrEnum):
+    GRID_ACTIVE = "GRID_ACTIVE"
+    NO_TRADE_CASH_ONLY = "NO_TRADE_CASH_ONLY"
+    TERMINATED_CASH_ONLY = "TERMINATED_CASH_ONLY"
 
 
 class GridSide(StrEnum):
@@ -186,6 +206,11 @@ class GridLedgerCarry:
         )
         if self.current_cash != expected_cash:
             raise GridV1Error("carry economics do not reconcile to current cash")
+        if (
+            not self.terminated
+            and self.current_equity <= self.original_account_capital * Decimal("0.80")
+        ):
+            raise GridV1Error("carry at the original-capital floor must be permanently terminated")
         if self.previous_episode_start is not None:
             object.__setattr__(
                 self,
@@ -368,6 +393,8 @@ class GridEpisodeReport:
     scenario: str
     episode_start: str
     completion_status: str
+    week_disposition: str
+    no_trade_reason: str | None
     carry_in: dict[str, object]
     carry_out: dict[str, object] | None
     input_contract: dict[str, object]
@@ -412,7 +439,7 @@ def _geometry(closes: tuple[Decimal, ...], equity: Decimal) -> GridGeometry:
         sigma = variance.sqrt()
         width = max(Decimal("1.06").ln(), Decimal("2.5") * sigma * Decimal(42).sqrt())
         if width > Decimal("1.35").ln():
-            raise GridV1Error("corridor exceeds ln(1.35)")
+            raise _GridPreOrderRejection(GridNoTradeReason.CORRIDOR_EXCEEDS_MAXIMUM)
         ratio = (width / Decimal(6)).exp()
         centre = closes[-1]
         buys = tuple(
@@ -425,13 +452,17 @@ def _geometry(closes: tuple[Decimal, ...], equity: Decimal) -> GridGeometry:
         )
         lower = centre / (ratio**7)
         upper = centre * (ratio**7)
-        if len(set((*buys, *sells))) != 12:
-            raise GridV1Error("rounded grid levels are not unique")
+        if (
+            len(set((*buys, *sells))) != 12
+            or tuple(sorted(buys, reverse=True)) != buys
+            or tuple(sorted(sells)) != sells
+        ):
+            raise _GridPreOrderRejection(GridNoTradeReason.ROUNDED_LEVELS_INVALID)
         adjacent = tuple(buys[index - 1] / buys[index] - _ONE for index in range(1, 6)) + tuple(
             sells[index] / sells[index - 1] - _ONE for index in range(1, 6)
         )
         if any(value < Decimal("0.004") for value in adjacent):
-            raise GridV1Error("adjacent gross return is below 0.004")
+            raise _GridPreOrderRejection(GridNoTradeReason.ADJACENT_RETURN_BELOW_MINIMUM)
         x_lower = lower * Decimal("0.9985")
         x_upper = upper * Decimal("1.0015")
         reserve = Decimal("0.003")
@@ -454,7 +485,7 @@ def _geometry(closes: tuple[Decimal, ...], equity: Decimal) -> GridGeometry:
         q_notional = equity * Decimal("0.80") / all_prices
         quantity = min(q_risk, q_notional).quantize(_QUANTITY_QUANTUM, rounding=ROUND_FLOOR)
         if quantity <= 0 or any(quantity * price < Decimal(5) for price in (*buys, *sells)):
-            raise GridV1Error("rounded quantity violates minimum notional")
+            raise _GridPreOrderRejection(GridNoTradeReason.ORDER_SIZE_BELOW_MINIMUM)
         return GridGeometry(
             centre,
             width,
@@ -467,6 +498,21 @@ def _geometry(closes: tuple[Decimal, ...], equity: Decimal) -> GridGeometry:
             quantity * max(d_long, d_short),
             quantity * all_prices,
         )
+
+
+def _cash_only_geometry(centre: Decimal) -> GridGeometry:
+    return GridGeometry(
+        centre,
+        _ZERO,
+        _ONE,
+        (),
+        (),
+        centre,
+        centre,
+        _ZERO,
+        _ZERO,
+        _ZERO,
+    )
 
 
 def _authorize_plan(
@@ -502,6 +548,7 @@ def _authorize_plan(
             max_daily_loss_fraction=Decimal("0.99"),
             max_drawdown_fraction=Decimal("0.20"),
             max_gross_exposure_fraction=Decimal("0.80"),
+            drawdown_enforcement=RiskDrawdownEnforcement.REPORT_ONLY,
         )
     )
     portfolio = RiskPortfolioSnapshot(
@@ -563,18 +610,32 @@ class GridV1Engine:
                 "Grid contract identity does not match verified runtime/protocol bytes"
             )
         self.contract_identity = expected_contract
-        self.geometry = synthetic_geometry or _geometry(
-            episode.completed_4h_closes, episode.carry_in.current_equity
-        )
-        self.authority = (
-            None if episode.carry_in.terminated else _authorize_plan(episode, self.geometry, health)
-        )
+        self.no_trade_reason: GridNoTradeReason | None = None
+        if episode.carry_in.terminated:
+            self.geometry = _cash_only_geometry(episode.completed_4h_closes[-1])
+            self.authority = None
+            self.state = GridState.TERMINATED
+            self.week_disposition = GridWeekDisposition.TERMINATED_CASH_ONLY
+        else:
+            try:
+                self.geometry = synthetic_geometry or _geometry(
+                    episode.completed_4h_closes, episode.carry_in.current_equity
+                )
+            except _GridPreOrderRejection as rejection:
+                self.geometry = _cash_only_geometry(episode.completed_4h_closes[-1])
+                self.authority = None
+                self.state = GridState.STOPPED
+                self.no_trade_reason = rejection.reason
+                self.week_disposition = GridWeekDisposition.NO_TRADE_CASH_ONLY
+            else:
+                self.authority = _authorize_plan(episode, self.geometry, health)
+                self.state = GridState.ACTIVE
+                self.week_disposition = GridWeekDisposition.GRID_ACTIVE
         if self.authority is not None and (
             self.authority.authorization_status is not OrderIntentAuthorizationStatus.AUTHORIZED
         ):
             raise GridV1Error("Risk/Safety/batch authorization rejected the Grid plan")
         self.accounting = PositionAccountingCore()
-        self.state = GridState.TERMINATED if episode.carry_in.terminated else GridState.ACTIVE
         self.funding_cash = _ZERO
         self.peak_equity = episode.carry_in.peak_equity
         self.last_equity = episode.carry_in.current_cash
@@ -595,7 +656,7 @@ class GridV1Engine:
         self._termination_after_close = False
         self._required_last_minute = episode.episode_start + timedelta(days=6, hours=20, minutes=1)
         due = episode.episode_start + _MINUTE
-        if not episode.carry_in.terminated:
+        if self.state is GridState.ACTIVE:
             for rung, price in enumerate(self.geometry.buys, 1):
                 self._orders[f"ENTRY:BUY:{rung}"] = _GridOrder(
                     f"ENTRY:BUY:{rung}", GridOrderKind.ENTRY, GridSide.BUY, price, rung, due
@@ -605,9 +666,15 @@ class GridV1Engine:
                     f"ENTRY:SELL:{rung}", GridOrderKind.ENTRY, GridSide.SELL, price, rung, due
                 )
             self._record(episode.episode_start, "PLAN_AUTHORIZED")
+        elif self.no_trade_reason is not None:
+            self._record(
+                episode.episode_start,
+                "EPISODE_NO_TRADE_CASH_ONLY",
+                details=("reason", self.no_trade_reason.value),
+            )
         else:
             self._record(episode.episode_start, "TERMINATED_CARRY_IN_CASH_ONLY")
-        if synthetic_geometry is not None:
+        if synthetic_geometry is not None and self.state is GridState.ACTIVE:
             self._record(episode.episode_start, "SYNTHETIC_GEOMETRY_INJECTED")
         for order in self._orders.values():
             self._record(
@@ -1240,11 +1307,27 @@ class GridV1Engine:
             "required_last_minute": self._required_last_minute.isoformat(),
             "required_minute_count": 6 * 24 * 60 + 20 * 60 + 2,
         }
-        geometry = {key: _json_value(value) for key, value in asdict(self.geometry).items()}
-        if self.authority is None:
-            authority: dict[str, object] = {
-                "authorization_status": "TERMINATED_CARRY_IN_NO_PLAN",
+        if self.no_trade_reason is not None:
+            geometry: dict[str, object] = {
+                "status": "REJECTED_PRE_ORDER",
+                "rejection_reason": self.no_trade_reason.value,
             }
+        elif self.week_disposition is GridWeekDisposition.TERMINATED_CASH_ONLY:
+            geometry = {"status": "NOT_EVALUATED_TERMINATED_CARRY"}
+        else:
+            geometry = {
+                "status": "VALID",
+                **{key: _json_value(value) for key, value in asdict(self.geometry).items()},
+            }
+        if self.authority is None:
+            authority_status = (
+                "NO_TRADE_PRE_ORDER_REJECTION"
+                if self.no_trade_reason is not None
+                else "TERMINATED_CARRY_IN_NO_PLAN"
+            )
+            authority: dict[str, object] = {"authorization_status": authority_status}
+            if self.no_trade_reason is not None:
+                authority["rejection_reason"] = self.no_trade_reason.value
         else:
             identity = self.authority.decision_identity
             authority = {
@@ -1263,6 +1346,15 @@ class GridV1Engine:
                     "LONG_ENVELOPE": self.authority.directional_safety_decisions[0].status.value,
                     "SHORT_ENVELOPE": self.authority.directional_safety_decisions[1].status.value,
                 },
+                "drawdown_enforcement": self.authority.directional_risk_decisions[
+                    0
+                ].drawdown_enforcement.value,
+                "reported_peak_equity": str(
+                    self.authority.directional_risk_decisions[0].peak_equity_quote
+                ),
+                "reported_drawdown_fraction": str(
+                    self.authority.directional_risk_decisions[0].drawdown_fraction
+                ),
                 "authorization_status": self.authority.authorization_status.value,
                 "approved_modeled_loss": str(self.authority.approved_modeled_loss),
                 "approved_pending_notional": str(self.authority.approved_pending_notional),
@@ -1298,6 +1390,8 @@ class GridV1Engine:
             self.scenario.value,
             self.episode.episode_start.isoformat(),
             self.completion_status.value,
+            self.week_disposition.value,
+            None if self.no_trade_reason is None else self.no_trade_reason.value,
             carry_in,
             carry_out,
             input_contract,
@@ -1393,11 +1487,13 @@ __all__ = [
     "GridLedgerCarry",
     "GridLedgerSnapshot",
     "GridMinute",
+    "GridNoTradeReason",
     "GridPlanAuthority",
     "GridScenario",
     "GridState",
     "GridV1Engine",
     "GridV1Error",
+    "GridWeekDisposition",
     "grid_runtime_implementation_sha256",
     "healthy_grid_health",
     "run_synthetic_grid_episode",
