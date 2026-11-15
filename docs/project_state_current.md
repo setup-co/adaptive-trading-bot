@@ -1,4 +1,4 @@
-# Current project state — 2026-11-14
+# Current project state — 2026-11-15
 
 This is the live handoff. [`project_state.md`](project_state.md) is a required, hash-bound historical
 snapshot and must remain byte-for-byte unchanged.
@@ -31,6 +31,41 @@ multi-year external history. WEEX remains the intended future execution venue; R
 remain sovereign; Live stays disabled. Existing 15m/runtime strategies and all predecessor evidence
 remain preserved.
 
+## Issue #243 — synthetic-only Grid V1 implementation
+
+- Protocol `0.2.0-proposed` now has a distinct opt-in
+  `0.1.0-synthetic-only` research state machine for supplied BTC/ETH facts. It has no dataset
+  loader, network client, strategy registry hook, or Paper/Shadow/Live activation path.
+- The implementation preserves independent 10,000-USDT symbol ledgers and delegates plan gates,
+  safety, deterministic fill costs, position accounting and decision identity to existing project
+  authorities through narrow adapters. Equal-time accounting transitions require an explicit
+  sequence; every legacy caller retains strict timestamp-only behavior by default.
+- Focused synthetic integration covers the accepted boundary, funding, ownership/netting,
+  post-only, ambiguity, gap, scheduled flatten, termination, idempotence and BASE/STRESS examples.
+  Audit reports retain order/lot provenance, fill/funding/fee decomposition and marked equity.
+- Whole-episode status is explicit: observation begins at Monday 00:00 before the first 00:01
+  activation, proceeds contiguously through the Sunday 20:01 flatten minute, and otherwise reports
+  `PARTIAL_UNRESOLVED` or `INTEGRITY_BLOCKED`. Missing minutes are never treated as flat/no-funding.
+- A typed flat-week carry preserves original capital separately from current cash/equity, cumulative
+  realized PnL, fees, funding, peak equity and permanent termination. Later synthetic weeks must
+  consume the prior weekly carry and cannot reset capital or reopen a terminated symbol.
+- Reports label caller-supplied code SHA separately from the verified runtime module hash and bind
+  accepted protocol HEAD `58f250a86925a48ed338ef716a621a6594e768b9`, protocol-document SHA-256
+  `f0314ed243a2f7784e13d252901802c95b994b59221a2aa67333733be86907fd` and parameter SHA-256
+  `960edccc1c40ed63a780734921494646adb45f5532df8ce7872e502dc94147df`.
+- The Grid Risk adapter uses the existing RiskManager/Safety chain with an explicit opt-in
+  `REPORT_ONLY` drawdown policy: the true running peak/drawdown remains audited, while only the
+  protocol's original-capital 80% floor terminates Grid entry. All legacy RiskManager callers keep
+  the default drawdown entry halt.
+- Protocol-defined pre-order geometry/size rejections produce explicit, denominator-retained
+  `NO_TRADE_CASH_ONLY` weeks with unchanged continuous capital and auditable rejection reasons.
+  Permanently terminated weeks bypass geometry and remain `TERMINATED_CASH_ONLY`. Metadata-
+  ineligible rollover is not implemented by this synthetic engine; a future authorized runner must
+  represent it explicitly and must not fabricate price/MARK/funding continuity.
+- This is implementation preparation only. It is not a historical Grid result, an executable
+  exchange model, a profitability claim, or authorization for Paper, Shadow, Live, deployment or
+  data access. OHLC paths, all-or-unfilled limits and source-venue funding remain modeled proxies.
+
 ## Active task and next gate
 
 Issue #239 completed its bounded acquisition: all 1,312 fixed resources succeeded on their first
@@ -47,6 +82,6 @@ correction now fails closed before network continuation when prior received-byte
 unresolved and durably charges a received block even when it crosses the payload cap; it was
 validated with local fake transports only. No accepted capture or qualification evidence changed.
 
-No strategy evaluation occurred. After data review, a separate issue must freeze the specific
-Grid model, finite capital/risk/inventory rules, 4h decision and 1m standing-order chronology,
-complete costs/funding, terminal valuation and chronological evaluation partitions.
+No Grid strategy evaluation occurred. After independent review of the synthetic-only engine and
+exact CI identity, a separate issue must freeze the executable/input identities and explicitly
+authorize any bounded historical evaluation. No such authorization exists here.
