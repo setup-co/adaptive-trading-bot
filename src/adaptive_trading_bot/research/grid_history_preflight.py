@@ -13,8 +13,9 @@ import json
 from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path
 
 import pyarrow as pa
@@ -28,9 +29,13 @@ from adaptive_trading_bot.research.grid_v1 import (
     GRID_PROTOCOL_DOCUMENT_SHA256,
     GRID_PROTOCOL_VERSION,
     GRID_STRATEGY_ID,
+    GridCompletionStatus,
+    GridEpisodeReport,
     GridFundingEvent,
     GridLedgerCarry,
     GridMinute,
+    GridWeekDisposition,
+    verified_grid_contract_identity,
 )
 
 ACCEPTED_DATASET_VERSION = "binance-usdm-btc-eth-2020-01_2026-10-v1"
@@ -52,6 +57,7 @@ _EPISODE_LAST_MINUTE_OFFSET = timedelta(days=6, hours=20, minutes=1)
 _EPISODE_END_OFFSET = _EPISODE_LAST_MINUTE_OFFSET + _MINUTE
 _COMPONENTS = ("trade_price_1m", "mark_1m", "derived_4h", "funding")
 _SYMBOLS = ("BTCUSDT", "ETHUSDT")
+_RETURN_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 
 
 class GridHistoryPreflightError(RuntimeError):
@@ -67,6 +73,11 @@ class CalendarTransition(StrEnum):
     ELIGIBLE_RESULT = "ELIGIBLE_RESULT"
     INELIGIBLE_CARRY_ONLY = "INELIGIBLE_CARRY_ONLY"
     INTEGRITY_BLOCKED = "INTEGRITY_BLOCKED"
+
+
+class CalendarAuthorityKind(StrEnum):
+    ACCEPTED_V3 = "ACCEPTED_V3"
+    SYNTHETIC_FIXTURE = "SYNTHETIC_FIXTURE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +150,78 @@ class LedgerWeekRecord:
     reason_codes: tuple[str, ...]
     carry_in_sha256: str
     carry_out_sha256: str | None
+    engine_report_sha256: str | None
+    completion_status: str | None
+    week_disposition: str | None
+    no_trade_reason: str | None
+
+
+class VerifiedCalendar:
+    """Exact calendar authority; fixtures require an explicit separate boundary."""
+
+    def __init__(
+        self,
+        rows: tuple[CalendarEpisode, ...],
+        *,
+        kind: CalendarAuthorityKind,
+        identity: str,
+    ) -> None:
+        if not identity:
+            raise GridHistoryPreflightError("calendar authority identity is required")
+        by_key: dict[tuple[str, datetime], CalendarEpisode] = {}
+        by_symbol: dict[str, list[CalendarEpisode]] = {symbol: [] for symbol in _SYMBOLS}
+        for row in rows:
+            key = (row.symbol, row.episode_start)
+            if key in by_key:
+                raise GridHistoryPreflightError("calendar authority contains a duplicate week")
+            by_key[key] = row
+            by_symbol[row.symbol].append(row)
+        for symbol_rows in by_symbol.values():
+            symbol_rows.sort(key=lambda item: item.episode_start)
+            if any(
+                right.episode_start != left.episode_start + timedelta(days=7)
+                for left, right in pairwise(symbol_rows)
+            ):
+                raise GridHistoryPreflightError("calendar authority weeks are not contiguous")
+        if kind is CalendarAuthorityKind.ACCEPTED_V3:
+            if identity != ACCEPTED_CALENDAR_SHA256 or len(rows) != 712:
+                raise GridHistoryPreflightError("accepted calendar authority identity differs")
+            if any(len(by_symbol[symbol]) != 356 for symbol in _SYMBOLS):
+                raise GridHistoryPreflightError(
+                    "accepted calendar must contain 356 weeks per symbol"
+                )
+        elif not identity.startswith("synthetic-fixture-"):
+            raise GridHistoryPreflightError("synthetic calendar identity must be fixture-only")
+        self.rows = rows
+        self.kind = kind
+        self.identity = identity
+        self._by_key = by_key
+        self._by_symbol = {key: tuple(value) for key, value in by_symbol.items()}
+
+    @classmethod
+    def accepted(cls, path: Path) -> VerifiedCalendar:
+        return cls(
+            load_calendar(path),
+            kind=CalendarAuthorityKind.ACCEPTED_V3,
+            identity=ACCEPTED_CALENDAR_SHA256,
+        )
+
+    @classmethod
+    def synthetic(cls, rows: tuple[CalendarEpisode, ...], *, fixture_id: str) -> VerifiedCalendar:
+        return cls(
+            rows,
+            kind=CalendarAuthorityKind.SYNTHETIC_FIXTURE,
+            identity=f"synthetic-fixture-{fixture_id}",
+        )
+
+    def require(self, row: CalendarEpisode) -> CalendarEpisode:
+        expected = self._by_key.get((row.symbol, row.episode_start))
+        if expected is None or expected != row:
+            raise GridHistoryPreflightError("calendar row differs from its exact authority")
+        return expected
+
+    def rows_for(self, symbol: str) -> tuple[CalendarEpisode, ...]:
+        return self._by_symbol[symbol]
 
 
 def canonical_json(value: object) -> bytes:
@@ -218,11 +301,27 @@ def load_calendar(
 class GridCalendarLedger:
     """Minimal chronological symbol/scenario carry contract for a future runner."""
 
-    def __init__(self, symbol: TradingSymbol, scenario: str) -> None:
+    def __init__(
+        self,
+        symbol: TradingSymbol,
+        scenario: str,
+        *,
+        calendar: VerifiedCalendar,
+        expected_source_id: str,
+        expected_supplied_code_sha: str,
+    ) -> None:
         if scenario not in {"BASE", "STRESS"}:
             raise GridHistoryPreflightError("ledger scenario must be BASE or STRESS")
+        if not expected_source_id or not expected_supplied_code_sha:
+            raise GridHistoryPreflightError("ledger execution identities are required")
         self.symbol = symbol
         self.scenario = scenario
+        self.calendar = calendar
+        self.expected_source_id = expected_source_id
+        self.expected_supplied_code_sha = expected_supplied_code_sha
+        self._calendar_rows = calendar.rows_for(str(symbol).replace("/", ""))
+        if not self._calendar_rows:
+            raise GridHistoryPreflightError("calendar has no rows for ledger symbol")
         self.carry = GridLedgerCarry.initial(symbol)
         self.records: list[LedgerWeekRecord] = []
         self.blocked = False
@@ -232,13 +331,12 @@ class GridCalendarLedger:
             raise GridHistoryPreflightError("integrity-blocked ledger cannot advance")
         if row.symbol != str(self.symbol).replace("/", ""):
             raise GridHistoryPreflightError("calendar/ledger symbol differs")
-        expected = (
-            row.episode_start
-            if self.carry.previous_episode_start is None
-            else self.carry.previous_episode_start + timedelta(days=7)
-        )
-        if row.episode_start != expected:
-            raise GridHistoryPreflightError("calendar/ledger week is not contiguous")
+        self.calendar.require(row)
+        if (
+            len(self.records) >= len(self._calendar_rows)
+            or row != self._calendar_rows[len(self.records)]
+        ):
+            raise GridHistoryPreflightError("calendar/ledger row is not the next authorized week")
 
     def advance_ineligible(self, row: CalendarEpisode) -> LedgerWeekRecord:
         self._check_row(row)
@@ -247,18 +345,22 @@ class GridCalendarLedger:
         carry_in = self.carry
         self.carry = replace(carry_in, previous_episode_start=row.episode_start)
         record = LedgerWeekRecord(
-            len(self.records) + 1,
-            row.symbol,
-            self.scenario,
-            row.episode_start.isoformat(),
-            row.partition,
-            row.status.value,
-            CalendarTransition.INELIGIBLE_CARRY_ONLY.value,
-            False,
-            None,
-            row.reason_codes,
-            _carry_sha256(carry_in),
-            _carry_sha256(self.carry),
+            sequence=len(self.records) + 1,
+            symbol=row.symbol,
+            scenario=self.scenario,
+            episode_start=row.episode_start.isoformat(),
+            partition=row.partition,
+            calendar_status=row.status.value,
+            transition=CalendarTransition.INELIGIBLE_CARRY_ONLY.value,
+            included_in_weekly_statistics=False,
+            weekly_return=None,
+            reason_codes=row.reason_codes,
+            carry_in_sha256=_carry_sha256(carry_in),
+            carry_out_sha256=_carry_sha256(self.carry),
+            engine_report_sha256=None,
+            completion_status=None,
+            week_disposition=None,
+            no_trade_reason=None,
         )
         self.records.append(record)
         return record
@@ -267,50 +369,80 @@ class GridCalendarLedger:
         self,
         row: CalendarEpisode,
         *,
+        report: GridEpisodeReport,
         carry_out: GridLedgerCarry,
-        completion_status: str,
     ) -> LedgerWeekRecord:
         self._check_row(row)
         if row.status is not CalendarStatus.METADATA_ELIGIBLE:
             raise GridHistoryPreflightError("eligible result cannot bind an excluded row")
-        if completion_status != "COMPLETE":
-            self.blocked = True
-            record = LedgerWeekRecord(
-                len(self.records) + 1,
-                row.symbol,
-                self.scenario,
-                row.episode_start.isoformat(),
-                row.partition,
-                row.status.value,
-                CalendarTransition.INTEGRITY_BLOCKED.value,
-                False,
-                None,
-                ("EPISODE_NOT_COMPLETE",),
-                _carry_sha256(self.carry),
-                None,
+        if not isinstance(report, GridEpisodeReport):
+            raise GridHistoryPreflightError("eligible result must be a typed Grid engine report")
+        expected_contract = {
+            key: str(value) for key, value in asdict(verified_grid_contract_identity()).items()
+        }
+        expected_report_identity = (
+            report.schema == "btc-eth-grid-v1-synthetic-report"
+            and report.strategy_id == GRID_STRATEGY_ID
+            and report.protocol_version == GRID_PROTOCOL_VERSION
+            and report.engine_version == GRID_ENGINE_VERSION
+            and report.supplied_code_sha == self.expected_supplied_code_sha
+            and report.verified_contract == expected_contract
+            and report.source_id == self.expected_source_id
+            and report.symbol == str(self.symbol)
+            and report.scenario == self.scenario
+            and report.episode_start == row.episode_start.isoformat()
+        )
+        if not expected_report_identity:
+            raise GridHistoryPreflightError("Grid engine report execution identity differs")
+        if report.completion_status != GridCompletionStatus.COMPLETE.value:
+            raise GridHistoryPreflightError("Grid engine report is not complete")
+        try:
+            disposition = GridWeekDisposition(report.week_disposition)
+        except ValueError as exc:
+            raise GridHistoryPreflightError("Grid engine report disposition is invalid") from exc
+        if (
+            (disposition is GridWeekDisposition.GRID_ACTIVE and report.no_trade_reason is not None)
+            or (
+                disposition is GridWeekDisposition.NO_TRADE_CASH_ONLY
+                and report.no_trade_reason is None
             )
-            self.records.append(record)
-            return record
+            or (
+                disposition is GridWeekDisposition.TERMINATED_CASH_ONLY
+                and report.no_trade_reason is not None
+            )
+        ):
+            raise GridHistoryPreflightError("Grid engine report disposition/reason differs")
+        carry_in = self.carry
+        if report.carry_in != _carry_payload(carry_in):
+            raise GridHistoryPreflightError("Grid engine report carry-in differs")
+        if report.carry_out != _carry_payload(carry_out):
+            raise GridHistoryPreflightError("Grid engine report carry-out differs")
+        if carry_out.symbol != self.symbol:
+            raise GridHistoryPreflightError("eligible carry-out has the wrong symbol")
         if carry_out.previous_episode_start != row.episode_start:
             raise GridHistoryPreflightError("eligible carry-out has the wrong week identity")
-        carry_in = self.carry
-        expected_return = (
-            carry_out.current_equity - carry_in.current_equity
-        ) / carry_in.current_equity
+        with localcontext(_RETURN_CONTEXT):
+            expected_return = (
+                carry_out.current_equity - carry_in.current_equity
+            ) / carry_in.current_equity
         self.carry = carry_out
         record = LedgerWeekRecord(
-            len(self.records) + 1,
-            row.symbol,
-            self.scenario,
-            row.episode_start.isoformat(),
-            row.partition,
-            row.status.value,
-            CalendarTransition.ELIGIBLE_RESULT.value,
-            True,
-            str(expected_return),
-            (),
-            _carry_sha256(carry_in),
-            _carry_sha256(carry_out),
+            sequence=len(self.records) + 1,
+            symbol=row.symbol,
+            scenario=self.scenario,
+            episode_start=row.episode_start.isoformat(),
+            partition=row.partition,
+            calendar_status=row.status.value,
+            transition=CalendarTransition.ELIGIBLE_RESULT.value,
+            included_in_weekly_statistics=True,
+            weekly_return=str(expected_return),
+            reason_codes=(),
+            carry_in_sha256=_carry_sha256(carry_in),
+            carry_out_sha256=_carry_sha256(carry_out),
+            engine_report_sha256=report.sha256,
+            completion_status=report.completion_status,
+            week_disposition=disposition.value,
+            no_trade_reason=report.no_trade_reason,
         )
         self.records.append(record)
         return record
@@ -319,9 +451,21 @@ class GridCalendarLedger:
 class V3GridHistoryAdapter:
     """Bounded read-only adapter for an accepted or fixture v3 corpus root."""
 
-    def __init__(self, root: Path, identity: V3SourceIdentity = ACCEPTED_V3_IDENTITY) -> None:
+    def __init__(
+        self,
+        root: Path,
+        identity: V3SourceIdentity = ACCEPTED_V3_IDENTITY,
+        *,
+        calendar: VerifiedCalendar,
+    ) -> None:
+        if identity == ACCEPTED_V3_IDENTITY:
+            if calendar.kind is not CalendarAuthorityKind.ACCEPTED_V3:
+                raise GridHistoryPreflightError("accepted corpus requires the accepted calendar")
+        elif calendar.kind is not CalendarAuthorityKind.SYNTHETIC_FIXTURE:
+            raise GridHistoryPreflightError("fixture corpus requires a fixture-only calendar")
         self.root = root.resolve(strict=True)
         self.identity = identity
+        self.calendar = calendar
         manifest_path = self.root / "qualification-manifest-v3.json"
         report_path = self.root / "publication-report-v3.json"
         if sha256_file(manifest_path) != identity.manifest_sha256:
@@ -441,6 +585,7 @@ class V3GridHistoryAdapter:
     def load_week(self, row: CalendarEpisode) -> GridHistoryWeek:
         """Read exactly one eligible week after validating every source file hash."""
 
+        row = self.calendar.require(row)
         if row.status is not CalendarStatus.METADATA_ELIGIBLE:
             raise GridHistoryPreflightError("market rows may not be read for an excluded week")
         if not self._source_preflight_complete:
@@ -570,7 +715,8 @@ def metadata_only_preflight(repo: Path, data_root: Path | None = None) -> dict[s
         or plan.get("status") != "LOCKED_PROPOSED_NOT_AUTHORIZED"
     ):
         raise GridHistoryPreflightError("history study plan identity differs")
-    rows = load_calendar(calendar_path)
+    calendar = VerifiedCalendar.accepted(calendar_path)
+    rows = calendar.rows
     counts = {
         symbol: {
             status.value: sum(1 for row in rows if row.symbol == symbol and row.status is status)
@@ -600,7 +746,7 @@ def metadata_only_preflight(repo: Path, data_root: Path | None = None) -> dict[s
     }
     if data_root is None:
         return result
-    adapter = V3GridHistoryAdapter(data_root)
+    adapter = V3GridHistoryAdapter(data_root, calendar=calendar)
     validated, bytes_validated = adapter.preflight_sources()
     result.update(
         {
@@ -694,6 +840,7 @@ __all__ = [
     "STUDY_ID",
     "STUDY_PLAN_SHA256",
     "STUDY_PLAN_VERSION",
+    "CalendarAuthorityKind",
     "CalendarEpisode",
     "CalendarStatus",
     "GridCalendarLedger",
@@ -702,6 +849,7 @@ __all__ = [
     "LedgerWeekRecord",
     "V3GridHistoryAdapter",
     "V3SourceIdentity",
+    "VerifiedCalendar",
     "calendar_episode",
     "canonical_json",
     "load_calendar",

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Context, Decimal, localcontext
 from pathlib import Path
 
 import pyarrow as pa
@@ -23,12 +24,14 @@ from adaptive_trading_bot.research.grid_history_preflight import (
     GridHistoryPreflightError,
     V3GridHistoryAdapter,
     V3SourceIdentity,
+    VerifiedCalendar,
     load_calendar,
     metadata_only_preflight,
     refuse_historical_execution,
 )
 from adaptive_trading_bot.research.grid_v1 import (
     GridEpisodeInput,
+    GridLedgerCarry,
     GridScenario,
     GridV1Engine,
     healthy_grid_health,
@@ -160,56 +163,67 @@ def _fixture(root: Path) -> tuple[V3SourceIdentity, CalendarEpisode]:
     return identity, calendar
 
 
-def test_fixture_adapter_actual_engine_and_calendar_ledger_round_trip(tmp_path: Path) -> None:
-    identity, calendar = _fixture(tmp_path)
-    adapter = V3GridHistoryAdapter(tmp_path, identity)
+def _excluded_after(row: CalendarEpisode) -> CalendarEpisode:
+    return CalendarEpisode(
+        row.symbol,
+        row.episode_start + timedelta(days=7),
+        CalendarStatus.METADATA_INELIGIBLE,
+        row.partition,
+        row.warmup_start + timedelta(days=7),
+        row.required_data_end_exclusive + timedelta(days=7),
+        ("REQUIRED_ACTIVE_MARK_GAP",),
+        (),
+    )
+
+
+def _completed_fixture(
+    root: Path,
+) -> tuple[CalendarEpisode, CalendarEpisode, VerifiedCalendar, GridV1Engine]:
+    identity, eligible = _fixture(root)
+    excluded = _excluded_after(eligible)
+    calendar = VerifiedCalendar.synthetic((eligible, excluded), fixture_id="grid-history")
+    adapter = V3GridHistoryAdapter(root, identity, calendar=calendar)
     assert adapter.preflight_sources()[0] == 4
-    week = adapter.load_week(calendar)
-
-    assert len(week.completed_4h_closes) == 42
-    assert len(week.minutes) == 9_842
-    event = next(minute.funding_events[0] for minute in week.minutes if minute.funding_events)
-    assert event.observed_at.microsecond == 17_000
-    assert event.mark_observed_at == event.observed_at.replace(second=0, microsecond=0)
-    assert len(week.source_file_sha256) == 4
-
+    week = adapter.load_week(eligible)
     symbol = TradingSymbol("BTC", "USDT")
     episode = GridEpisodeInput(
         SourceId("synthetic-grid-history-fixture"),
         symbol,
-        calendar.episode_start,
+        eligible.episode_start,
         week.completed_4h_closes,
         "fixture-code-sha",
         verified_grid_contract_identity(),
-        GridCalendarLedger(symbol, "BASE").carry,
+        GridLedgerCarry.initial(symbol),
     )
     engine = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
     for minute in week.minutes:
         engine.process_minute(minute)
+    return eligible, excluded, calendar, engine
+
+
+def test_fixture_adapter_actual_engine_and_calendar_ledger_round_trip(tmp_path: Path) -> None:
+    calendar, excluded, authority, engine = _completed_fixture(tmp_path)
+    symbol = TradingSymbol("BTC", "USDT")
     report = engine.report()
     assert report.completion_status == "COMPLETE"
     assert report.input_contract["processed_minute_count"] == 9_842
     assert report.carry_out is not None
 
-    ledger = GridCalendarLedger(symbol, "BASE")
+    ledger = GridCalendarLedger(
+        symbol,
+        "BASE",
+        calendar=authority,
+        expected_source_id="synthetic-grid-history-fixture",
+        expected_supplied_code_sha="fixture-code-sha",
+    )
     completed = ledger.advance_eligible(
         calendar,
+        report=report,
         carry_out=engine.carry_out(),
-        completion_status=report.completion_status,
     )
     assert completed.included_in_weekly_statistics is True
     assert Decimal(completed.weekly_return or "NaN") == 0
 
-    excluded = CalendarEpisode(
-        "BTCUSDT",
-        calendar.episode_start + timedelta(days=7),
-        CalendarStatus.METADATA_INELIGIBLE,
-        "VALIDATION",
-        calendar.warmup_start + timedelta(days=7),
-        calendar.required_data_end_exclusive + timedelta(days=7),
-        ("REQUIRED_ACTIVE_MARK_GAP",),
-        (),
-    )
     skipped = ledger.advance_ineligible(excluded)
     assert skipped.included_in_weekly_statistics is False
     assert skipped.weekly_return is None
@@ -222,7 +236,8 @@ def test_adapter_rejects_hash_change_before_parquet_value_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     identity, calendar = _fixture(tmp_path)
-    adapter = V3GridHistoryAdapter(tmp_path, identity)
+    authority = VerifiedCalendar.synthetic((calendar,), fixture_id="hash-change")
+    adapter = V3GridHistoryAdapter(tmp_path, identity, calendar=authority)
     adapter.preflight_sources()
     path = tmp_path / "derived-generations/v3/normalized/derived_4h/BTCUSDT/2026-01.parquet"
     path.write_bytes(path.read_bytes() + b"changed")
@@ -241,7 +256,8 @@ def test_adapter_rejects_hash_change_before_parquet_value_read(
 
 def test_eligible_value_read_requires_source_wide_preflight(tmp_path: Path) -> None:
     identity, calendar = _fixture(tmp_path)
-    adapter = V3GridHistoryAdapter(tmp_path, identity)
+    authority = VerifiedCalendar.synthetic((calendar,), fixture_id="preflight-required")
+    adapter = V3GridHistoryAdapter(tmp_path, identity, calendar=authority)
     with pytest.raises(GridHistoryPreflightError, match="source-wide"):
         adapter.load_week(calendar)
 
@@ -250,7 +266,6 @@ def test_ineligible_week_never_reads_market_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     identity, eligible = _fixture(tmp_path)
-    adapter = V3GridHistoryAdapter(tmp_path, identity)
     excluded = CalendarEpisode(
         eligible.symbol,
         eligible.episode_start,
@@ -261,33 +276,166 @@ def test_ineligible_week_never_reads_market_rows(
         ("REQUIRED_ACTIVE_MARK_GAP",),
         (),
     )
+    authority = VerifiedCalendar.synthetic((excluded,), fixture_id="excluded")
+    adapter = V3GridHistoryAdapter(tmp_path, identity, calendar=authority)
     monkeypatch.setattr(adapter, "_rows", lambda *args, **kwargs: pytest.fail("value read"))
     with pytest.raises(GridHistoryPreflightError, match="excluded week"):
         adapter.load_week(excluded)
 
 
-def test_incomplete_eligible_result_blocks_continuation() -> None:
-    start = datetime(2026, 1, 12, tzinfo=UTC)
-    row = CalendarEpisode(
-        "ETHUSDT",
-        start,
-        CalendarStatus.METADATA_ELIGIBLE,
-        "VALIDATION",
-        start - timedelta(days=7),
-        start + timedelta(days=6, hours=20, minutes=2),
-        (),
-        (),
+def test_eligible_result_rejects_mismatched_report_and_carry_before_mutation(
+    tmp_path: Path,
+) -> None:
+    row, _, authority, engine = _completed_fixture(tmp_path)
+    report = engine.report()
+    carry = engine.carry_out()
+    symbol = TradingSymbol("BTC", "USDT")
+
+    def ledger() -> GridCalendarLedger:
+        return GridCalendarLedger(
+            symbol,
+            "BASE",
+            calendar=authority,
+            expected_source_id="synthetic-grid-history-fixture",
+            expected_supplied_code_sha="fixture-code-sha",
+        )
+
+    mismatches = (
+        replace(report, scenario="STRESS"),
+        replace(report, source_id="synthetic-forged"),
+        replace(report, episode_start=(row.episode_start + timedelta(days=7)).isoformat()),
+        replace(
+            report, verified_contract={**report.verified_contract, "parameters_sha256": "0" * 64}
+        ),
+        replace(report, carry_in={**report.carry_in, "current_cash": "20000"}),
     )
-    ledger = GridCalendarLedger(TradingSymbol("ETH", "USDT"), "STRESS")
-    record = ledger.advance_eligible(
-        row,
-        carry_out=ledger.carry,
-        completion_status="PARTIAL_UNRESOLVED",
+    for mismatched in mismatches:
+        candidate = ledger()
+        with pytest.raises(GridHistoryPreflightError):
+            candidate.advance_eligible(row, report=mismatched, carry_out=carry)
+        assert candidate.records == []
+        assert candidate.carry == GridLedgerCarry.initial(symbol)
+
+    fabricated = replace(
+        carry,
+        current_cash=Decimal("20000"),
+        current_equity=Decimal("20000"),
+        cumulative_gross_realized_pnl=Decimal("10000"),
+        peak_equity=Decimal("20000"),
     )
-    assert record.transition == "INTEGRITY_BLOCKED"
-    assert record.carry_out_sha256 is None
-    with pytest.raises(GridHistoryPreflightError, match="cannot advance"):
-        ledger.advance_eligible(row, carry_out=ledger.carry, completion_status="COMPLETE")
+    candidate = ledger()
+    with pytest.raises(GridHistoryPreflightError, match="carry-out differs"):
+        candidate.advance_eligible(row, report=report, carry_out=fabricated)
+    assert candidate.records == []
+
+    wrong_symbol = replace(carry, symbol=TradingSymbol("ETH", "USDT"))
+    candidate = ledger()
+    with pytest.raises(GridHistoryPreflightError):
+        candidate.advance_eligible(row, report=report, carry_out=wrong_symbol)
+    assert candidate.records == []
+
+
+def test_calendar_authority_rejects_forged_rows_before_reads_or_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity, eligible = _fixture(tmp_path)
+    excluded = _excluded_after(eligible)
+    authority = VerifiedCalendar.synthetic((eligible, excluded), fixture_id="membership")
+    adapter = V3GridHistoryAdapter(tmp_path, identity, calendar=authority)
+    forged_excluded = replace(
+        eligible,
+        status=CalendarStatus.METADATA_INELIGIBLE,
+        reason_codes=("REQUIRED_ACTIVE_MARK_GAP",),
+    )
+    forged_eligible = replace(
+        excluded,
+        status=CalendarStatus.METADATA_ELIGIBLE,
+        reason_codes=(),
+    )
+    monkeypatch.setattr(adapter, "_rows", lambda *args, **kwargs: pytest.fail("value read"))
+    for forged in (forged_excluded, forged_eligible):
+        with pytest.raises(GridHistoryPreflightError, match="exact authority"):
+            adapter.load_week(forged)
+    altered_reason = replace(excluded, reason_codes=("REQUIRED_TRADE_GAP",))
+    with pytest.raises(GridHistoryPreflightError, match="exact authority"):
+        adapter.load_week(altered_reason)
+
+    ledger = GridCalendarLedger(
+        TradingSymbol("BTC", "USDT"),
+        "BASE",
+        calendar=authority,
+        expected_source_id="fixture-source",
+        expected_supplied_code_sha="fixture-sha",
+    )
+    altered = replace(excluded, partition="ALTERED")
+    with pytest.raises(GridHistoryPreflightError, match="exact authority"):
+        ledger.advance_ineligible(altered)
+    with pytest.raises(GridHistoryPreflightError, match="exact authority"):
+        ledger.advance_ineligible(forged_excluded)
+    altered_date = replace(
+        eligible,
+        episode_start=eligible.episode_start + timedelta(days=14),
+        warmup_start=eligible.warmup_start + timedelta(days=14),
+        required_data_end_exclusive=eligible.required_data_end_exclusive + timedelta(days=14),
+    )
+    with pytest.raises(GridHistoryPreflightError, match="exact authority"):
+        ledger.advance_ineligible(replace(altered_date, status=CalendarStatus.METADATA_INELIGIBLE))
+    assert ledger.records == []
+
+
+def test_fixture_and_accepted_calendar_authorities_cannot_be_interchanged(tmp_path: Path) -> None:
+    identity, eligible = _fixture(tmp_path)
+    accepted = VerifiedCalendar.accepted(
+        REPO / "docs/research/btc_eth_grid_4h_v1_eligibility_calendar.json"
+    )
+    assert accepted.kind.value == "ACCEPTED_V3"
+    assert len(accepted.rows_for("BTCUSDT")) == 356
+    assert len(accepted.rows_for("ETHUSDT")) == 356
+    with pytest.raises(GridHistoryPreflightError, match="fixture-only"):
+        V3GridHistoryAdapter(tmp_path, identity, calendar=accepted)
+
+    fixture = VerifiedCalendar.synthetic((eligible,), fixture_id="mode-boundary")
+    with pytest.raises(GridHistoryPreflightError, match="accepted calendar"):
+        V3GridHistoryAdapter(tmp_path, ACCEPTED_V3_IDENTITY, calendar=fixture)
+
+
+def test_weekly_return_is_independent_of_ambient_decimal_context(tmp_path: Path) -> None:
+    row, _, authority, engine = _completed_fixture(tmp_path)
+    base_report = engine.report()
+    base_carry = engine.carry_out()
+    value = Decimal("10000.123456789012345678901234567890123456789")
+    gain = Decimal("0.123456789012345678901234567890123456789")
+    with localcontext(Context(prec=60)):
+        carry = replace(
+            base_carry,
+            current_cash=value,
+            current_equity=value,
+            cumulative_gross_realized_pnl=gain,
+            peak_equity=value,
+        )
+    assert base_report.carry_out is not None
+    payload = {
+        **base_report.carry_out,
+        "current_cash": str(value),
+        "current_equity": str(value),
+        "cumulative_gross_realized_pnl": str(gain),
+        "peak_equity": str(value),
+    }
+    report = replace(base_report, carry_out=payload)
+
+    results: list[tuple[str, str]] = []
+    for context in (Context(prec=7, rounding=ROUND_DOWN), Context(prec=55, rounding=ROUND_UP)):
+        ledger = GridCalendarLedger(
+            TradingSymbol("BTC", "USDT"),
+            "BASE",
+            calendar=authority,
+            expected_source_id="synthetic-grid-history-fixture",
+            expected_supplied_code_sha="fixture-code-sha",
+        )
+        with localcontext(context):
+            record = ledger.advance_eligible(row, report=report, carry_out=carry)
+        results.append((record.weekly_return or "", _canonical(asdict(record)).decode()))
+    assert results[0] == results[1]
 
 
 def test_accepted_calendar_and_inert_preflight_are_exact() -> None:
