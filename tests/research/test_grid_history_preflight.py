@@ -18,6 +18,7 @@ from adaptive_trading_bot.research.grid_history_preflight import (
     ACCEPTED_ROW_SCHEMA,
     ACCEPTED_V3_IDENTITY,
     STUDY_PLAN_SHA256,
+    CalendarAuthorityKind,
     CalendarEpisode,
     CalendarStatus,
     GridCalendarLedger,
@@ -397,6 +398,60 @@ def test_fixture_and_accepted_calendar_authorities_cannot_be_interchanged(tmp_pa
     fixture = VerifiedCalendar.synthetic((eligible,), fixture_id="mode-boundary")
     with pytest.raises(GridHistoryPreflightError, match="accepted calendar"):
         V3GridHistoryAdapter(tmp_path, ACCEPTED_V3_IDENTITY, calendar=fixture)
+
+
+def test_accepted_calendar_requires_original_sha_verified_bytes(tmp_path: Path) -> None:
+    path = REPO / "docs/research/btc_eth_grid_4h_v1_eligibility_calendar.json"
+    rows = load_calendar(path)
+    excluded_index = next(
+        index for index, row in enumerate(rows) if row.status is CalendarStatus.METADATA_INELIGIBLE
+    )
+    forged_rows = list(rows)
+    forged_rows[excluded_index] = replace(
+        forged_rows[excluded_index],
+        status=CalendarStatus.METADATA_ELIGIBLE,
+        reason_codes=(),
+    )
+    assert len(forged_rows) == 712
+    altered_rows = (
+        tuple(forged_rows),
+        tuple(
+            replace(row, reason_codes=("ALTERED_REASON",)) if index == excluded_index else row
+            for index, row in enumerate(rows)
+        ),
+        tuple(
+            replace(row, flag_codes=("ALTERED_FLAG",)) if index == excluded_index else row
+            for index, row in enumerate(rows)
+        ),
+        tuple(
+            replace(row, partition="ALTERED_PARTITION") if index == excluded_index else row
+            for index, row in enumerate(rows)
+        ),
+    )
+    for candidate_rows in altered_rows:
+        with pytest.raises(GridHistoryPreflightError, match="verified factory"):
+            VerifiedCalendar(
+                candidate_rows,
+                kind=CalendarAuthorityKind.ACCEPTED_V3,
+                identity=ACCEPTED_CALENDAR_SHA256,
+            )
+
+    payload = json.loads(path.read_bytes())
+    assert isinstance(payload, dict)
+    episodes = payload["episodes"]
+    assert isinstance(episodes, list)
+    forged_payload_row = episodes[excluded_index]
+    assert isinstance(forged_payload_row, dict)
+    forged_payload_row["status"] = CalendarStatus.METADATA_ELIGIBLE.value
+    forged_payload_row["reason_codes"] = []
+    forged_path = tmp_path / "forged-calendar.json"
+    forged_path.write_bytes(_canonical(payload))
+    with pytest.raises(GridHistoryPreflightError, match="hash differs"):
+        VerifiedCalendar.accepted(forged_path)
+
+    genuine = VerifiedCalendar.accepted(path)
+    assert genuine.identity == ACCEPTED_CALENDAR_SHA256
+    assert genuine.rows == rows
 
 
 def test_weekly_return_is_independent_of_ambient_decimal_context(tmp_path: Path) -> None:

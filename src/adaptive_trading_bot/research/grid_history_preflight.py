@@ -159,13 +159,20 @@ class LedgerWeekRecord:
 class VerifiedCalendar:
     """Exact calendar authority; fixtures require an explicit separate boundary."""
 
+    __factory_token = object()
+
     def __init__(
         self,
         rows: tuple[CalendarEpisode, ...],
         *,
         kind: CalendarAuthorityKind,
         identity: str,
+        _factory_token: object | None = None,
     ) -> None:
+        if _factory_token is not VerifiedCalendar.__factory_token:
+            raise GridHistoryPreflightError(
+                "calendar authority must be established by a verified factory"
+            )
         if not identity:
             raise GridHistoryPreflightError("calendar authority identity is required")
         by_key: dict[tuple[str, datetime], CalendarEpisode] = {}
@@ -204,6 +211,7 @@ class VerifiedCalendar:
             load_calendar(path),
             kind=CalendarAuthorityKind.ACCEPTED_V3,
             identity=ACCEPTED_CALENDAR_SHA256,
+            _factory_token=cls.__factory_token,
         )
 
     @classmethod
@@ -212,6 +220,7 @@ class VerifiedCalendar:
             rows,
             kind=CalendarAuthorityKind.SYNTHETIC_FIXTURE,
             identity=f"synthetic-fixture-{fixture_id}",
+            _factory_token=cls.__factory_token,
         )
 
     def require(self, row: CalendarEpisode) -> CalendarEpisode:
