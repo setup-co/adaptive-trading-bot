@@ -21,6 +21,7 @@ from decimal import (
 from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
+from pathlib import Path
 
 from adaptive_trading_bot.accounting import (
     PositionAccountingCore,
@@ -64,6 +65,9 @@ _MINUTE = timedelta(minutes=1)
 GRID_STRATEGY_ID = "BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1"
 GRID_PROTOCOL_VERSION = "0.2.0-proposed"
 GRID_ENGINE_VERSION = "0.1.0-synthetic-only"
+GRID_ACCEPTED_PROTOCOL_HEAD = "58f250a86925a48ed338ef716a621a6594e768b9"
+GRID_PROTOCOL_DOCUMENT_SHA256 = "f0314ed243a2f7784e13d252901802c95b994b59221a2aa67333733be86907fd"
+GRID_PARAMETERS_SHA256 = "960edccc1c40ed63a780734921494646adb45f5532df8ce7872e502dc94147df"
 
 
 class GridV1Error(ValueError):
@@ -80,6 +84,12 @@ class GridState(StrEnum):
     STOPPED = "STOPPED"
     TERMINATION_PENDING = "TERMINATION_PENDING"
     TERMINATED = "TERMINATED"
+    INTEGRITY_BLOCKED = "INTEGRITY_BLOCKED"
+
+
+class GridCompletionStatus(StrEnum):
+    COMPLETE = "COMPLETE"
+    PARTIAL_UNRESOLVED = "PARTIAL_UNRESOLVED"
     INTEGRITY_BLOCKED = "INTEGRITY_BLOCKED"
 
 
@@ -110,13 +120,104 @@ _COSTS = {
 
 
 @dataclass(frozen=True, slots=True)
+class GridContractIdentity:
+    accepted_protocol_head: str
+    protocol_document_sha256: str
+    parameters_sha256: str
+    runtime_implementation_sha256: str
+
+
+def grid_runtime_implementation_sha256() -> str:
+    """Hash the implementation bytes actually imported by this process."""
+
+    return sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def verified_grid_contract_identity() -> GridContractIdentity:
+    """Return the exact accepted protocol binding plus observed implementation bytes."""
+
+    return GridContractIdentity(
+        GRID_ACCEPTED_PROTOCOL_HEAD,
+        GRID_PROTOCOL_DOCUMENT_SHA256,
+        GRID_PARAMETERS_SHA256,
+        grid_runtime_implementation_sha256(),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GridLedgerCarry:
+    symbol: TradingSymbol
+    original_account_capital: Decimal
+    current_cash: Decimal
+    current_equity: Decimal
+    cumulative_gross_realized_pnl: Decimal
+    cumulative_fees: Decimal
+    cumulative_funding: Decimal
+    peak_equity: Decimal
+    terminated: bool
+    previous_episode_start: datetime | None
+
+    def __post_init__(self) -> None:
+        if self.symbol not in {TradingSymbol("BTC", "USDT"), TradingSymbol("ETH", "USDT")}:
+            raise GridV1Error("Grid carry supports only BTC/USDT and ETH/USDT")
+        if self.original_account_capital != Decimal("10000"):
+            raise GridV1Error("original account capital is immutable at 10000 USDT")
+        values = (
+            self.current_cash,
+            self.current_equity,
+            self.cumulative_gross_realized_pnl,
+            self.cumulative_fees,
+            self.cumulative_funding,
+            self.peak_equity,
+        )
+        if any(not value.is_finite() for value in values):
+            raise GridV1Error("carry economics must be finite")
+        if (
+            self.current_cash <= 0
+            or self.current_equity != self.current_cash
+            or self.peak_equity < self.current_equity
+        ):
+            raise GridV1Error("carry cash/peak equity is invalid")
+        expected_cash = (
+            self.original_account_capital
+            + self.cumulative_gross_realized_pnl
+            - self.cumulative_fees
+            + self.cumulative_funding
+        )
+        if self.current_cash != expected_cash:
+            raise GridV1Error("carry economics do not reconcile to current cash")
+        if self.previous_episode_start is not None:
+            object.__setattr__(
+                self,
+                "previous_episode_start",
+                require_utc(self.previous_episode_start, field="previous_episode_start"),
+            )
+
+    @classmethod
+    def initial(cls, symbol: TradingSymbol) -> GridLedgerCarry:
+        return cls(
+            symbol,
+            Decimal("10000"),
+            Decimal("10000"),
+            Decimal("10000"),
+            _ZERO,
+            _ZERO,
+            _ZERO,
+            Decimal("10000"),
+            False,
+            None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class GridEpisodeInput:
     source_id: SourceId
     symbol: TradingSymbol
     episode_start: datetime
     completed_4h_closes: tuple[Decimal, ...]
     code_sha: str
-    initial_capital: Decimal = Decimal("10000")
+    contract_identity: GridContractIdentity
+    carry_in: GridLedgerCarry
 
     def __post_init__(self) -> None:
         start = require_utc(self.episode_start, field="episode_start")
@@ -131,8 +232,13 @@ class GridEpisodeInput:
             raise GridV1Error("4h closes must be finite and positive")
         if not self.code_sha or self.code_sha.strip() != self.code_sha:
             raise GridV1Error("code_sha must be canonical non-empty text")
-        if not self.initial_capital.is_finite() or self.initial_capital != Decimal("10000"):
-            raise GridV1Error("Grid V1 initial capital is exactly 10000 USDT")
+        if self.carry_in.symbol != self.symbol:
+            raise GridV1Error("carry symbol does not match episode symbol")
+        if self.carry_in.previous_episode_start is None:
+            if self.carry_in != GridLedgerCarry.initial(self.symbol):
+                raise GridV1Error("first episode must use the exact initial carry")
+        elif self.episode_start != self.carry_in.previous_episode_start + timedelta(days=7):
+            raise GridV1Error("carry must advance by exactly one weekly episode")
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,11 +361,15 @@ class GridEpisodeReport:
     strategy_id: str
     protocol_version: str
     engine_version: str
-    code_sha: str
+    supplied_code_sha: str
+    verified_contract: dict[str, str]
     source_id: str
     symbol: str
     scenario: str
     episode_start: str
+    completion_status: str
+    carry_in: dict[str, object]
+    carry_out: dict[str, object] | None
     input_contract: dict[str, object]
     geometry: dict[str, object]
     authority: dict[str, object]
@@ -397,9 +507,9 @@ def _authorize_plan(
     portfolio = RiskPortfolioSnapshot(
         observed_at=episode.episode_start,
         quote_currency="USDT",
-        account_equity_quote=episode.initial_capital,
-        day_start_equity_quote=episode.initial_capital,
-        peak_equity_quote=episode.initial_capital,
+        account_equity_quote=episode.carry_in.current_equity,
+        day_start_equity_quote=episode.carry_in.current_equity,
+        peak_equity_quote=episode.carry_in.peak_equity,
     )
     risks = tuple(risk_manager.evaluate(evaluation, portfolio) for evaluation in evaluations)
     safety_gate = OperationalSafetyGate(OperationalSafetyConfiguration())
@@ -407,8 +517,8 @@ def _authorize_plan(
     approved = (
         all(risk.status is RiskDecisionStatus.APPROVED for risk in risks)
         and all(safety.status is OperationalSafetyStatus.CLEARED for safety in safeties)
-        and geometry.modeled_boundary_loss <= episode.initial_capital * Decimal("0.01")
-        and geometry.aggregate_pending_notional <= episode.initial_capital * Decimal("0.80")
+        and geometry.modeled_boundary_loss <= episode.carry_in.current_equity * Decimal("0.01")
+        and geometry.aggregate_pending_notional <= episode.carry_in.current_equity * Decimal("0.80")
     )
     identity = DecisionIdentity(
         episode.source_id,
@@ -447,17 +557,27 @@ class GridV1Engine:
         self.costs = _COSTS[scenario]
         if not episode.source_id.value.startswith("synthetic-"):
             raise GridV1Error("Grid V1 engine accepts only explicit synthetic source identities")
+        expected_contract = verified_grid_contract_identity()
+        if episode.contract_identity != expected_contract:
+            raise GridV1Error(
+                "Grid contract identity does not match verified runtime/protocol bytes"
+            )
+        self.contract_identity = expected_contract
         self.geometry = synthetic_geometry or _geometry(
-            episode.completed_4h_closes, episode.initial_capital
+            episode.completed_4h_closes, episode.carry_in.current_equity
         )
-        self.authority = _authorize_plan(episode, self.geometry, health)
-        if self.authority.authorization_status is not OrderIntentAuthorizationStatus.AUTHORIZED:
+        self.authority = (
+            None if episode.carry_in.terminated else _authorize_plan(episode, self.geometry, health)
+        )
+        if self.authority is not None and (
+            self.authority.authorization_status is not OrderIntentAuthorizationStatus.AUTHORIZED
+        ):
             raise GridV1Error("Risk/Safety/batch authorization rejected the Grid plan")
         self.accounting = PositionAccountingCore()
-        self.state = GridState.ACTIVE
+        self.state = GridState.TERMINATED if episode.carry_in.terminated else GridState.ACTIVE
         self.funding_cash = _ZERO
-        self.peak_equity = episode.initial_capital
-        self.last_equity = episode.initial_capital
+        self.peak_equity = episode.carry_in.peak_equity
+        self.last_equity = episode.carry_in.current_cash
         self.last_mark = self.geometry.centre
         self.last_minute_start: datetime | None = None
         self.previous_close = self.geometry.centre
@@ -473,16 +593,20 @@ class GridV1Engine:
         self._batch_sequences: dict[datetime, int] = {}
         self._forced_close_due: datetime | None = None
         self._termination_after_close = False
+        self._required_last_minute = episode.episode_start + timedelta(days=6, hours=20, minutes=1)
         due = episode.episode_start + _MINUTE
-        for rung, price in enumerate(self.geometry.buys, 1):
-            self._orders[f"ENTRY:BUY:{rung}"] = _GridOrder(
-                f"ENTRY:BUY:{rung}", GridOrderKind.ENTRY, GridSide.BUY, price, rung, due
-            )
-        for rung, price in enumerate(self.geometry.sells, 1):
-            self._orders[f"ENTRY:SELL:{rung}"] = _GridOrder(
-                f"ENTRY:SELL:{rung}", GridOrderKind.ENTRY, GridSide.SELL, price, rung, due
-            )
-        self._record(episode.episode_start, "PLAN_AUTHORIZED")
+        if not episode.carry_in.terminated:
+            for rung, price in enumerate(self.geometry.buys, 1):
+                self._orders[f"ENTRY:BUY:{rung}"] = _GridOrder(
+                    f"ENTRY:BUY:{rung}", GridOrderKind.ENTRY, GridSide.BUY, price, rung, due
+                )
+            for rung, price in enumerate(self.geometry.sells, 1):
+                self._orders[f"ENTRY:SELL:{rung}"] = _GridOrder(
+                    f"ENTRY:SELL:{rung}", GridOrderKind.ENTRY, GridSide.SELL, price, rung, due
+                )
+            self._record(episode.episode_start, "PLAN_AUTHORIZED")
+        else:
+            self._record(episode.episode_start, "TERMINATED_CARRY_IN_CASH_ONLY")
         if synthetic_geometry is not None:
             self._record(episode.episode_start, "SYNTHETIC_GEOMETRY_INJECTED")
         for order in self._orders.values():
@@ -496,6 +620,14 @@ class GridV1Engine:
     @property
     def audit(self) -> tuple[GridAuditEvent, ...]:
         return tuple(self._audit)
+
+    @property
+    def completion_status(self) -> GridCompletionStatus:
+        if self.state is GridState.INTEGRITY_BLOCKED:
+            return GridCompletionStatus.INTEGRITY_BLOCKED
+        if self.last_minute_start == self._required_last_minute:
+            return GridCompletionStatus.COMPLETE
+        return GridCompletionStatus.PARTIAL_UNRESOLVED
 
     def _record(
         self,
@@ -559,9 +691,14 @@ class GridV1Engine:
             if previous != fingerprint:
                 self._block(minute.start, "CONFLICTING_REPEATED_MINUTE")
             return self.snapshot()
-        if self.state in {GridState.TERMINATED, GridState.INTEGRITY_BLOCKED}:
+        if self.state is GridState.INTEGRITY_BLOCKED:
             return self.snapshot()
-        if self.last_minute_start is not None and minute.start != self.last_minute_start + _MINUTE:
+        expected_start = (
+            self.episode.episode_start
+            if self.last_minute_start is None
+            else self.last_minute_start + _MINUTE
+        )
+        if minute.start != expected_start or minute.start > self._required_last_minute:
             self._block(minute.start, "NON_CONTIGUOUS_MINUTE")
             return self.snapshot()
         if (
@@ -581,32 +718,29 @@ class GridV1Engine:
             self._block(minute.start, "FUNDING_OUTSIDE_MINUTE")
             return self.snapshot()
         for event in events:
-            if event.observed_at == minute.start:
-                self._apply_funding(event)
-        if self.state is GridState.INTEGRITY_BLOCKED:
-            return self.snapshot()
+            if event.observed_at == minute.start and not self._apply_funding(event):
+                return self.snapshot()
 
-        scheduled_flatten = self.episode.episode_start + timedelta(days=6, hours=20, minutes=1)
-        if minute.start == scheduled_flatten:
+        observation_prefix = minute.start == self.episode.episode_start
+        if minute.start == self._required_last_minute:
             self._cancel_all(minute.start, "SCHEDULED_FLATTEN")
             self._force_close(minute.open, minute.start, "SCHEDULED_FLATTEN")
-            self.state = GridState.STOPPED
+            if self.state is not GridState.TERMINATED:
+                self.state = GridState.STOPPED
         elif self._forced_close_due == minute.start:
             self._cancel_all(minute.start, "ORIGINAL_CAPITAL_FLOOR")
             self._force_close(minute.open, minute.start, "ORIGINAL_CAPITAL_FLOOR")
             self.state = GridState.TERMINATED
-        elif self.state is GridState.ACTIVE:
+        elif self.state is GridState.ACTIVE and not observation_prefix:
             self._process_open_gap(minute)
 
-        if self.state is GridState.ACTIVE:
+        if self.state is GridState.ACTIVE and not observation_prefix:
             self._activate_due(minute.start, minute.open)
         for event in events:
-            if event.observed_at > minute.start:
-                self._apply_funding(event)
-        if self.state is GridState.INTEGRITY_BLOCKED:
-            return self.snapshot()
+            if event.observed_at > minute.start and not self._apply_funding(event):
+                return self.snapshot()
 
-        if self.state is GridState.ACTIVE:
+        if self.state is GridState.ACTIVE and not observation_prefix:
             self._process_completed_bar(minute)
 
         self.last_mark = minute.mark_price
@@ -624,19 +758,31 @@ class GridV1Engine:
             (
                 ("mark_price", str(minute.mark_price)),
                 ("cash", str(self._cash())),
-                ("gross_realized_pnl", str(position.cumulative_gross_realized_pnl)),
-                ("fees", str(position.cumulative_fees)),
-                ("funding", str(self.funding_cash)),
+                (
+                    "gross_realized_pnl",
+                    str(
+                        self.episode.carry_in.cumulative_gross_realized_pnl
+                        + position.cumulative_gross_realized_pnl
+                    ),
+                ),
+                ("fees", str(self.episode.carry_in.cumulative_fees + position.cumulative_fees)),
+                ("funding", str(self.episode.carry_in.cumulative_funding + self.funding_cash)),
                 ("unrealized_pnl", str(unrealized)),
                 ("equity", str(self.last_equity)),
                 ("peak_equity", str(self.peak_equity)),
                 ("state", self.state.value),
             ),
         )
-        if self.state is GridState.STOPPED and self.last_equity <= Decimal("8000"):
+        if (
+            self.state is GridState.STOPPED
+            and self.last_equity <= self.episode.carry_in.original_account_capital * Decimal("0.80")
+        ):
             self.state = GridState.TERMINATED
             self._record(minute.start + _MINUTE, "TERMINATED_AFTER_FORCED_CLOSE")
-        if self.state is GridState.ACTIVE and self.last_equity <= Decimal("8000"):
+        if (
+            self.state is GridState.ACTIVE
+            and self.last_equity <= self.episode.carry_in.original_account_capital * Decimal("0.80")
+        ):
             self._cancel_all(minute.start + _MINUTE, "ORIGINAL_CAPITAL_FLOOR")
             self._forced_close_due = minute.start + _MINUTE
             self.state = GridState.TERMINATION_PENDING
@@ -647,7 +793,7 @@ class GridV1Engine:
         self.previous_close = minute.close
         return self.snapshot()
 
-    def _apply_funding(self, event: GridFundingEvent) -> None:
+    def _apply_funding(self, event: GridFundingEvent) -> bool:
         if (
             not event.event_id
             or event.event_id in self._funding_ids
@@ -661,7 +807,7 @@ class GridV1Engine:
             or event.observed_at - event.mark_observed_at > timedelta(seconds=120)
         ):
             self._block(event.observed_at, "UNUSABLE_FUNDING_AUTHORITY")
-            return
+            return False
         quantity = self.accounting.position(self.episode.symbol).quantity
         with localcontext(_CONTEXT):
             if self.scenario is GridScenario.BASE:
@@ -681,6 +827,7 @@ class GridV1Engine:
             "FUNDING_APPLIED",
             details=("cash_change", str(cash_change)),
         )
+        return True
 
     def _process_open_gap(self, minute: GridMinute) -> None:
         lower = self.previous_close >= self.geometry.lower_boundary > minute.open
@@ -735,7 +882,7 @@ class GridV1Engine:
             ),
             _ZERO,
         )
-        return pending <= self.episode.initial_capital * Decimal("0.80")
+        return pending <= self.episode.carry_in.current_cash * Decimal("0.80")
 
     def _process_completed_bar(self, minute: GridMinute) -> None:
         lower = minute.low <= self.geometry.lower_boundary
@@ -1013,7 +1160,7 @@ class GridV1Engine:
     def _cash(self) -> Decimal:
         state = self.accounting.position(self.episode.symbol)
         return (
-            self.episode.initial_capital
+            self.episode.carry_in.current_cash
             + state.cumulative_gross_realized_pnl
             - state.cumulative_fees
             + self.funding_cash
@@ -1038,15 +1185,38 @@ class GridV1Engine:
             self._cash(),
             state.quantity,
             state.average_entry_price,
-            state.cumulative_gross_realized_pnl,
-            state.cumulative_fees,
-            self.funding_cash,
+            self.episode.carry_in.cumulative_gross_realized_pnl
+            + state.cumulative_gross_realized_pnl,
+            self.episode.carry_in.cumulative_fees + state.cumulative_fees,
+            self.episode.carry_in.cumulative_funding + self.funding_cash,
             unrealized,
             equity,
             self.peak_equity,
             drawdown,
             sum(order.active for order in self._orders.values()),
             len(self._lots),
+        )
+
+    def carry_out(self) -> GridLedgerCarry:
+        """Return the next-week seed only after a complete flat episode."""
+
+        state = self.accounting.position(self.episode.symbol)
+        if self.completion_status is not GridCompletionStatus.COMPLETE:
+            raise GridV1Error("partial or blocked episode has no authoritative carry-out")
+        if state.quantity != 0 or self.state not in {GridState.STOPPED, GridState.TERMINATED}:
+            raise GridV1Error("complete episode must be flat and terminal for the week")
+        return GridLedgerCarry(
+            self.episode.symbol,
+            self.episode.carry_in.original_account_capital,
+            self._cash(),
+            self._cash(),
+            self.episode.carry_in.cumulative_gross_realized_pnl
+            + state.cumulative_gross_realized_pnl,
+            self.episode.carry_in.cumulative_fees + state.cumulative_fees,
+            self.episode.carry_in.cumulative_funding + self.funding_cash,
+            self.peak_equity,
+            self.state is GridState.TERMINATED,
+            self.episode.episode_start,
         )
 
     def report(self) -> GridEpisodeReport:
@@ -1066,29 +1236,37 @@ class GridV1Engine:
                 None if not processed_starts else processed_starts[-1].isoformat()
             ),
             "source_clock": "UTC",
+            "required_first_minute": self.episode.episode_start.isoformat(),
+            "required_last_minute": self._required_last_minute.isoformat(),
+            "required_minute_count": 6 * 24 * 60 + 20 * 60 + 2,
         }
         geometry = {key: _json_value(value) for key, value in asdict(self.geometry).items()}
-        identity = self.authority.decision_identity
-        authority: dict[str, object] = {
-            "decision_identity": {
-                "source_id": identity.source_id.value,
-                "symbol": str(identity.symbol),
-                "observed_at": identity.observed_at.isoformat(),
-                "strategy_id": identity.strategy_id,
-                "strategy_version": identity.strategy_version,
-            },
-            "directional_risk_status": {
-                "LONG_ENVELOPE": self.authority.directional_risk_decisions[0].status.value,
-                "SHORT_ENVELOPE": self.authority.directional_risk_decisions[1].status.value,
-            },
-            "directional_safety_status": {
-                "LONG_ENVELOPE": self.authority.directional_safety_decisions[0].status.value,
-                "SHORT_ENVELOPE": self.authority.directional_safety_decisions[1].status.value,
-            },
-            "authorization_status": self.authority.authorization_status.value,
-            "approved_modeled_loss": str(self.authority.approved_modeled_loss),
-            "approved_pending_notional": str(self.authority.approved_pending_notional),
-        }
+        if self.authority is None:
+            authority: dict[str, object] = {
+                "authorization_status": "TERMINATED_CARRY_IN_NO_PLAN",
+            }
+        else:
+            identity = self.authority.decision_identity
+            authority = {
+                "decision_identity": {
+                    "source_id": identity.source_id.value,
+                    "symbol": str(identity.symbol),
+                    "observed_at": identity.observed_at.isoformat(),
+                    "strategy_id": identity.strategy_id,
+                    "strategy_version": identity.strategy_version,
+                },
+                "directional_risk_status": {
+                    "LONG_ENVELOPE": self.authority.directional_risk_decisions[0].status.value,
+                    "SHORT_ENVELOPE": self.authority.directional_risk_decisions[1].status.value,
+                },
+                "directional_safety_status": {
+                    "LONG_ENVELOPE": self.authority.directional_safety_decisions[0].status.value,
+                    "SHORT_ENVELOPE": self.authority.directional_safety_decisions[1].status.value,
+                },
+                "authorization_status": self.authority.authorization_status.value,
+                "approved_modeled_loss": str(self.authority.approved_modeled_loss),
+                "approved_pending_notional": str(self.authority.approved_pending_notional),
+            }
         snapshot = {key: _json_value(value) for key, value in asdict(self.snapshot()).items()}
         audit: tuple[dict[str, object], ...] = tuple(
             {
@@ -1101,16 +1279,27 @@ class GridV1Engine:
             }
             for item in self.audit
         )
+        contract = {key: str(value) for key, value in asdict(self.contract_identity).items()}
+        carry_in = {key: _json_value(value) for key, value in asdict(self.episode.carry_in).items()}
+        carry_out = (
+            {key: _json_value(value) for key, value in asdict(self.carry_out()).items()}
+            if self.completion_status is GridCompletionStatus.COMPLETE
+            else None
+        )
         return GridEpisodeReport(
             "btc-eth-grid-v1-synthetic-report",
             GRID_STRATEGY_ID,
             GRID_PROTOCOL_VERSION,
             GRID_ENGINE_VERSION,
             self.episode.code_sha,
+            contract,
             self.episode.source_id.value,
             str(self.episode.symbol),
             self.scenario.value,
             self.episode.episode_start.isoformat(),
+            self.completion_status.value,
+            carry_in,
+            carry_out,
             input_contract,
             geometry,
             authority,
@@ -1155,6 +1344,10 @@ class GridV1Engine:
 def _json_value(value: object) -> object:
     if isinstance(value, Decimal):
         return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, TradingSymbol):
+        return str(value)
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, tuple):
@@ -1184,14 +1377,20 @@ def run_synthetic_grid_episode(
 
 
 __all__ = [
+    "GRID_ACCEPTED_PROTOCOL_HEAD",
     "GRID_ENGINE_VERSION",
+    "GRID_PARAMETERS_SHA256",
+    "GRID_PROTOCOL_DOCUMENT_SHA256",
     "GRID_PROTOCOL_VERSION",
     "GRID_STRATEGY_ID",
     "GridAuditEvent",
+    "GridCompletionStatus",
+    "GridContractIdentity",
     "GridEpisodeInput",
     "GridEpisodeReport",
     "GridFundingEvent",
     "GridGeometry",
+    "GridLedgerCarry",
     "GridLedgerSnapshot",
     "GridMinute",
     "GridPlanAuthority",
@@ -1199,6 +1398,8 @@ __all__ = [
     "GridState",
     "GridV1Engine",
     "GridV1Error",
+    "grid_runtime_implementation_sha256",
     "healthy_grid_health",
     "run_synthetic_grid_episode",
+    "verified_grid_contract_identity",
 ]

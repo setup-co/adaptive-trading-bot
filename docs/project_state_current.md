@@ -43,6 +43,16 @@ remain preserved.
 - Focused synthetic integration covers the accepted boundary, funding, ownership/netting,
   post-only, ambiguity, gap, scheduled flatten, termination, idempotence and BASE/STRESS examples.
   Audit reports retain order/lot provenance, fill/funding/fee decomposition and marked equity.
+- Whole-episode status is explicit: observation begins at Monday 00:00 before the first 00:01
+  activation, proceeds contiguously through the Sunday 20:01 flatten minute, and otherwise reports
+  `PARTIAL_UNRESOLVED` or `INTEGRITY_BLOCKED`. Missing minutes are never treated as flat/no-funding.
+- A typed flat-week carry preserves original capital separately from current cash/equity, cumulative
+  realized PnL, fees, funding, peak equity and permanent termination. Later synthetic weeks must
+  consume the prior weekly carry and cannot reset capital or reopen a terminated symbol.
+- Reports label caller-supplied code SHA separately from the verified runtime module hash and bind
+  accepted protocol HEAD `58f250a86925a48ed338ef716a621a6594e768b9`, protocol-document SHA-256
+  `f0314ed243a2f7784e13d252901802c95b994b59221a2aa67333733be86907fd` and parameter SHA-256
+  `960edccc1c40ed63a780734921494646adb45f5532df8ce7872e502dc94147df`.
 - This is implementation preparation only. It is not a historical Grid result, an executable
   exchange model, a profitability claim, or authorization for Paper, Shadow, Live, deployment or
   data access. OHLC paths, all-or-unfilled limits and source-venue funding remain modeled proxies.

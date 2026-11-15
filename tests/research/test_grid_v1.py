@@ -20,9 +20,12 @@ from adaptive_trading_bot.research.grid_v1 import (
     GRID_ENGINE_VERSION,
     GRID_PROTOCOL_VERSION,
     GridAuditEvent,
+    GridCompletionStatus,
+    GridContractIdentity,
     GridEpisodeInput,
     GridFundingEvent,
     GridGeometry,
+    GridLedgerCarry,
     GridMinute,
     GridScenario,
     GridState,
@@ -30,6 +33,7 @@ from adaptive_trading_bot.research.grid_v1 import (
     GridV1Error,
     healthy_grid_health,
     run_synthetic_grid_episode,
+    verified_grid_contract_identity,
 )
 from adaptive_trading_bot.risk import FeedIntegrityState
 from adaptive_trading_bot.storage import SourceId
@@ -38,13 +42,23 @@ START = datetime(2026, 1, 5, tzinfo=UTC)
 Q = Decimal("3.972392")
 
 
-def _episode(asset: str = "BTC") -> GridEpisodeInput:
+def _episode(
+    asset: str = "BTC",
+    *,
+    start: datetime = START,
+    carry: GridLedgerCarry | None = None,
+    code_sha: str = "synthetic-code-sha",
+    contract: GridContractIdentity | None = None,
+) -> GridEpisodeInput:
+    symbol = TradingSymbol(asset, "USDT")
     return GridEpisodeInput(
         SourceId("synthetic-grid-v1"),
-        TradingSymbol(asset, "USDT"),
-        START,
+        symbol,
+        start,
         (Decimal(100),) * 42,
-        "synthetic-code-sha",
+        code_sha,
+        verified_grid_contract_identity() if contract is None else contract,
+        GridLedgerCarry.initial(symbol) if carry is None else carry,
     )
 
 
@@ -64,12 +78,14 @@ def _engine(
 ) -> GridV1Engine:
     episode = _episode(asset)
     seed = GridV1Engine(episode, scenario, healthy_grid_health(episode))
-    return GridV1Engine(
+    engine = GridV1Engine(
         episode,
         scenario,
         healthy_grid_health(episode),
         synthetic_geometry=_geometry(seed),
     )
+    engine.process_minute(_minute(0, mark="100"))
+    return engine
 
 
 def _engine_with_levels(
@@ -94,17 +110,20 @@ def _engine_with_levels(
         modeled_boundary_loss=Decimal("100"),
         aggregate_pending_notional=Decimal("100"),
     )
-    return GridV1Engine(
+    engine = GridV1Engine(
         episode,
         GridScenario.BASE,
         healthy_grid_health(episode),
         synthetic_geometry=geometry,
     )
+    engine.process_minute(_minute(0, mark=centre))
+    return engine
 
 
 def _minute(
     offset: int,
     *,
+    episode_start: datetime = START,
     open_: str = "100",
     high: str = "100",
     low: str = "100",
@@ -112,7 +131,7 @@ def _minute(
     mark: str | None = None,
     funding: tuple[GridFundingEvent, ...] = (),
 ) -> GridMinute:
-    start = START + timedelta(minutes=offset)
+    start = episode_start + timedelta(minutes=offset)
     return GridMinute(
         start,
         Decimal(open_),
@@ -404,7 +423,7 @@ def test_stress_costs_are_worse_and_report_round_trips_byte_stably() -> None:
         _episode("ETH"),
         GridScenario.BASE,
         healthy_grid_health(_episode("ETH")),
-        (_minute(1, mark="100"),),
+        (_minute(0, mark="100"), _minute(1, mark="100")),
     )
     decoded = json.loads(report.to_json_bytes())
     assert decoded["protocol_version"] == GRID_PROTOCOL_VERSION
@@ -413,8 +432,116 @@ def test_stress_costs_are_worse_and_report_round_trips_byte_stably() -> None:
         "LONG_ENVELOPE": "APPROVED",
         "SHORT_ENVELOPE": "APPROVED",
     }
-    assert decoded["input_contract"]["processed_minute_count"] == 1
+    assert decoded["input_contract"]["processed_minute_count"] == 2
+    assert decoded["completion_status"] == "PARTIAL_UNRESOLVED"
+    assert decoded["supplied_code_sha"] == "synthetic-code-sha"
+    assert decoded["verified_contract"]["runtime_implementation_sha256"]
     assert report.sha256 == report.sha256
+
+
+def test_first_minute_and_episode_completeness_are_fail_closed() -> None:
+    episode = _episode()
+    skipped = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+    skipped.process_minute(_minute(1, mark="100"))
+    assert skipped.completion_status is GridCompletionStatus.INTEGRITY_BLOCKED
+    assert skipped.report().completion_status == "INTEGRITY_BLOCKED"
+
+    empty = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+    assert empty.completion_status is GridCompletionStatus.PARTIAL_UNRESOLVED
+    assert empty.report().carry_out is None
+    empty.process_minute(_minute(0, mark="100"))
+    assert empty.completion_status is GridCompletionStatus.PARTIAL_UNRESOLVED
+    assert empty.report().input_contract["required_minute_count"] == 9842
+
+
+def test_monday_open_funding_precedes_later_first_activation() -> None:
+    episode = _episode()
+    engine = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+    opening_funding = GridFundingEvent(
+        "monday-open",
+        START,
+        Decimal("0.0001"),
+        START,
+        Decimal(100),
+    )
+    engine.process_minute(_minute(0, mark="100", funding=(opening_funding,)))
+    assert not _events(engine, "ORDER_ACTIVATED")
+    engine.process_minute(_minute(1, mark="100"))
+    types = [event.event_type for event in engine.audit]
+    assert types.index("FUNDING_APPLIED") < types.index("ORDER_ACTIVATED")
+
+
+def test_complete_loss_week_carries_account_economics_into_next_week() -> None:
+    first = _engine()
+    first.process_minute(_minute(1, open_="100", high="100", low="92", close="92", mark="92"))
+    for offset in range(2, 6 * 24 * 60 + 20 * 60 + 2):
+        first.process_minute(
+            _minute(offset, open_="92", high="92", low="92", close="92", mark="92")
+        )
+
+    assert first.completion_status is GridCompletionStatus.COMPLETE
+    carry = first.carry_out()
+    assert carry.current_cash == Decimal("9919.490593728940024591360")
+    assert carry.cumulative_fees > 0
+    assert carry.cumulative_gross_realized_pnl < 0
+
+    next_start = START + timedelta(days=7)
+    second_episode = _episode(start=next_start, carry=carry)
+    second = GridV1Engine(
+        second_episode,
+        GridScenario.BASE,
+        healthy_grid_health(second_episode),
+    )
+    assert second.geometry.modeled_boundary_loss <= carry.current_cash * Decimal("0.01")
+    second.process_minute(_minute(0, episode_start=next_start, mark="100"))
+    snapshot = second.snapshot()
+    assert snapshot.cash == carry.current_cash
+    assert snapshot.cumulative_fees == carry.cumulative_fees
+    assert snapshot.cumulative_funding == carry.cumulative_funding
+    assert snapshot.cumulative_gross_realized_pnl == carry.cumulative_gross_realized_pnl
+
+
+def test_terminated_carry_stays_cash_only_without_reauthorization() -> None:
+    symbol = TradingSymbol("BTC", "USDT")
+    carry = GridLedgerCarry(
+        symbol,
+        Decimal("10000"),
+        Decimal("7900"),
+        Decimal("7900"),
+        Decimal("-2100"),
+        Decimal(0),
+        Decimal(0),
+        Decimal("10000"),
+        True,
+        START,
+    )
+    next_start = START + timedelta(days=7)
+    episode = _episode(start=next_start, carry=carry)
+    engine = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+    engine.process_minute(_minute(0, episode_start=next_start, mark="100"))
+
+    assert engine.state is GridState.TERMINATED
+    assert engine.snapshot().cash == Decimal("7900")
+    assert engine.authority is None
+    assert not _events(engine, "ORDER_CREATED")
+    assert engine.report().authority["authorization_status"] == "TERMINATED_CARRY_IN_NO_PLAN"
+
+
+def test_contract_identity_mismatch_is_rejected_and_supplied_sha_is_not_verified() -> None:
+    valid = verified_grid_contract_identity()
+    mismatched = replace(valid, parameters_sha256="0" * 64)
+    episode = _episode(contract=mismatched)
+    with pytest.raises(GridV1Error, match="contract identity"):
+        GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+
+    supplied = _episode(code_sha="caller-asserted-not-runtime-verified")
+    engine = GridV1Engine(supplied, GridScenario.BASE, healthy_grid_health(supplied))
+    report = engine.report()
+    assert report.supplied_code_sha == "caller-asserted-not-runtime-verified"
+    assert (
+        report.verified_contract["runtime_implementation_sha256"]
+        == valid.runtime_implementation_sha256
+    )
 
 
 def test_accounting_equal_timestamp_sequence_is_opt_in() -> None:
