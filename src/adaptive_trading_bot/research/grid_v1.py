@@ -265,6 +265,98 @@ class GridEpisodeInput:
             raise GridV1Error("carry must advance by exactly one weekly episode")
 
 
+@dataclass(frozen=True, slots=True, init=False)
+class GridHistoricalSourceAdmission:
+    """Identity receipt for a separately verified, research-only historical grant."""
+
+    __factory_token = object()
+
+    source_id: SourceId
+    executable_sha: str
+    executable_tree: str
+    grant_sha256: str
+    study_plan_sha256: str
+    calendar_sha256: str
+    manifest_sha256: str
+    report_sha256: str
+
+    def __init__(
+        self,
+        source_id: SourceId,
+        executable_sha: str,
+        executable_tree: str,
+        grant_sha256: str,
+        study_plan_sha256: str,
+        calendar_sha256: str,
+        manifest_sha256: str,
+        report_sha256: str,
+        *,
+        _factory_token: object | None = None,
+    ) -> None:
+        if _factory_token is not GridHistoricalSourceAdmission.__factory_token:
+            raise GridV1Error("historical source admission requires the verified-grant factory")
+        for name, value in (
+            ("source_id", source_id),
+            ("executable_sha", executable_sha),
+            ("executable_tree", executable_tree),
+            ("grant_sha256", grant_sha256),
+            ("study_plan_sha256", study_plan_sha256),
+            ("calendar_sha256", calendar_sha256),
+            ("manifest_sha256", manifest_sha256),
+            ("report_sha256", report_sha256),
+        ):
+            object.__setattr__(self, name, value)
+        self.__post_init__()
+
+    @classmethod
+    def from_verified_grant(
+        cls,
+        source_id: SourceId,
+        executable_sha: str,
+        executable_tree: str,
+        grant_sha256: str,
+        study_plan_sha256: str,
+        calendar_sha256: str,
+        manifest_sha256: str,
+        report_sha256: str,
+    ) -> GridHistoricalSourceAdmission:
+        """Create only after the runner has validated the immutable external grant."""
+
+        return cls(
+            source_id,
+            executable_sha,
+            executable_tree,
+            grant_sha256,
+            study_plan_sha256,
+            calendar_sha256,
+            manifest_sha256,
+            report_sha256,
+            _factory_token=cls.__factory_token,
+        )
+
+    def __post_init__(self) -> None:
+        git_ids = (self.executable_sha, self.executable_tree)
+        digests = (
+            self.grant_sha256,
+            self.study_plan_sha256,
+            self.calendar_sha256,
+            self.manifest_sha256,
+            self.report_sha256,
+        )
+        if (
+            self.source_id.value.startswith("synthetic-")
+            or any(
+                len(value) != 40 or any(character not in "0123456789abcdef" for character in value)
+                for value in git_ids
+            )
+            or any(
+                len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+                for value in digests
+            )
+        ):
+            raise GridV1Error("historical source admission identity is invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class GridGeometry:
     centre: Decimal
@@ -588,7 +680,7 @@ def _authorize_plan(
 
 
 class GridV1Engine:
-    """Stateful deterministic Grid engine for caller-supplied synthetic facts only."""
+    """Deterministic Grid engine; historical facts require an explicit grant receipt."""
 
     def __init__(
         self,
@@ -597,18 +689,31 @@ class GridV1Engine:
         health: OperationalHealthSnapshot,
         *,
         synthetic_geometry: GridGeometry | None = None,
+        historical_admission: GridHistoricalSourceAdmission | None = None,
     ) -> None:
         self.episode = episode
         self.scenario = scenario
         self.costs = _COSTS[scenario]
-        if not episode.source_id.value.startswith("synthetic-"):
-            raise GridV1Error("Grid V1 engine accepts only explicit synthetic source identities")
+        if synthetic_geometry is not None and not episode.source_id.value.startswith("synthetic-"):
+            raise GridV1Error("synthetic source override requires a synthetic source identity")
+        if episode.source_id.value.startswith("synthetic-"):
+            if historical_admission is not None:
+                raise GridV1Error("synthetic Grid input cannot carry historical admission")
+        elif (
+            historical_admission is None
+            or historical_admission.source_id != episode.source_id
+            or historical_admission.executable_sha != episode.code_sha
+        ):
+            raise GridV1Error(
+                "non-synthetic Grid input requires a matching verified historical admission"
+            )
         expected_contract = verified_grid_contract_identity()
         if episode.contract_identity != expected_contract:
             raise GridV1Error(
                 "Grid contract identity does not match verified runtime/protocol bytes"
             )
         self.contract_identity = expected_contract
+        self.historical_admission = historical_admission
         self.no_trade_reason: GridNoTradeReason | None = None
         if episode.carry_in.terminated:
             self.geometry = _cash_only_geometry(episode.completed_4h_closes[-1])
@@ -1305,7 +1410,16 @@ class GridV1Engine:
             "required_first_minute": self.episode.episode_start.isoformat(),
             "required_last_minute": self._required_last_minute.isoformat(),
             "required_minute_count": 6 * 24 * 60 + 20 * 60 + 2,
+            "source_mode": (
+                "HISTORICAL_RESEARCH_GRANT"
+                if self.historical_admission is not None
+                else "SYNTHETIC_FIXTURE"
+            ),
         }
+        if self.historical_admission is not None:
+            input_contract["historical_admission"] = {
+                key: _json_value(value) for key, value in asdict(self.historical_admission).items()
+            }
         if self.no_trade_reason is not None:
             geometry: dict[str, object] = {
                 "status": "REJECTED_PRE_ORDER",
@@ -1378,7 +1492,11 @@ class GridV1Engine:
             else None
         )
         return GridEpisodeReport(
-            "btc-eth-grid-v1-synthetic-report",
+            (
+                "btc-eth-grid-v1-historical-report"
+                if self.historical_admission is not None
+                else "btc-eth-grid-v1-synthetic-report"
+            ),
             GRID_STRATEGY_ID,
             GRID_PROTOCOL_VERSION,
             GRID_ENGINE_VERSION,
@@ -1441,6 +1559,8 @@ def _json_value(value: object) -> object:
         return value.isoformat()
     if isinstance(value, TradingSymbol):
         return str(value)
+    if isinstance(value, SourceId):
+        return value.value
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, tuple):
@@ -1483,6 +1603,7 @@ __all__ = [
     "GridEpisodeReport",
     "GridFundingEvent",
     "GridGeometry",
+    "GridHistoricalSourceAdmission",
     "GridLedgerCarry",
     "GridLedgerSnapshot",
     "GridMinute",
