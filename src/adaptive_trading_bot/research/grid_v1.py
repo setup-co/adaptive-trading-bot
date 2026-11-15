@@ -206,9 +206,8 @@ class GridLedgerCarry:
         )
         if self.current_cash != expected_cash:
             raise GridV1Error("carry economics do not reconcile to current cash")
-        if (
-            not self.terminated
-            and self.current_equity <= self.original_account_capital * Decimal("0.80")
+        if not self.terminated and self.current_equity <= self.original_account_capital * Decimal(
+            "0.80"
         ):
             raise GridV1Error("carry at the original-capital floor must be permanently terminated")
         if self.previous_episode_start is not None:
