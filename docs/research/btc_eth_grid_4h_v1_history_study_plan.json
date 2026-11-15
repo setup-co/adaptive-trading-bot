@@ -1,0 +1,106 @@
+{
+  "schema": "btc-eth-grid-4h-v1-history-study-plan-v1",
+  "study_id": "BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1_HISTORY_STUDY",
+  "plan_version": "0.1.0-preflight",
+  "status": "LOCKED_PROPOSED_NOT_AUTHORIZED",
+  "historical_execution": "NOT_AUTHORIZED",
+  "future_grant_required": "SEPARATE_EXACT_EXECUTABLE_SHA_AND_RUN_IDENTITY",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "scenarios": ["BASE", "STRESS"],
+  "interval": {
+    "start": "2020-01-01T00:00:00Z",
+    "end_exclusive": "2026-11-01T00:00:00Z"
+  },
+  "tasks": [
+    {"ordinal": 0, "symbol": "BTCUSDT", "scenario": "BASE"},
+    {"ordinal": 1, "symbol": "BTCUSDT", "scenario": "STRESS"},
+    {"ordinal": 2, "symbol": "ETHUSDT", "scenario": "BASE"},
+    {"ordinal": 3, "symbol": "ETHUSDT", "scenario": "STRESS"}
+  ],
+  "identities": {
+    "accepted_engine_head": "dc450a4a3a0f2dfe114a690459971bc79d2aba68",
+    "accepted_engine_version": "0.1.0-synthetic-only",
+    "accepted_protocol_head": "58f250a86925a48ed338ef716a621a6594e768b9",
+    "protocol_id": "BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1",
+    "protocol_version": "0.2.0-proposed",
+    "protocol_document_sha256": "f0314ed243a2f7784e13d252901802c95b994b59221a2aa67333733be86907fd",
+    "parameters_sha256": "960edccc1c40ed63a780734921494646adb45f5532df8ce7872e502dc94147df",
+    "eligibility_calendar_sha256": "977b21c4aa342cd3d7391a86a84e2c26ca7afb065fe65259df909652db2933f1",
+    "v3_manifest_sha256": "9d63123b073e35a010c130308452fd554f707de0e1967f82a752ff44b6155214",
+    "v3_report_sha256": "22b4cde1ba87f4acdd11efd232b1d0db11f9b9ebdbc6e884cc5d6edf50f7396d",
+    "dataset_version": "binance-usdm-btc-eth-2020-01_2026-10-v1",
+    "qualification_protocol": "BTC_ETH_GRID_4H_EXTERNAL_HISTORY_QUALIFICATION_V3",
+    "classification": "PRICE_CORPUS_PARTIAL_RECONCILIATION",
+    "future_execution_code_sha": null,
+    "future_run_identity": null
+  },
+  "input_contract": {
+    "decision_source": "closed canonical derived 4h bars available at decision time",
+    "execution_source": "exact retained 1m TRADE OHLC",
+    "mark_source": "exact retained 1m MARK; LAST substitution forbidden",
+    "funding_source": "original retained millisecond events and Decimal rates",
+    "warmup": "42 completed 4h closes ending at Monday 00:00 UTC",
+    "episode_minutes": "Monday 00:00 through Sunday 20:01 inclusive",
+    "funding_policy": "retained source-venue proxy; unusable or missing authority is UNKNOWN/INTEGRITY_BLOCKED",
+    "calendar_rows_per_symbol": 356,
+    "eligible_rows": {"BTCUSDT": 338, "ETHUSDT": 345},
+    "ineligible_rows": {"BTCUSDT": 18, "ETHUSDT": 11}
+  },
+  "chronology_and_continuity": {
+    "one_ledger_per_symbol_scenario": true,
+    "calendar_order": "strict Monday UTC ascending",
+    "eligible_no_trade_week": "included zero-return observation with continuous carry",
+    "metadata_ineligible_week": "calendar-only carry, excluded from return statistics and bootstrap blocks",
+    "terminated_symbol": "eligible weeks remain explicit cash-only zero-return observations",
+    "integrity_unknown": "stop task; do not advance an authoritative economic ledger",
+    "partition_capital_reset": false
+  },
+  "partitions": [
+    {"name": "DEVELOPMENT", "start": "2020-01-06T00:00:00Z", "end_exclusive": "2023-01-02T00:00:00Z", "scheduled_weeks_per_symbol": 156},
+    {"name": "VALIDATION", "start": "2023-01-02T00:00:00Z", "end_exclusive": "2025-01-06T00:00:00Z", "scheduled_weeks_per_symbol": 105},
+    {"name": "RETROSPECTIVE_ASSESSMENT", "start": "2025-01-06T00:00:00Z", "end_exclusive": "2026-11-02T00:00:00Z", "scheduled_weeks_per_symbol": 95}
+  ],
+  "bounded_access": {
+    "network_requests": 0,
+    "input_components": ["trade_price_1m", "mark_1m", "derived_4h", "funding"],
+    "accepted_files_total": 656,
+    "accepted_bytes_total": 793405872,
+    "files_per_symbol_task": 328,
+    "bytes_per_symbol_task": {"BTCUSDT": 401502309, "ETHUSDT": 391903563},
+    "task_concurrency": 1,
+    "symbol_scenario_concurrency": 1,
+    "parquet_read_unit": "one monthly component shard or one row group",
+    "source_hash_validation": "required before value reads",
+    "raw_corpus_mutation": false,
+    "interpolation_or_repair": false
+  },
+  "ledger": {
+    "append_only_revision_required": true,
+    "task_states": ["NOT_STARTED", "STARTED", "COMPLETED", "FAILED"],
+    "resume_started_task": false,
+    "duplicate_task_start": false,
+    "carry_identity_required_each_week": true,
+    "input_file_hashes_required_each_result": true,
+    "report_and_artifact_hashes_required": true
+  },
+  "reporting_gates": {
+    "weekly_denominators": "explicit eligible/ineligible/no-trade/terminated/integrity-blocked counts",
+    "economics": "full symbol/scenario/partition equity, costs, funding, fills, forced exits, exposure and drawdown",
+    "uncertainty": "unresolved inventory or authority is never ordinary censoring or zero",
+    "evaluation": "exact v0.2.0 validation, retrospective and bootstrap gates",
+    "terminal_classifications": [
+      "TECHNICAL_OR_INTEGRITY_INVALID",
+      "INSUFFICIENT_EVIDENCE",
+      "NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION",
+      "CANDIDATE_FOR_PROSPECTIVE_CONFIRMATION"
+    ],
+    "trading_authorization": false
+  },
+  "limitations": [
+    "Binance history is a source-venue proxy evaluated with fixed WEEX cost assumptions.",
+    "One-minute OHLC cannot establish tick order, queue position, partial fills or liquidation mechanics.",
+    "Accepted MARK gaps and price discrepancies remain explicit calendar exclusions.",
+    "The retained funding schedule classification remains partial or uncertain.",
+    "No future executable or run identity is approved by this plan."
+  ]
+}

@@ -68,6 +68,21 @@ remain preserved.
 
 ## Active task and next gate
 
+Issue #245 prepares the separately reviewable historical-data boundary for the accepted Grid
+engine. The locked plan `BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1_HISTORY_STUDY` version
+`0.1.0-preflight` binds the accepted engine HEAD, protocol/parameter/calendar hashes and v3
+manifest/report identities, but leaves the future executable SHA and run identity explicitly
+unassigned. Its read-only adapter validates each accepted Parquet shard hash and provenance before
+week-sized value reads; its calendar ledger carries exact cash/equity, realized PnL, fees, funding,
+peak and termination across excluded weeks without constructing fake episodes or zero-return
+observations. Eligible NO_TRADE and terminated cash-only weeks remain denominator observations;
+missing required TRADE/MARK/funding or incomplete episodes stop as `INTEGRITY_BLOCKED/UNKNOWN`.
+The preparation CLI has no historical executor and its `run` route fails `NOT_AUTHORIZED`.
+Synthetic fixtures alone exercise the shared Grid engine and Risk/Safety/accounting path.
+
+No historical Grid strategy evaluation, fill, PnL or promotion exists. A later one-shot execution
+requires independent review, exact-head CI and a separate exact-SHA grant/run identity.
+
 Issue #239 completed its bounded acquisition: all 1,312 fixed resources succeeded on their first
 attempt. Corrected offline v3 qualification preserves every v1/v2 byte and establishes complete
 BTC/ETH trade-price 1m, native 4h and canonical timestamp-derived 4h grids. Native reconciliation
