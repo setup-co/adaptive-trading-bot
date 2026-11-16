@@ -66,9 +66,35 @@ remain preserved.
   exchange model, a profitability claim, or authorization for Paper, Shadow, Live, deployment or
   data access. OHLC paths, all-or-unfilled limits and source-venue funding remain modeled proxies.
 
+## Issue #247 — guarded one-shot runner, synthetic validation only
+
+- A separate opt-in runner now requires a canonical external grant plus detached Ed25519 approval
+  from a public key pinned in the reviewed executable. It binds the reviewed SHA/tree, inert plan,
+  accepted protocol/parameters/engine/preflight/calendar/data identities, one UUID, frozen task
+  order, zero network requests, concurrency one and fixed wall budget. Issue #247 pins no approval
+  key and includes no signed grant, so accepted-history execution remains cryptographically blocked.
+- Historical admission also requires a clean checkout and byte equality between HEAD and the
+  actually imported runner/preflight/engine modules; dirty/untracked or other-installation imports
+  fail before retained values are read.
+- The genuine-source seam is an explicit research-only identity receipt. It preserves the Grid
+  engine's fixture guard and does not make retained data, Paper, Shadow or Live runtime-eligible.
+- Its external ledger is hash-linked and append-only, rejects duplicate UUID/task starts and
+  ambiguous continuation, persists every chronological calendar/week result and records actual run
+  exit separately. Full weekly audits are written once as immutable hashed artifacts; only compact
+  reporting facts remain in memory. Incremental appends validate the last event without repeatedly
+  hashing all prior artifacts, while finalization and the read-only verifier each perform a complete
+  chain/artifact scan. A missing or unusable observation becomes `UNKNOWN`, never a fabricated zero.
+- Deterministic reports calculate drawdown from every completed-minute equity/peak audit and
+  preserve contiguous eligible blocks across exclusions/partitions. NumPy 2.3.5 `PCG64(241)`, the
+  exact bounded-integer sampler, 10,000 draws and golden vectors are frozen alongside BASE/STRESS
+  economics, costs, continuous capital, termination and four non-trading classifications.
+- Only fixture grants and synthetic data exercised the complete four-task CLI/report/verifier path.
+  No accepted v3 price, MARK or funding observation was processed through the Grid and no historical
+  fill, PnL, promotion result, market request or trading action exists.
+
 ## Active task and next gate
 
-Issue #245 prepares the separately reviewable historical-data boundary for the accepted Grid
+Issue #245 prepared the separately reviewable historical-data boundary for the accepted Grid
 engine. The locked plan `BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1_HISTORY_STUDY` version
 `0.1.0-preflight` binds the accepted engine HEAD, protocol/parameter/calendar hashes and v3
 manifest/report identities, but leaves the future executable SHA and run identity explicitly
@@ -78,7 +104,11 @@ peak and termination across excluded weeks without constructing fake episodes or
 observations. Eligible NO_TRADE and terminated cash-only weeks remain denominator observations;
 missing required TRADE/MARK/funding or incomplete episodes stop as `INTEGRITY_BLOCKED/UNKNOWN`.
 The preparation CLI has no historical executor and its `run` route fails `NOT_AUTHORIZED`.
-Synthetic fixtures alone exercise the shared Grid engine and Risk/Safety/accounting path.
+Synthetic fixtures alone exercise the shared Grid engine and Risk/Safety/accounting path. Issue
+#247 adds the separately reviewable one-shot implementation but leaves execution blocked. A later
+architect decision must independently review and freeze the exact runner HEAD/CI, then publish a
+distinct external grant naming that exact executable and a new run identity before any retained
+history can enter the engine.
 
 No historical Grid strategy evaluation, fill, PnL or promotion exists. A later one-shot execution
 requires independent review, exact-head CI and a separate exact-SHA grant/run identity.

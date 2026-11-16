@@ -390,7 +390,12 @@ class GridCalendarLedger:
             key: str(value) for key, value in asdict(verified_grid_contract_identity()).items()
         }
         expected_report_identity = (
-            report.schema == "btc-eth-grid-v1-synthetic-report"
+            report.schema
+            == (
+                "btc-eth-grid-v1-synthetic-report"
+                if self.expected_source_id.startswith("synthetic-")
+                else "btc-eth-grid-v1-historical-report"
+            )
             and report.strategy_id == GRID_STRATEGY_ID
             and report.protocol_version == GRID_PROTOCOL_VERSION
             and report.engine_version == GRID_ENGINE_VERSION
