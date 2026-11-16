@@ -2,17 +2,81 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   push:
     branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' &&
+    format('fast-ci-pr-{0}', github.event.pull_request.number) ||
+    format('full-ci-run-{0}', github.run_id) }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' }}
+
+env:
+  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
 jobs:
-  quality:
+  fast-plan:
+    name: fast / plan
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.plan.outputs.python }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      docs: ${{ steps.plan.outputs.docs }}
+      pytest-mode: ${{ steps.plan.outputs.pytest_mode }}
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact PR head
+        run: test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+
+      - name: Classify changed files
+        id: plan
+        run: >-
+          python scripts/ci/fast_ci.py classify
+          --base "$PR_BASE_SHA"
+          --head "$PR_HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Record plan duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST plan elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-python:
+    name: fast / python
+    needs: fast-plan
+    if: needs.fast-plan.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v5
         with:
@@ -29,18 +93,40 @@ jobs:
         run: ruff check .
 
       - name: Type check
-        run: mypy src tests migrations
+        run: mypy src tests migrations scripts/ci
 
-      - name: Test
-        run: pytest
+      - name: Run change-aware regressions
+        run: >-
+          python scripts/ci/fast_ci.py run-tests
+          --base "$PR_BASE_SHA"
+          --head "$PR_HEAD_SHA"
 
-  frontend-quality:
+      - name: Record Python duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST Python elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-frontend:
+    name: fast / frontend
+    needs: fast-plan
+    if: needs.fast-plan.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
+    outputs:
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -62,3 +148,165 @@ jobs:
 
       - name: Frontend build
         run: npm run build
+
+      - name: Record frontend duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST frontend elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-docs:
+    name: fast / docs
+    needs: fast-plan
+    if: needs.fast-plan.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify documentation-only scope and whitespace
+        run: |
+          git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"
+          python scripts/ci/fast_ci.py require-docs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"
+
+      - name: Record documentation duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST docs elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-ci:
+    name: fast-ci
+    needs: [fast-plan, fast-python, fast-frontend, fast-docs]
+    if: always() && github.event_name == 'pull_request' && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Enforce planned jobs and report runner time
+        run: >-
+          python scripts/ci/fast_ci.py gate
+          --plan-result "${{ needs.fast-plan.result }}"
+          --python-planned "${{ needs.fast-plan.outputs.python }}"
+          --python-result "${{ needs.fast-python.result }}"
+          --frontend-planned "${{ needs.fast-plan.outputs.frontend }}"
+          --frontend-result "${{ needs.fast-frontend.result }}"
+          --docs-planned "${{ needs.fast-plan.outputs.docs }}"
+          --docs-result "${{ needs.fast-docs.result }}"
+          --duration "${{ needs.fast-plan.outputs.elapsed-seconds }}"
+          --duration "${{ needs.fast-python.outputs.elapsed-seconds }}"
+          --duration "${{ needs.fast-frontend.outputs.elapsed-seconds }}"
+          --duration "${{ needs.fast-docs.outputs.elapsed-seconds }}"
+
+  quality:
+    name: quality
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'ci-full')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+
+      - name: Verify exact full-suite SHA
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Ruff format
+        run: ruff format --check .
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy src tests migrations scripts/ci
+
+      - name: Complete regression suite
+        run: python -m pytest
+
+  frontend-quality:
+    name: frontend-quality
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'ci-full')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+
+      - name: Verify exact full-suite SHA
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend type check
+        run: npm run typecheck
+
+      - name: Frontend test
+        run: npm test
+
+      - name: Frontend build
+        run: npm run build
+
+  full-suite:
+    name: full-suite
+    needs: [quality, frontend-quality]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require deliberate final validation
+        if: >-
+          github.event_name == 'pull_request' &&
+          (github.event.action != 'labeled' || github.event.label.name != 'ci-full')
+        run: |
+          echo "FULL_NOT_REQUESTED: add the ci-full label to validate this exact PR HEAD."
+          exit 1
+
+      - name: Require every full-suite job
+        if: >-
+          github.event_name == 'push' ||
+          (github.event.action == 'labeled' && github.event.label.name == 'ci-full')
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
+        run: test "$QUALITY_RESULT" = success && test "$FRONTEND_RESULT" = success
