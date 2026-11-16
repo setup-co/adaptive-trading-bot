@@ -80,7 +80,10 @@ remain preserved.
   engine's fixture guard and does not make retained data, Paper, Shadow or Live runtime-eligible.
 - Its external ledger is hash-linked and append-only, rejects duplicate UUID/task starts and
   ambiguous continuation, persists every chronological calendar/week result and records actual run
-  exit separately. A missing or unusable observation becomes `UNKNOWN`, never a fabricated zero.
+  exit separately. Full weekly audits are written once as immutable hashed artifacts; only compact
+  reporting facts remain in memory. Incremental appends validate the last event without repeatedly
+  hashing all prior artifacts, while finalization and the read-only verifier each perform a complete
+  chain/artifact scan. A missing or unusable observation becomes `UNKNOWN`, never a fabricated zero.
 - Deterministic reports calculate drawdown from every completed-minute equity/peak audit and
   preserve contiguous eligible blocks across exclusions/partitions. NumPy 2.3.5 `PCG64(241)`, the
   exact bounded-integer sampler, 10,000 draws and golden vectors are frozen alongside BASE/STRESS

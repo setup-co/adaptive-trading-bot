@@ -53,6 +53,13 @@ task `UNKNOWN` or fails the invocation; it is not converted to a flat week. All 
 symbol must be committed before a task can complete. The fixed external wall budget and task
 concurrency one are enforced by the runner.
 
+Each full weekly audit is serialized once to its immutable hash-addressed week artifact. After that
+write, the active process retains only a fixed-size weekly summary containing sequence, closing
+equity, fill counts and worst completed-minute drawdown. Append ownership keeps the last canonical
+event digest and compact ledger state in memory, validates only the immediately preceding event,
+and never re-hashes the complete artifact history per append. A complete event-chain and artifact
+scan remains mandatory once at finalization and again in the independent read-only verifier.
+
 ## Reporting contract
 
 Each task report retains explicit scheduled, eligible, excluded, no-trade and terminated

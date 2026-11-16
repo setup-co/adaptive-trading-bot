@@ -24,9 +24,9 @@ from adaptive_trading_bot.research.grid_history_preflight import (
 )
 from adaptive_trading_bot.research.grid_history_runner import (
     GridGrantApproval,
-    GridHistoryRunnerError,
     GridStudyGrant,
     run_one_shot,
+    verified_checkout_identity,
     verify_finalized,
 )
 from adaptive_trading_bot.research.grid_v1 import GridMinute
@@ -46,52 +46,20 @@ def _git_identity(repo: Path) -> tuple[str, str]:
     return read("HEAD"), read("HEAD^{tree}")
 
 
-def _verified_checkout_identity(
-    repo: Path,
-    *,
-    imported_files: dict[str, Path] | None = None,
-) -> tuple[str, str]:
-    """Bind a clean Git tree to the exact Python files imported by this process."""
-
-    repo = repo.resolve(strict=True)
-    files = imported_files or {
-        "scripts/research/grid_history_runner.py": Path(__file__),
-        "src/adaptive_trading_bot/research/grid_history_runner.py": Path(
-            str(runner_module.__file__)
-        ),
-        "src/adaptive_trading_bot/research/grid_history_preflight.py": Path(
-            str(preflight_module.__file__)
-        ),
-        "src/adaptive_trading_bot/research/grid_v1.py": Path(str(grid_module.__file__)),
-    }
-
-    def git_text(*arguments: str) -> str:
-        result = subprocess.run(
-            ["git", *arguments],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
-
-    if Path(git_text("rev-parse", "--show-toplevel")).resolve() != repo:
-        raise GridHistoryRunnerError("repository root identity differs")
-    if git_text("status", "--porcelain=v1", "--untracked-files=all"):
-        raise GridHistoryRunnerError("historical execution requires an exact clean checkout")
-    for relative, imported in files.items():
-        expected = (repo / relative).resolve(strict=True)
-        if imported.resolve(strict=True) != expected:
-            raise GridHistoryRunnerError("imported execution module is outside the named checkout")
-        committed = subprocess.run(
-            ["git", "show", f"HEAD:{relative}"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        ).stdout
-        if expected.read_bytes() != committed:
-            raise GridHistoryRunnerError("imported execution module bytes differ from HEAD")
-    return git_text("rev-parse", "HEAD"), git_text("rev-parse", "HEAD^{tree}")
+def _verified_checkout_identity(repo: Path) -> tuple[str, str]:
+    return verified_checkout_identity(
+        repo,
+        imported_files={
+            "scripts/research/grid_history_runner.py": Path(__file__),
+            "src/adaptive_trading_bot/research/grid_history_runner.py": Path(
+                str(runner_module.__file__)
+            ),
+            "src/adaptive_trading_bot/research/grid_history_preflight.py": Path(
+                str(preflight_module.__file__)
+            ),
+            "src/adaptive_trading_bot/research/grid_v1.py": Path(str(grid_module.__file__)),
+        },
+    )
 
 
 def _synthetic_fixture(

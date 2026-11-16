@@ -10,9 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
@@ -105,6 +106,56 @@ class TerminalClassification(StrEnum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
     NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION = "NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION"
     CANDIDATE_FOR_PROSPECTIVE_CONFIRMATION = "CANDIDATE_FOR_PROSPECTIVE_CONFIRMATION"
+
+
+@dataclass(frozen=True, slots=True)
+class GridWeekSummary:
+    """Compact authoritative facts retained after a full weekly report is persisted."""
+
+    sequence: int
+    current_equity: Decimal
+    order_fill_count: int
+    fill_count: int
+    forced_close_count: int
+    maximum_running_peak_drawdown_fraction: Decimal
+
+
+def verified_checkout_identity(
+    repo: Path,
+    *,
+    imported_files: dict[str, Path],
+) -> tuple[str, str]:
+    """Bind a clean Git tree to the exact Python files imported by a caller."""
+
+    repo = repo.resolve(strict=True)
+
+    def git_text(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    if Path(git_text("rev-parse", "--show-toplevel")).resolve() != repo:
+        raise GridHistoryRunnerError("repository root identity differs")
+    if git_text("status", "--porcelain=v1", "--untracked-files=all"):
+        raise GridHistoryRunnerError("historical execution requires an exact clean checkout")
+    for relative, imported in imported_files.items():
+        expected = (repo / relative).resolve(strict=True)
+        if imported.resolve(strict=True) != expected:
+            raise GridHistoryRunnerError("imported execution module is outside the named checkout")
+        committed = subprocess.run(
+            ["git", "show", f"HEAD:{relative}"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        ).stdout
+        if expected.read_bytes() != committed:
+            raise GridHistoryRunnerError("imported execution module bytes differ from HEAD")
+    return git_text("rev-parse", "HEAD"), git_text("rev-parse", "HEAD^{tree}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +358,8 @@ class GridStudyLedgerStore:
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
+        self._owned_state: GridStudyLedgerState | None = None
+        self._last_event_sha256: str | None = None
 
     @classmethod
     def create(cls, root: Path, grant: GridStudyGrant) -> Self:
@@ -316,7 +369,7 @@ class GridStudyLedgerStore:
         except FileExistsError as exc:
             raise GridHistoryRunnerError("run UUID already exists") from exc
         store = cls(directory)
-        store._write(
+        last_event_sha256 = store._write(
             {
                 "schema": "btc-eth-grid-study-ledger-event-v1",
                 "event": "CREATED",
@@ -329,9 +382,23 @@ class GridStudyLedgerStore:
                 "task_ids": list(grant.task_ids),
             }
         )
+        store._owned_state = GridStudyLedgerState(
+            grant.run_uuid,
+            grant.sha256,
+            grant.executable_sha,
+            grant.executable_tree,
+            grant.task_ids,
+            None,
+            (TaskState.NOT_STARTED,) * len(grant.task_ids),
+            (0,) * len(grant.task_ids),
+            (None,) * len(grant.task_ids),
+            0,
+            None,
+        )
+        store._last_event_sha256 = last_event_sha256
         return store
 
-    def _write(self, event: dict[str, object]) -> None:
+    def _write(self, event: dict[str, object]) -> str:
         revision = event.get("revision")
         if type(revision) is not int or revision < 0:
             raise GridHistoryRunnerError("ledger revision is invalid")
@@ -345,6 +412,12 @@ class GridStudyLedgerStore:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(pending, destination)
+        return hashlib.sha256(payload).hexdigest()
+
+    def _state_for_append(self) -> GridStudyLedgerState:
+        if self._owned_state is None or self._last_event_sha256 is None:
+            raise GridHistoryRunnerError("ledger append ownership is unavailable")
+        return self._owned_state
 
     def load(self, *, owned_lock: bool = False) -> GridStudyLedgerState:
         files = sorted(self.directory.glob("[0-9][0-9][0-9][0-9][0-9].json"))
@@ -474,25 +547,35 @@ class GridStudyLedgerStore:
             raise GridHistoryRunnerError("ledger transition is concurrent or ambiguous") from exc
         try:
             os.close(descriptor)
-            state = self.load(owned_lock=True)
-            files = sorted(self.directory.glob("[0-9][0-9][0-9][0-9][0-9].json"))
+            state = self._state_for_append()
+            previous_path = self.directory / f"{state.revision:05d}.json"
+            try:
+                previous_raw = previous_path.read_bytes()
+            except OSError as exc:
+                raise GridHistoryRunnerError("latest ledger event is unavailable") from exc
+            if (
+                hashlib.sha256(previous_raw).hexdigest() != self._last_event_sha256
+                or (self.directory / f"{state.revision + 1:05d}.json").exists()
+                or (self.directory / f".{state.revision + 1:05d}.pending").exists()
+            ):
+                raise GridHistoryRunnerError("latest ledger event or next append differs")
             record: dict[str, object] = {
                 "schema": "btc-eth-grid-study-ledger-event-v1",
                 "event": event,
                 "revision": state.revision + 1,
-                "previous_sha256": hashlib.sha256(files[-1].read_bytes()).hexdigest(),
+                "previous_sha256": self._last_event_sha256,
                 "observed_at": datetime.now(UTC).isoformat(),
             }
             if task_index is not None:
                 record["task_index"] = task_index
             record.update(facts)
-            self._write(record)
+            self._last_event_sha256 = self._write(record)
+            self._owned_state = replace(state, revision=state.revision + 1)
         finally:
             lock.unlink(missing_ok=True)
-        self.load()
 
     def start(self, task_index: int) -> None:
-        state = self.load()
+        state = self._state_for_append()
         if (
             state.preflight_sha256 is None
             or not 0 <= task_index < len(state.task_ids)
@@ -501,9 +584,12 @@ class GridStudyLedgerStore:
         ):
             raise GridHistoryRunnerError("task cannot start, resume or rerun")
         self._append("TASK_STARTED", task_index=task_index, task_id=state.task_ids[task_index])
+        states = list(state.task_states)
+        states[task_index] = TaskState.STARTED
+        self._owned_state = replace(self._state_for_append(), task_states=tuple(states))
 
     def record_preflight(self, preflight: dict[str, object]) -> str:
-        state = self.load()
+        state = self._state_for_append()
         if state.preflight_sha256 is not None or any(
             item is not TaskState.NOT_STARTED for item in state.task_states
         ):
@@ -512,11 +598,15 @@ class GridStudyLedgerStore:
         _write_new(path, canonical_json(preflight))
         digest = _sha_file(path)
         self._append("PREFLIGHT_VERIFIED", preflight_sha256=digest)
+        self._owned_state = replace(self._state_for_append(), preflight_sha256=digest)
         return digest
 
     def commit_week(self, task_index: int, week_ordinal: int, payload: dict[str, object]) -> None:
-        state = self.load()
-        if state.task_states[task_index] is not TaskState.STARTED:
+        state = self._state_for_append()
+        if (
+            state.task_states[task_index] is not TaskState.STARTED
+            or state.week_counts[task_index] != week_ordinal
+        ):
             raise GridHistoryRunnerError("week has no active task")
         name = f"task-{task_index:02d}-week-{week_ordinal:03d}.week.json"
         path = self.directory / name
@@ -530,9 +620,13 @@ class GridStudyLedgerStore:
             episode_start=payload.get("episode_start"),
             transition=payload.get("transition"),
         )
+        week_counts = list(state.week_counts)
+        week_counts[task_index] += 1
+        self._owned_state = replace(self._state_for_append(), week_counts=tuple(week_counts))
 
     def complete(self, task_index: int, report: dict[str, object]) -> str:
-        if self.load().task_states[task_index] is not TaskState.STARTED:
+        state = self._state_for_append()
+        if state.task_states[task_index] is not TaskState.STARTED:
             raise GridHistoryRunnerError("task completion lacks STARTED")
         name = f"task-{task_index:02d}.task.json"
         path = self.directory / name
@@ -544,27 +638,44 @@ class GridStudyLedgerStore:
             artifact_name=name,
             report_sha256=digest,
         )
+        states = list(state.task_states)
+        states[task_index] = TaskState.COMPLETED
+        reports = list(state.task_report_sha256)
+        reports[task_index] = digest
+        self._owned_state = replace(
+            self._state_for_append(),
+            task_states=tuple(states),
+            task_report_sha256=tuple(reports),
+        )
         return digest
 
     def terminate(self, task_index: int, *, unknown: bool, reason: str) -> None:
-        if self.load().task_states[task_index] is not TaskState.STARTED:
+        state = self._state_for_append()
+        if state.task_states[task_index] is not TaskState.STARTED:
             raise GridHistoryRunnerError("task terminal transition lacks STARTED")
         self._append(
             "TASK_UNKNOWN" if unknown else "TASK_FAILED",
             task_index=task_index,
             reason=reason,
         )
+        states = list(state.task_states)
+        states[task_index] = TaskState.UNKNOWN if unknown else TaskState.FAILED
+        self._owned_state = replace(self._state_for_append(), task_states=tuple(states))
 
     def finalize(self, projection: dict[str, object]) -> str:
-        state = self.load()
+        state = self._state_for_append()
         if state.finalized_sha256 is not None or any(
             item is not TaskState.COMPLETED for item in state.task_states
         ):
             raise GridHistoryRunnerError("run is not ready to finalize")
+        verified_state = self.load()
+        if verified_state != state:
+            raise GridHistoryRunnerError("incremental ledger state differs at finalization")
         path = self.directory / "projection.json"
         _write_new(path, canonical_json(projection))
         digest = _sha_file(path)
         self._append("FINALIZED", projection_sha256=digest)
+        self._owned_state = replace(self._state_for_append(), finalized_sha256=digest)
         return digest
 
 
@@ -602,16 +713,18 @@ def summarize_task(
     *,
     task_id: str,
     records: tuple[LedgerWeekRecord, ...],
-    reports: tuple[GridEpisodeReport, ...],
+    week_summaries: tuple[GridWeekSummary, ...],
     final_carry: GridLedgerCarry,
 ) -> dict[str, object]:
-    """Build the predeclared economic report solely from committed engine outputs."""
+    """Build the predeclared economic report from compact committed-week facts."""
 
     included = tuple(record for record in records if record.included_in_weekly_statistics)
-    if len(included) != len(reports):
-        raise GridHistoryRunnerError("eligible record/report denominator differs")
-    report_by_sequence = dict(zip((record.sequence for record in included), reports, strict=True))
-    partitions = _partition_metrics(records, report_by_sequence)
+    if len(included) != len(week_summaries):
+        raise GridHistoryRunnerError("eligible record/summary denominator differs")
+    summary_by_sequence = {summary.sequence: summary for summary in week_summaries}
+    if set(summary_by_sequence) != {record.sequence for record in included}:
+        raise GridHistoryRunnerError("eligible record/summary identity differs")
+    partitions = _partition_metrics(records, summary_by_sequence)
     validation = tuple(
         Decimal(record.weekly_return or "0")
         for record in included
@@ -622,19 +735,12 @@ def summarize_task(
         for record in included
         if record.partition == "RETROSPECTIVE_ASSESSMENT"
     )
-    fill_count = sum(
-        1
-        for report in reports
-        for event in report.audit
-        if event.get("event_type") in {"ORDER_FILLED", "FORCED_CLOSE_FILLED"}
+    fill_count = sum(summary.fill_count for summary in week_summaries)
+    forced_close_count = sum(summary.forced_close_count for summary in week_summaries)
+    max_drawdown = max(
+        (summary.maximum_running_peak_drawdown_fraction for summary in week_summaries),
+        default=Decimal(0),
     )
-    forced_close_count = sum(
-        1
-        for report in reports
-        for event in report.audit
-        if event.get("event_type") == "FORCED_CLOSE_FILLED"
-    )
-    max_drawdown = max((_report_maximum_drawdown(report) for report in reports), default=Decimal(0))
     validation_lower = moving_block_lower_bound(
         validation,
         contiguous_runs=_contiguous_returns(records, "VALIDATION"),
@@ -812,7 +918,7 @@ def _run_one_shot(
             expected_source_id=grant.source_id,
             expected_supplied_code_sha=grant.executable_sha,
         )
-        reports: list[GridEpisodeReport] = []
+        week_summaries: list[GridWeekSummary] = []
         try:
             for week_ordinal, row in enumerate(calendar.rows_for(symbol_text)):
                 _require_budget(clock, deadline)
@@ -860,7 +966,7 @@ def _run_one_shot(
                         report=report,
                         carry_out=engine.carry_out(),
                     )
-                    reports.append(report)
+                    week_summaries.append(_summarize_episode_report(record.sequence, report))
                     source_hashes = week.source_file_sha256
                 store.commit_week(
                     task_index,
@@ -880,7 +986,7 @@ def _run_one_shot(
         task_report = summarize_task(
             task_id=task_id,
             records=tuple(task_ledger.records),
-            reports=tuple(reports),
+            week_summaries=tuple(week_summaries),
             final_carry=task_ledger.carry,
         )
         store.complete(task_index, task_report)
@@ -990,7 +1096,7 @@ def _contiguous_returns(
 
 def _partition_metrics(
     records: tuple[LedgerWeekRecord, ...],
-    reports: dict[int, GridEpisodeReport],
+    summaries: dict[int, GridWeekSummary],
 ) -> dict[str, dict[str, object]]:
     result: dict[str, dict[str, object]] = {}
     current_equity = Decimal("10000")
@@ -1004,13 +1110,16 @@ def _partition_metrics(
             if not record.included_in_weekly_statistics:
                 continue
             eligible += 1
-            report = reports.get(record.sequence)
-            if report is None or report.carry_out is None:
-                raise GridHistoryRunnerError("eligible partition report is unavailable")
-            if any(event.get("event_type") == "ORDER_FILLED" for event in report.audit):
+            summary = summaries.get(record.sequence)
+            if summary is None:
+                raise GridHistoryRunnerError("eligible partition summary is unavailable")
+            if summary.order_fill_count > 0:
                 fill_weeks += 1
-            current_equity = Decimal(str(report.carry_out["current_equity"]))
-            maximum_drawdown = max(maximum_drawdown, _report_maximum_drawdown(report))
+            current_equity = summary.current_equity
+            maximum_drawdown = max(
+                maximum_drawdown,
+                summary.maximum_running_peak_drawdown_fraction,
+            )
         with localcontext(_CONTEXT):
             total_return = (
                 (current_equity - opening_equity) / opening_equity
@@ -1029,6 +1138,30 @@ def _partition_metrics(
             "maximum_running_peak_drawdown_fraction": str(maximum_drawdown),
         }
     return result
+
+
+def _summarize_episode_report(sequence: int, report: GridEpisodeReport) -> GridWeekSummary:
+    if report.carry_out is None:
+        raise GridHistoryRunnerError("eligible engine report carry-out is unavailable")
+    try:
+        current_equity = Decimal(str(report.carry_out["current_equity"]))
+    except (KeyError, ArithmeticError) as exc:
+        raise GridHistoryRunnerError("eligible engine report equity is invalid") from exc
+    if not current_equity.is_finite():
+        raise GridHistoryRunnerError("eligible engine report equity is invalid")
+    return GridWeekSummary(
+        sequence=sequence,
+        current_equity=current_equity,
+        order_fill_count=sum(event.get("event_type") == "ORDER_FILLED" for event in report.audit),
+        fill_count=sum(
+            event.get("event_type") in {"ORDER_FILLED", "FORCED_CLOSE_FILLED"}
+            for event in report.audit
+        ),
+        forced_close_count=sum(
+            event.get("event_type") == "FORCED_CLOSE_FILLED" for event in report.audit
+        ),
+        maximum_running_peak_drawdown_fraction=_report_maximum_drawdown(report),
+    )
 
 
 def _report_maximum_drawdown(report: GridEpisodeReport) -> Decimal:
@@ -1191,11 +1324,13 @@ __all__ = [
     "GridStudyGrant",
     "GridStudyLedgerState",
     "GridStudyLedgerStore",
+    "GridWeekSummary",
     "TaskState",
     "TerminalClassification",
     "classify_task_reports",
     "moving_block_lower_bound",
     "run_one_shot",
     "summarize_task",
+    "verified_checkout_identity",
     "verify_finalized",
 ]

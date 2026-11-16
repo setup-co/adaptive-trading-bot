@@ -16,8 +16,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from numpy.random import PCG64, Generator
-from scripts.research import grid_history_runner as runner_cli
 
+import adaptive_trading_bot.research.grid_history_runner as runner_module
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.research.grid_history_preflight import (
     ACCEPTED_CALENDAR_SHA256,
@@ -46,11 +46,13 @@ from adaptive_trading_bot.research.grid_history_runner import (
     GridHistoryRunnerError,
     GridStudyGrant,
     GridStudyLedgerStore,
+    GridWeekSummary,
     TaskState,
     classify_task_reports,
     moving_block_lower_bound,
     run_one_shot,
     summarize_task,
+    verified_checkout_identity,
     verify_finalized,
 )
 from adaptive_trading_bot.research.grid_v1 import (
@@ -534,7 +536,10 @@ def test_intrawEEK_drawdown_uses_every_minute_and_survives_terminal_recovery() -
     summary = summarize_task(
         task_id="BTCUSDT:BASE",
         records=records,
-        reports=(first, second),
+        week_summaries=(
+            runner_module._summarize_episode_report(1, first),
+            runner_module._summarize_episode_report(2, second),
+        ),
         final_carry=final_carry,
     )
     assert summary["maximum_running_peak_drawdown_fraction"] == "0.25"
@@ -686,7 +691,7 @@ def test_historical_checkout_gate_rejects_dirty_and_import_mismatch(tmp_path: Pa
     ):
         subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
 
-    head, tree = runner_cli._verified_checkout_identity(repo, imported_files=imported)
+    head, tree = verified_checkout_identity(repo, imported_files=imported)
     assert len(head) == 40
     assert len(tree) == 40
 
@@ -694,14 +699,82 @@ def test_historical_checkout_gate_rejects_dirty_and_import_mismatch(tmp_path: Pa
     original = first.read_bytes()
     first.write_bytes(original + b"# dirty\n")
     with pytest.raises(GridHistoryRunnerError, match="exact clean checkout"):
-        runner_cli._verified_checkout_identity(repo, imported_files=imported)
+        verified_checkout_identity(repo, imported_files=imported)
     first.write_bytes(original)
 
     outside = tmp_path / "outside.py"
     outside.write_bytes(original)
     mismatched = {**imported, relative_paths[0]: outside}
     with pytest.raises(GridHistoryRunnerError, match="outside the named checkout"):
-        runner_cli._verified_checkout_identity(repo, imported_files=mismatched)
+        verified_checkout_identity(repo, imported_files=mismatched)
+
+
+def test_week_summary_drops_full_audit_after_extracting_authoritative_facts() -> None:
+    report = _recovered_report(
+        episode_start=datetime(2026, 1, 5, tzinfo=UTC),
+        final_equity="11500",
+    )
+    large_audit: tuple[dict[str, object], ...] = tuple(
+        {
+            "sequence": index,
+            "observed_at": "2026-01-05T00:00:00+00:00",
+            "event_type": "MINUTE_MARKED",
+            "order_id": None,
+            "lot_id": None,
+            "details": {"equity": "11500", "peak_equity": "12000"},
+        }
+        for index in range(1, 1001)
+    )
+    report = replace(report, input_contract={"required_minute_count": 1000}, audit=large_audit)
+
+    summary = runner_module._summarize_episode_report(7, report)
+
+    assert isinstance(summary, GridWeekSummary)
+    assert asdict(summary) == {
+        "sequence": 7,
+        "current_equity": Decimal("11500"),
+        "order_fill_count": 0,
+        "fill_count": 0,
+        "forced_close_count": 0,
+        "maximum_running_peak_drawdown_fraction": Decimal("0.04166666666666666666666666666666667"),
+    }
+    assert not hasattr(summary, "audit")
+    assert len(repr(summary)) < 300
+
+
+def test_incremental_append_hash_reads_scale_linearly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    grant = _grant("8" * 64)
+    store = GridStudyLedgerStore.create(tmp_path, grant)
+    observed_week_hashes = 0
+    original_sha_file = runner_module._sha_file
+
+    def counted_sha_file(path: Path) -> str:
+        nonlocal observed_week_hashes
+        if path.name.endswith(".week.json"):
+            observed_week_hashes += 1
+        return original_sha_file(path)
+
+    monkeypatch.setattr(runner_module, "_sha_file", counted_sha_file)
+    store.record_preflight({"schema": "synthetic-preflight-v1"})
+    store.start(0)
+    week_count = 64
+    for ordinal in range(week_count):
+        store.commit_week(
+            0,
+            ordinal,
+            {
+                "episode_start": f"synthetic-{ordinal:03d}",
+                "transition": "SYNTHETIC",
+            },
+        )
+    assert observed_week_hashes == week_count
+
+    verified = store.load()
+
+    assert verified.week_counts[0] == week_count
+    assert observed_week_hashes == week_count * 2
 
 
 def test_fixed_wall_budget_stops_once_and_records_actual_failure(tmp_path: Path) -> None:
