@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from adaptive_trading_bot.research.grid_history_offline import (
     ACCEPTED_REFERENCE_SHA,
     ACCEPTED_REFERENCE_TREE,
+    AMENDMENT_REVIEW_COMMENT_ID,
+    AMENDMENT_REVIEW_URL,
     MAX_WALL_SECONDS,
     OFFLINE_GRANT_KIND,
     OFFLINE_MANIFEST_SCHEMA,
     OWNER_DIRECTIVE_COMMENT_ID,
     OWNER_DIRECTIVE_URL,
+    SOURCE_COVERAGE_AMENDMENT_LABEL,
+    SOURCE_COVERAGE_AMENDMENT_SHA256,
+    SOURCE_COVERAGE_REASON,
     OfflineResearchManifest,
     grant_from_manifest,
 )
@@ -22,6 +29,8 @@ from adaptive_trading_bot.research.grid_history_preflight import (
     ACCEPTED_V3_MANIFEST_SHA256,
     ACCEPTED_V3_REPORT_SHA256,
     STUDY_PLAN_SHA256,
+    CalendarStatus,
+    VerifiedCalendar,
 )
 from adaptive_trading_bot.research.grid_history_runner import (
     ACCEPTED_SOURCE_ID,
@@ -58,7 +67,12 @@ def offline_manifest() -> OfflineResearchManifest:
         GRID_ACCEPTED_PROTOCOL_HEAD,
         GRID_PROTOCOL_DOCUMENT_SHA256,
         GRID_PARAMETERS_SHA256,
+        SOURCE_COVERAGE_AMENDMENT_SHA256,
         ACCEPTED_CALENDAR_SHA256,
+        SOURCE_COVERAGE_AMENDMENT_LABEL,
+        SOURCE_COVERAGE_AMENDMENT_SHA256,
+        AMENDMENT_REVIEW_COMMENT_ID,
+        AMENDMENT_REVIEW_URL,
         ACCEPTED_DATASET_VERSION,
         ACCEPTED_QUALIFICATION_PROTOCOL,
         ACCEPTED_V3_MANIFEST_SHA256,
@@ -74,6 +88,51 @@ def offline_manifest() -> OfflineResearchManifest:
     )
 
 
+def test_source_coverage_overlay_changes_only_the_three_uniform_failures() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    parent = VerifiedCalendar.accepted(
+        repo / "docs/research/btc_eth_grid_4h_v1_eligibility_calendar.json"
+    )
+    affected = {
+        ("BTCUSDT", datetime.fromisoformat("2022-08-01T00:00:00+00:00")),
+        ("BTCUSDT", datetime.fromisoformat("2022-10-03T00:00:00+00:00")),
+        ("ETHUSDT", datetime.fromisoformat("2022-10-03T00:00:00+00:00")),
+    }
+    rows = tuple(
+        replace(
+            row,
+            status=CalendarStatus.METADATA_INELIGIBLE,
+            reason_codes=(SOURCE_COVERAGE_REASON,),
+        )
+        if (row.symbol, row.episode_start) in affected
+        else row
+        for row in parent.rows
+    )
+
+    amended = VerifiedCalendar.source_coverage_amendment(
+        parent,
+        rows,
+        amendment_sha256=SOURCE_COVERAGE_AMENDMENT_SHA256,
+    )
+
+    assert len(parent.rows_for("BTCUSDT")) == len(amended.rows_for("BTCUSDT")) == 356
+    assert len(parent.rows_for("ETHUSDT")) == len(amended.rows_for("ETHUSDT")) == 356
+    assert (
+        sum(row.status is CalendarStatus.METADATA_ELIGIBLE for row in amended.rows_for("BTCUSDT"))
+        == 336
+    )
+    assert (
+        sum(row.status is CalendarStatus.METADATA_ELIGIBLE for row in amended.rows_for("ETHUSDT"))
+        == 344
+    )
+    assert all(
+        amended.require(row).reason_codes == (SOURCE_COVERAGE_REASON,)
+        for row in rows
+        if (row.symbol, row.episode_start) in affected
+    )
+    assert sum(left != right for left, right in zip(parent.rows, amended.rows, strict=True)) == 3
+
+
 def test_owner_waiver_is_isolated_from_signed_production_grant(
     offline_manifest: OfflineResearchManifest,
 ) -> None:
@@ -87,7 +146,7 @@ def test_owner_waiver_is_isolated_from_signed_production_grant(
     )
 
     signed_path_grant = GridStudyGrant(**{**asdict(grant), "kind": EXTERNAL_GRANT_KIND})
-    with pytest.raises(GridHistoryRunnerError, match="approval is absent"):
+    with pytest.raises(GridHistoryRunnerError, match="reviewed historical grant identity differs"):
         signed_path_grant.validate(
             actual_sha=offline_manifest.executable_sha,
             actual_tree=offline_manifest.executable_tree,

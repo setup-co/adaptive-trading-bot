@@ -8,6 +8,7 @@ from decimal import ROUND_DOWN, ROUND_UP, Context, Decimal, localcontext
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 
@@ -261,6 +262,32 @@ def test_eligible_value_read_requires_source_wide_preflight(tmp_path: Path) -> N
     adapter = V3GridHistoryAdapter(tmp_path, identity, calendar=authority)
     with pytest.raises(GridHistoryPreflightError, match="source-wide"):
         adapter.load_week(calendar)
+
+
+def test_ordinary_intraweek_mark_gap_remains_integrity_blocked(tmp_path: Path) -> None:
+    identity, row = _fixture(tmp_path)
+    relative = "derived-generations/v3/normalized/mark_1m/BTCUSDT/2026-01.parquet"
+    path = tmp_path / relative
+    table = pq.read_table(path)
+    missing_open = int(row.episode_start.timestamp() * 1000) + 10 * 60_000
+    retained = table.filter(pc.not_equal(table["open_time_ms"], pa.scalar(missing_open)))
+    pq.write_table(retained, path)
+
+    manifest_path = tmp_path / "qualification-manifest-v3.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["files"][relative] = {
+        "bytes": path.stat().st_size,
+        "rows": retained.num_rows,
+        "sha256": _sha(path),
+    }
+    manifest_path.write_bytes(_canonical(manifest))
+    identity = replace(identity, manifest_sha256=_sha(manifest_path))
+    authority = VerifiedCalendar.synthetic((row,), fixture_id="intraweek-mark-gap")
+    adapter = V3GridHistoryAdapter(tmp_path, identity, calendar=authority)
+    adapter.preflight_sources()
+
+    with pytest.raises(GridHistoryPreflightError, match="minute grid is incomplete"):
+        adapter.load_week(row)
 
 
 def test_ineligible_week_never_reads_market_rows(

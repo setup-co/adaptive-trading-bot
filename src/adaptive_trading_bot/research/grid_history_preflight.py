@@ -77,6 +77,7 @@ class CalendarTransition(StrEnum):
 
 class CalendarAuthorityKind(StrEnum):
     ACCEPTED_V3 = "ACCEPTED_V3"
+    SOURCE_COVERAGE_AMENDMENT_1 = "SOURCE_COVERAGE_AMENDMENT_1"
     SYNTHETIC_FIXTURE = "SYNTHETIC_FIXTURE"
 
 
@@ -197,6 +198,21 @@ class VerifiedCalendar:
                 raise GridHistoryPreflightError(
                     "accepted calendar must contain 356 weeks per symbol"
                 )
+        elif kind is CalendarAuthorityKind.SOURCE_COVERAGE_AMENDMENT_1:
+            if len(rows) != 712 or len(identity) != 64:
+                raise GridHistoryPreflightError("amended calendar authority identity differs")
+            if any(len(by_symbol[symbol]) != 356 for symbol in _SYMBOLS):
+                raise GridHistoryPreflightError(
+                    "amended calendar must contain 356 weeks per symbol"
+                )
+            eligible = {
+                symbol: sum(
+                    row.status is CalendarStatus.METADATA_ELIGIBLE for row in by_symbol[symbol]
+                )
+                for symbol in _SYMBOLS
+            }
+            if eligible != {"BTCUSDT": 336, "ETHUSDT": 344}:
+                raise GridHistoryPreflightError("amended calendar cohort differs")
         elif not identity.startswith("synthetic-fixture-"):
             raise GridHistoryPreflightError("synthetic calendar identity must be fixture-only")
         self.rows = rows
@@ -220,6 +236,53 @@ class VerifiedCalendar:
             rows,
             kind=CalendarAuthorityKind.SYNTHETIC_FIXTURE,
             identity=f"synthetic-fixture-{fixture_id}",
+            _factory_token=cls.__factory_token,
+        )
+
+    @classmethod
+    def source_coverage_amendment(
+        cls,
+        parent: VerifiedCalendar,
+        rows: tuple[CalendarEpisode, ...],
+        *,
+        amendment_sha256: str,
+    ) -> VerifiedCalendar:
+        """Bind a uniform source-only exclusion overlay to the accepted calendar."""
+
+        if parent.kind is not CalendarAuthorityKind.ACCEPTED_V3:
+            raise GridHistoryPreflightError("calendar amendment requires the accepted parent")
+        parent_by_key = {(row.symbol, row.episode_start): row for row in parent.rows}
+        amended_by_key = {(row.symbol, row.episode_start): row for row in rows}
+        if set(parent_by_key) != set(amended_by_key):
+            raise GridHistoryPreflightError("calendar amendment changed scheduled membership")
+        changed = 0
+        for key, original in parent_by_key.items():
+            amended = amended_by_key[key]
+            if original == amended:
+                continue
+            expected = CalendarEpisode(
+                original.symbol,
+                original.episode_start,
+                CalendarStatus.METADATA_INELIGIBLE,
+                original.partition,
+                original.warmup_start,
+                original.required_data_end_exclusive,
+                ("FIRST_MINUTE_FUNDING_PRECEDING_MARK_MISSING",),
+                original.flag_codes,
+            )
+            if original.status is not CalendarStatus.METADATA_ELIGIBLE or amended != expected:
+                raise GridHistoryPreflightError(
+                    "calendar amendment changed more than source eligibility"
+                )
+            changed += 1
+        if changed != 3:
+            raise GridHistoryPreflightError(
+                "calendar amendment must contain exactly three exclusions"
+            )
+        return cls(
+            rows,
+            kind=CalendarAuthorityKind.SOURCE_COVERAGE_AMENDMENT_1,
+            identity=amendment_sha256,
             _factory_token=cls.__factory_token,
         )
 
@@ -473,7 +536,10 @@ class V3GridHistoryAdapter:
         calendar: VerifiedCalendar,
     ) -> None:
         if identity == ACCEPTED_V3_IDENTITY:
-            if calendar.kind is not CalendarAuthorityKind.ACCEPTED_V3:
+            if calendar.kind not in {
+                CalendarAuthorityKind.ACCEPTED_V3,
+                CalendarAuthorityKind.SOURCE_COVERAGE_AMENDMENT_1,
+            }:
                 raise GridHistoryPreflightError("accepted corpus requires the accepted calendar")
         elif calendar.kind is not CalendarAuthorityKind.SYNTHETIC_FIXTURE:
             raise GridHistoryPreflightError("fixture corpus requires a fixture-only calendar")
