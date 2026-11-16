@@ -1,18 +1,75 @@
-name: CI
+name: Fast CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
+concurrency:
+  group: fast-ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
 jobs:
-  quality:
+  fast-plan:
+    name: fast / plan
     runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.plan.outputs.python }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      docs: ${{ steps.plan.outputs.docs }}
+      pytest-mode: ${{ steps.plan.outputs.pytest_mode }}
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact PR head
+        run: test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+
+      - name: Classify changed files
+        id: plan
+        run: >-
+          python scripts/ci/fast_ci.py classify
+          --base "$PR_BASE_SHA"
+          --head "$PR_HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Record plan duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST plan elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-python:
+    name: fast / python
+    needs: fast-plan
+    if: needs.fast-plan.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v5
         with:
@@ -29,18 +86,40 @@ jobs:
         run: ruff check .
 
       - name: Type check
-        run: mypy src tests migrations
+        run: mypy src tests migrations scripts/ci
 
-      - name: Test
-        run: pytest
+      - name: Run change-aware regressions
+        run: >-
+          python scripts/ci/fast_ci.py run-tests
+          --base "$PR_BASE_SHA"
+          --head "$PR_HEAD_SHA"
 
-  frontend-quality:
+      - name: Record Python duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST Python elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-frontend:
+    name: fast / frontend
+    needs: fast-plan
+    if: needs.fast-plan.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
+    outputs:
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -62,3 +141,66 @@ jobs:
 
       - name: Frontend build
         run: npm run build
+
+      - name: Record frontend duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST frontend elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-docs:
+    name: fast / docs
+    needs: fast-plan
+    if: needs.fast-plan.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      elapsed-seconds: ${{ steps.metrics.outputs.elapsed_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Start timer
+        id: timer
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify documentation-only scope and whitespace
+        run: |
+          git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"
+          python scripts/ci/fast_ci.py require-docs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"
+
+      - name: Record documentation duration
+        id: metrics
+        if: always()
+        run: |
+          elapsed=$(($(date +%s) - ${{ steps.timer.outputs.started }}))
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "FAST docs elapsed: ${elapsed}s" >> "$GITHUB_STEP_SUMMARY"
+
+  fast-ci:
+    name: fast-ci
+    needs: [fast-plan, fast-python, fast-frontend, fast-docs]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Enforce planned jobs and report runner time
+        run: >-
+          python scripts/ci/fast_ci.py gate
+          --plan-result "${{ needs.fast-plan.result }}"
+          --python-planned "${{ needs.fast-plan.outputs.python }}"
+          --python-result "${{ needs.fast-python.result }}"
+          --frontend-planned "${{ needs.fast-plan.outputs.frontend }}"
+          --frontend-result "${{ needs.fast-frontend.result }}"
+          --docs-planned "${{ needs.fast-plan.outputs.docs }}"
+          --docs-result "${{ needs.fast-docs.result }}"
+          --duration "${{ needs.fast-plan.outputs.elapsed-seconds }}"
+          --duration "${{ needs.fast-python.outputs.elapsed-seconds }}"
+          --duration "${{ needs.fast-frontend.outputs.elapsed-seconds }}"
+          --duration "${{ needs.fast-docs.outputs.elapsed-seconds }}"

@@ -524,6 +524,93 @@ def test_complete_loss_week_carries_account_economics_into_next_week() -> None:
     assert snapshot.cumulative_gross_realized_pnl == carry.cumulative_gross_realized_pnl
 
 
+def test_canonical_multiweek_cash_preserves_precise_fees_funding_and_drawdown() -> None:
+    symbol = TradingSymbol("BTC", "USDT")
+    prior = GridLedgerCarry(
+        symbol,
+        Decimal("10000"),
+        Decimal("10064.79107928659745714846247288"),
+        Decimal("10064.79107928659745714846247288"),
+        Decimal("64.41651676937369143893802330"),
+        Decimal("26.40051546477543495315115042"),
+        Decimal("26.7750779819992006626756"),
+        Decimal("10083.66934708942347374346247"),
+        False,
+        START,
+    )
+    next_start = START + timedelta(days=7)
+    episode = _episode(start=next_start, carry=prior)
+    seed = GridV1Engine(episode, GridScenario.BASE, healthy_grid_health(episode))
+    engine = GridV1Engine(
+        episode,
+        GridScenario.BASE,
+        healthy_grid_health(episode),
+        synthetic_geometry=_geometry(seed),
+    )
+    engine.process_minute(_minute(0, episode_start=next_start, mark="100"))
+    engine.accounting.process(
+        PositionAccountingFillBatch(
+            next_start + timedelta(seconds=10),
+            (
+                PositionAccountingFill(
+                    "precise-buy",
+                    symbol,
+                    SimulatedExecutionSide.BUY,
+                    Decimal(1),
+                    next_start + timedelta(seconds=10),
+                    Decimal(100),
+                    Decimal("1.234567890123456789012345678901234"),
+                ),
+            ),
+        )
+    )
+    engine.accounting.process(
+        PositionAccountingFillBatch(
+            next_start + timedelta(seconds=20),
+            (
+                PositionAccountingFill(
+                    "precise-sell",
+                    symbol,
+                    SimulatedExecutionSide.SELL,
+                    Decimal(1),
+                    next_start + timedelta(seconds=20),
+                    Decimal(90),
+                    Decimal("2.345678901234567890123456789012345"),
+                ),
+            ),
+        )
+    )
+    engine.funding_cash = Decimal("0.1234567890123456789012345678901234")
+    for offset in range(1, 6 * 24 * 60 + 20 * 60 + 2):
+        engine.process_minute(
+            _minute(
+                offset,
+                episode_start=next_start,
+                mark="100",
+            )
+        )
+
+    carried = engine.carry_out()
+    report = engine.report()
+    minute_audit = [event for event in report.audit if event["event_type"] == "MINUTE_MARKED"]
+
+    assert carried.current_cash == Decimal("10051.33428928425177814822790497998")
+    assert carried.cumulative_gross_realized_pnl == Decimal("54.41651676937369143893802330")
+    assert carried.cumulative_fees == Decimal("29.98076225613345963228695288791358")
+    assert carried.cumulative_funding == Decimal("26.89853477101154634157683456789012")
+    assert len(minute_audit) == 6 * 24 * 60 + 20 * 60 + 2
+    last_details = minute_audit[-1]["details"]
+    assert isinstance(last_details, dict)
+    assert last_details["cash"] == str(carried.current_cash)
+    assert Decimal(str(report.snapshot["running_peak_drawdown_fraction"])) > 0
+    assert report.carry_out is not None
+    assert report.carry_out["current_cash"] == str(carried.current_cash)
+
+    changed = carried.current_cash + Decimal("0.00000000000000000001")
+    with pytest.raises(GridV1Error, match="economics do not reconcile"):
+        replace(carried, current_cash=changed, current_equity=changed)
+
+
 def test_terminated_carry_stays_cash_only_without_reauthorization() -> None:
     symbol = TradingSymbol("BTC", "USDT")
     carry = GridLedgerCarry(
