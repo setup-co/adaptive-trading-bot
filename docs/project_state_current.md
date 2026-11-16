@@ -94,6 +94,13 @@ remain preserved.
 
 ## Active task and next gate
 
+Issue #249 adds only owner-operated offline Ed25519 key-generation and public-fingerprint tooling.
+Synthetic tests use ephemeral fixture keys; no owner private key, production public key, grant,
+signature or UUID exists in the repository. The runner's trusted public-key constant remains
+`None`, so real history remains fail-closed. A later owner-only enrollment must supply only the raw
+public key and key ID for independent verification, followed by a separate reviewed pin commit and
+new executable SHA/tree before any distinct signed grant can be considered.
+
 Issue #245 prepared the separately reviewable historical-data boundary for the accepted Grid
 engine. The locked plan `BTC_ETH_NEUTRAL_GEOMETRIC_GRID_4H_V1_HISTORY_STUDY` version
 `0.1.0-preflight` binds the accepted engine HEAD, protocol/parameter/calendar hashes and v3
