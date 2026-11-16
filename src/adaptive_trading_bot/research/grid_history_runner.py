@@ -20,6 +20,11 @@ from pathlib import Path
 from time import monotonic
 from typing import Self, cast
 
+import numpy as np
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from numpy.random import PCG64, Generator
+
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.research.grid_history_preflight import (
     ACCEPTED_CALENDAR_SHA256,
@@ -59,6 +64,9 @@ from adaptive_trading_bot.storage import SourceId
 
 RUNNER_SCHEMA = "btc-eth-grid-4h-v1-one-shot-runner-v1"
 RUNNER_VERSION = "0.1.0-guarded"
+APPROVAL_SCHEMA = "btc-eth-grid-history-ed25519-approval-v1"
+# A later architect decision must pin a real public key before any external grant can pass.
+ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX: str | None = None
 ACCEPTED_PREFLIGHT_HEAD = "bbe6a33b5ca7f20537a23e5a050d81a454f6f7c3"
 ACCEPTED_ENGINE_HEAD = "dc450a4a3a0f2dfe114a690459971bc79d2aba68"
 ACCEPTED_SOURCE_ID = "binance-usdm-btc-eth-grid-v3"
@@ -71,9 +79,13 @@ TASK_IDS = (
     "ETHUSDT:STRESS",
 )
 _CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-_PCG_MULTIPLIER = 47026247687942121848144207491837523525
-_MASK_128 = (1 << 128) - 1
-_MASK_64 = (1 << 64) - 1
+BOOTSTRAP_SEED = 241
+BOOTSTRAP_DRAWS = 10_000
+BOOTSTRAP_BLOCK_WEEKS = 4
+BOOTSTRAP_PRNG = "numpy.random.PCG64"
+BOOTSTRAP_BOUNDED_SAMPLER = (
+    "numpy.random.Generator.integers(low=0,high=exclusive,size=(10000,ceil(n/4)),dtype=uint64)"
+)
 
 
 class GridHistoryRunnerError(RuntimeError):
@@ -93,6 +105,55 @@ class TerminalClassification(StrEnum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
     NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION = "NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION"
     CANDIDATE_FOR_PROSPECTIVE_CONFIRMATION = "CANDIDATE_FOR_PROSPECTIVE_CONFIRMATION"
+
+
+@dataclass(frozen=True, slots=True)
+class GridGrantApproval:
+    """Detached architect signature over the exact canonical grant bytes."""
+
+    schema: str
+    key_id: str
+    grant_sha256: str
+    signature_ed25519_hex: str
+
+    @classmethod
+    def from_file(cls, path: Path) -> Self:
+        raw = path.read_bytes()
+        try:
+            value = json.loads(raw)
+        except (UnicodeError, ValueError) as exc:
+            raise GridHistoryRunnerError("grant approval is not valid JSON") from exc
+        expected = {field.name for field in cls.__dataclass_fields__.values()}
+        if not isinstance(value, dict) or canonical_json(value) != raw or set(value) != expected:
+            raise GridHistoryRunnerError("grant approval must be exact canonical JSON")
+        try:
+            return cls(**value)
+        except TypeError as exc:
+            raise GridHistoryRunnerError("grant approval values are invalid") from exc
+
+    def verify(self, grant: GridStudyGrant, *, trusted_public_key_hex: str | None) -> None:
+        if trusted_public_key_hex is None:
+            raise GridHistoryRunnerError("no architect approval key is pinned in this executable")
+        try:
+            public_key_bytes = bytes.fromhex(trusted_public_key_hex)
+            signature = bytes.fromhex(self.signature_ed25519_hex)
+        except ValueError as exc:
+            raise GridHistoryRunnerError("grant approval encoding is invalid") from exc
+        expected_key_id = hashlib.sha256(public_key_bytes).hexdigest()
+        if (
+            self.schema != APPROVAL_SCHEMA
+            or self.key_id != expected_key_id
+            or self.grant_sha256 != grant.sha256
+            or len(public_key_bytes) != 32
+            or len(signature) != 64
+        ):
+            raise GridHistoryRunnerError("grant approval provenance differs")
+        try:
+            Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(
+                signature, canonical_json(asdict(grant))
+            )
+        except (InvalidSignature, ValueError) as exc:
+            raise GridHistoryRunnerError("grant approval signature is invalid") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +218,7 @@ class GridStudyGrant:
         actual_sha: str,
         actual_tree: str,
         synthetic: bool,
+        approval: GridGrantApproval | None = None,
     ) -> None:
         try:
             stable_uuid = str(uuid.UUID(self.run_uuid)) == self.run_uuid
@@ -188,7 +250,8 @@ class GridStudyGrant:
             raise GridHistoryRunnerError("execution grant identity or budget differs")
         if synthetic:
             if (
-                self.kind != SYNTHETIC_GRANT_KIND
+                approval is not None
+                or self.kind != SYNTHETIC_GRANT_KIND
                 or not self.source_id.startswith("synthetic-")
                 or not self.dataset_version.startswith("synthetic-")
                 or not self.qualification_protocol.startswith("SYNTHETIC_")
@@ -205,16 +268,23 @@ class GridStudyGrant:
                 or self.report_sha256 == ACCEPTED_V3_REPORT_SHA256
             ):
                 raise GridHistoryRunnerError("synthetic grant is not fixture-only")
-        elif (
-            self.kind != EXTERNAL_GRANT_KIND
-            or self.source_id != ACCEPTED_SOURCE_ID
-            or self.calendar_sha256 != ACCEPTED_CALENDAR_SHA256
-            or self.dataset_version != ACCEPTED_DATASET_VERSION
-            or self.qualification_protocol != ACCEPTED_QUALIFICATION_PROTOCOL
-            or self.manifest_sha256 != ACCEPTED_V3_MANIFEST_SHA256
-            or self.report_sha256 != ACCEPTED_V3_REPORT_SHA256
-        ):
-            raise GridHistoryRunnerError("reviewed historical grant is absent")
+        else:
+            if (
+                self.kind != EXTERNAL_GRANT_KIND
+                or self.source_id != ACCEPTED_SOURCE_ID
+                or self.calendar_sha256 != ACCEPTED_CALENDAR_SHA256
+                or self.dataset_version != ACCEPTED_DATASET_VERSION
+                or self.qualification_protocol != ACCEPTED_QUALIFICATION_PROTOCOL
+                or self.manifest_sha256 != ACCEPTED_V3_MANIFEST_SHA256
+                or self.report_sha256 != ACCEPTED_V3_REPORT_SHA256
+            ):
+                raise GridHistoryRunnerError("reviewed historical grant identity differs")
+            if approval is None:
+                raise GridHistoryRunnerError("independent architect grant approval is absent")
+            approval.verify(
+                self,
+                trusted_public_key_hex=ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,33 +568,6 @@ class GridStudyLedgerStore:
         return digest
 
 
-class _PCG64:
-    """Small deterministic PCG XSL-RR 128/64 generator for the frozen bootstrap."""
-
-    def __init__(self, seed: int) -> None:
-        self.state = 0
-        self.increment = ((seed << 1) | 1) & _MASK_128
-        self._next()
-        self.state = (self.state + seed) & _MASK_128
-        self._next()
-
-    def _next(self) -> int:
-        old = self.state
-        self.state = (old * _PCG_MULTIPLIER + self.increment) & _MASK_128
-        mixed = ((old >> 64) ^ old) & _MASK_64
-        rotation = old >> 122
-        return ((mixed >> rotation) | (mixed << ((-rotation) & 63))) & _MASK_64
-
-    def below(self, bound: int) -> int:
-        if bound <= 0:
-            raise GridHistoryRunnerError("PCG64 bound is invalid")
-        threshold = (1 << 64) % bound
-        while True:
-            value = self._next()
-            if value >= threshold:
-                return value % bound
-
-
 def moving_block_lower_bound(
     returns: tuple[Decimal, ...],
     *,
@@ -536,13 +579,19 @@ def moving_block_lower_bound(
     blocks = tuple(run[index : index + 4] for run in runs for index in range(max(0, len(run) - 3)))
     if not returns or not blocks:
         return None
-    generator = _PCG64(241)
+    generator = Generator(PCG64(BOOTSTRAP_SEED))
     means: list[Decimal] = []
     block_count = (len(returns) + 3) // 4
+    sampled_indices = generator.integers(
+        0,
+        len(blocks),
+        size=(BOOTSTRAP_DRAWS, block_count),
+        dtype=np.uint64,
+    )
     with localcontext(_CONTEXT):
-        for _ in range(10_000):
+        for replicate in sampled_indices:
             sample = tuple(
-                value for _ in range(block_count) for value in blocks[generator.below(len(blocks))]
+                value for block_index in replicate for value in blocks[int(block_index)]
             )[: len(returns)]
             means.append(sum(sample, Decimal(0)) / Decimal(len(sample)))
     means.sort()
@@ -585,10 +634,7 @@ def summarize_task(
         for event in report.audit
         if event.get("event_type") == "FORCED_CLOSE_FILLED"
     )
-    max_drawdown = max(
-        (Decimal(str(report.snapshot["running_peak_drawdown_fraction"])) for report in reports),
-        default=Decimal(0),
-    )
+    max_drawdown = max((_report_maximum_drawdown(report) for report in reports), default=Decimal(0))
     validation_lower = moving_block_lower_bound(
         validation,
         contiguous_runs=_contiguous_returns(records, "VALIDATION"),
@@ -646,6 +692,15 @@ def summarize_task(
         "validation_fill_weeks": validation_fill_weeks,
         "validation_median_weekly_return": _text(validation_median),
         "validation_mean_lower_95_bound": _text(validation_lower),
+        "validation_bootstrap_contract": {
+            "prng": BOOTSTRAP_PRNG,
+            "numpy_version": np.__version__,
+            "seed": BOOTSTRAP_SEED,
+            "bounded_sampler": BOOTSTRAP_BOUNDED_SAMPLER,
+            "block_weeks": BOOTSTRAP_BLOCK_WEEKS,
+            "draws": BOOTSTRAP_DRAWS,
+            "lower_quantile_sorted_index": 249,
+        },
         "retrospective_eligible_weeks": len(retrospective),
         "retrospective_median_weekly_return": _text(retrospective_median),
         "classification": classification.value,
@@ -666,6 +721,7 @@ def run_one_shot(
     week_loader: WeekLoader,
     preflight: dict[str, object],
     synthetic: bool,
+    approval: GridGrantApproval | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[GridStudyLedgerStore, dict[str, object]]:
     """Run once and durably record the actual command outcome after ledger creation."""
@@ -681,6 +737,7 @@ def run_one_shot(
             week_loader=week_loader,
             preflight=preflight,
             synthetic=synthetic,
+            approval=approval,
             clock=clock,
         )
     except Exception:
@@ -712,11 +769,17 @@ def _run_one_shot(
     week_loader: WeekLoader,
     preflight: dict[str, object],
     synthetic: bool,
+    approval: GridGrantApproval | None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[GridStudyLedgerStore, dict[str, object]]:
     """Run four tasks once; callers own the already-validated bounded week loader."""
 
-    grant.validate(actual_sha=actual_sha, actual_tree=actual_tree, synthetic=synthetic)
+    grant.validate(
+        actual_sha=actual_sha,
+        actual_tree=actual_tree,
+        synthetic=synthetic,
+        approval=approval,
+    )
     started_at = clock()
     deadline = started_at + grant.max_wall_seconds
     store = GridStudyLedgerStore.create(ledger_root, grant)
@@ -832,7 +895,7 @@ def _run_one_shot(
         "study_plan_sha256": grant.study_plan_sha256,
         "preflight_sha256": preflight_sha,
         "task_reports": task_reports,
-        "classification": _combined_classification(task_reports),
+        "classification": classify_task_reports(task_reports),
         "historical_execution": "SYNTHETIC_FIXTURE_ONLY" if synthetic else "GRANT_AUTHORIZED",
         "trading_authorization": False,
     }
@@ -876,7 +939,7 @@ def verify_finalized(directory: Path) -> dict[str, object]:
         or value.get("executable_tree") != state.executable_tree
         or value.get("preflight_sha256") != state.preflight_sha256
         or value.get("task_reports") != task_reports
-        or value.get("classification") != _combined_classification(task_reports)
+        or value.get("classification") != classify_task_reports(task_reports)
         or value.get("trading_authorization") is not False
     ):
         raise GridHistoryRunnerError("projection run identity differs")
@@ -896,7 +959,11 @@ def verify_finalized(directory: Path) -> dict[str, object]:
     ):
         raise GridHistoryRunnerError("successful run exit record differs")
     return {
-        "status": "VERIFIED",
+        "status": "ARTIFACT_CONSISTENCY_VERIFIED",
+        "verification_scope": (
+            "HASH_CHAIN_IDENTITIES_AND_SAVED_REPORT_RECONCILIATION_ONLY_"
+            "NOT_INDEPENDENT_ECONOMIC_REPLICATION"
+        ),
         "run_uuid": state.run_uuid,
         "revision": state.revision,
         "task_states": [state.value for state in state.task_states],
@@ -943,10 +1010,7 @@ def _partition_metrics(
             if any(event.get("event_type") == "ORDER_FILLED" for event in report.audit):
                 fill_weeks += 1
             current_equity = Decimal(str(report.carry_out["current_equity"]))
-            maximum_drawdown = max(
-                maximum_drawdown,
-                Decimal(str(report.snapshot["running_peak_drawdown_fraction"])),
-            )
+            maximum_drawdown = max(maximum_drawdown, _report_maximum_drawdown(report))
         with localcontext(_CONTEXT):
             total_return = (
                 (current_equity - opening_equity) / opening_equity
@@ -967,7 +1031,35 @@ def _partition_metrics(
     return result
 
 
-def _combined_classification(reports: Iterable[dict[str, object]]) -> str:
+def _report_maximum_drawdown(report: GridEpisodeReport) -> Decimal:
+    expected = report.input_contract.get("required_minute_count")
+    if type(expected) is not int or expected <= 0:
+        raise GridHistoryRunnerError("engine report minute denominator differs")
+    maximum = Decimal(0)
+    observed = 0
+    for event in report.audit:
+        if event.get("event_type") != "MINUTE_MARKED":
+            continue
+        observed += 1
+        details = event.get("details")
+        if not isinstance(details, dict):
+            raise GridHistoryRunnerError("minute equity audit details differ")
+        try:
+            equity = Decimal(str(details["equity"]))
+            peak = Decimal(str(details["peak_equity"]))
+        except (KeyError, ArithmeticError) as exc:
+            raise GridHistoryRunnerError("minute equity audit is invalid") from exc
+        if not equity.is_finite() or not peak.is_finite() or peak <= 0 or equity > peak:
+            raise GridHistoryRunnerError("minute equity/peak relation is invalid")
+        with localcontext(_CONTEXT):
+            maximum = max(maximum, (peak - equity) / peak)
+    if observed != expected:
+        raise GridHistoryRunnerError("complete engine report minute audit is incomplete")
+    return maximum
+
+
+def classify_task_reports(reports: Iterable[dict[str, object]]) -> str:
+    """Apply the frozen paired economic gates to four validated task reports."""
     by_task = {str(report["task_id"]): report for report in reports}
     if set(by_task) != set(TASK_IDS):
         return TerminalClassification.TECHNICAL_OR_INTEGRITY_INVALID.value
@@ -1083,17 +1175,25 @@ def _write_new(path: Path, payload: bytes) -> None:
 __all__ = [
     "ACCEPTED_PREFLIGHT_HEAD",
     "ACCEPTED_SOURCE_ID",
+    "APPROVAL_SCHEMA",
+    "ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX",
+    "BOOTSTRAP_BOUNDED_SAMPLER",
+    "BOOTSTRAP_DRAWS",
+    "BOOTSTRAP_PRNG",
+    "BOOTSTRAP_SEED",
     "EXTERNAL_GRANT_KIND",
     "RUNNER_SCHEMA",
     "RUNNER_VERSION",
     "SYNTHETIC_GRANT_KIND",
     "TASK_IDS",
+    "GridGrantApproval",
     "GridHistoryRunnerError",
     "GridStudyGrant",
     "GridStudyLedgerState",
     "GridStudyLedgerStore",
     "TaskState",
     "TerminalClassification",
+    "classify_task_reports",
     "moving_block_lower_bound",
     "run_one_shot",
     "summarize_task",

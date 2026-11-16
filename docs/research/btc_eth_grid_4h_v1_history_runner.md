@@ -16,12 +16,20 @@ activation, or historical result.
 ## Grant and admission boundary
 
 `scripts.research.grid_history_runner` accepts genuine retained history only after reading a
-canonical immutable external grant. The grant binds the reviewed executable commit and tree,
-study-plan, preflight, engine, protocol document, parameters, accepted calendar bytes, v3
-manifest/report/dataset, fixed task order, modes, one UUID, zero network requests, concurrency one,
-and a positive fixed wall budget. The checkout SHA and tree are checked before the accepted source
-adapter reads values. A synthetic grant requires separate fixture-only source identities and is
-rejected if it copies accepted-history authority.
+canonical immutable external grant **and** a detached Ed25519 approval over those exact canonical
+grant bytes. The trusted architect public key must already be pinned in the reviewed executable;
+the approval key ID, grant digest and signature are all verified offline. Issue #247 deliberately
+pins no key, includes no approval and therefore cannot execute accepted history. A self-authored
+`EXTERNAL_ARCHITECT_APPROVED` label is not authority.
+
+The grant binds the reviewed executable commit and tree, study-plan, preflight, engine, protocol
+document, parameters, accepted calendar bytes, v3 manifest/report/dataset, fixed task order, modes,
+one UUID, zero network requests, concurrency one, and a positive fixed wall budget. Before any
+accepted adapter value read, the CLI also requires an entirely clean Git checkout, exact HEAD/tree,
+and byte-for-byte agreement between Git blobs and the Python modules actually imported from that
+checkout. Dirty/untracked files, another editable installation or a mismatched module origin fail
+closed. A synthetic grant requires separate fixture-only identities and cannot carry external
+approval provenance.
 
 The narrow `GridHistoricalSourceAdmission` receipt preserves the engine's original synthetic-only
 guard: non-synthetic facts require the exact source/executable receipt, while synthetic geometry
@@ -49,10 +57,16 @@ concurrency one are enforced by the runner.
 
 Each task report retains explicit scheduled, eligible, excluded, no-trade and terminated
 denominators, fill weeks, fill/forced-close counts, gross realized PnL, fees, funding, equity,
-partition opening/closing capital and running-peak drawdown. Metadata exclusions break bootstrap
-runs and never become zero observations. The validation BASE lower bound uses overlapping
-four-week blocks wholly inside contiguous eligible runs, deterministic PCG64 seed 241 and 10,000
-draws; ambient Decimal precision cannot change it.
+partition opening/closing capital and running-peak drawdown. Drawdown is derived from every saved
+`MINUTE_MARKED` equity/peak observation, not the recovered terminal weekly snapshot; the exact
+completed-minute count must reconcile. Metadata exclusions break bootstrap runs and never become
+zero observations.
+
+The validation BASE lower bound uses overlapping four-week blocks wholly inside contiguous
+eligible runs and exact NumPy `2.3.5` `PCG64(241)` initialization. Sampling is frozen as
+`Generator.integers(low=0, high=exclusive, size=(10000, ceil(n/4)), dtype=uint64)`, with 10,000
+draws, four-week blocks and sorted lower index 249. Raw and bounded-integer golden vectors plus the
+bootstrap output are regression-locked; ambient Decimal precision cannot change the result.
 
 The combined report applies the frozen validation and retrospective gates across BASE/STRESS for
 each symbol and emits exactly one of `TECHNICAL_OR_INTEGRITY_INVALID`, `INSUFFICIENT_EVIDENCE`,
@@ -82,10 +96,13 @@ root:
 
 ```text
 python -m scripts.research.grid_history_runner --repo <exact-clean-checkout> run \
-  --grant <external-architect-grant.json> --data-root <accepted-v3-root> \
+  --grant <external-architect-grant.json> --approval <detached-approval.json> \
+  --data-root <accepted-v3-root> \
   --ledger-root <new-external-ledger-root>
 ```
 
-The read-only `verify` command is a separate later operation and must never be treated as authority
-to run, retry, resume, repair, merge, deploy or trade. No such command was invoked against retained
+The read-only `verify` command checks hash-chain, identities, saved artifacts, task reports and
+classification reconciliation. It explicitly does **not** replay the strategy or independently
+replicate economics. It is a separate later operation and must never be treated as authority to
+run, retry, resume, repair, merge, deploy or trade. No such command was invoked against retained
 history in Issue #247.

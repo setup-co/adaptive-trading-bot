@@ -11,6 +11,9 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import adaptive_trading_bot.research.grid_history_preflight as preflight_module
+import adaptive_trading_bot.research.grid_history_runner as runner_module
+import adaptive_trading_bot.research.grid_v1 as grid_module
 from adaptive_trading_bot.research.grid_history_preflight import (
     CalendarEpisode,
     CalendarStatus,
@@ -20,6 +23,8 @@ from adaptive_trading_bot.research.grid_history_preflight import (
     VerifiedCalendar,
 )
 from adaptive_trading_bot.research.grid_history_runner import (
+    GridGrantApproval,
+    GridHistoryRunnerError,
     GridStudyGrant,
     run_one_shot,
     verify_finalized,
@@ -39,6 +44,54 @@ def _git_identity(repo: Path) -> tuple[str, str]:
         return completed.stdout.strip()
 
     return read("HEAD"), read("HEAD^{tree}")
+
+
+def _verified_checkout_identity(
+    repo: Path,
+    *,
+    imported_files: dict[str, Path] | None = None,
+) -> tuple[str, str]:
+    """Bind a clean Git tree to the exact Python files imported by this process."""
+
+    repo = repo.resolve(strict=True)
+    files = imported_files or {
+        "scripts/research/grid_history_runner.py": Path(__file__),
+        "src/adaptive_trading_bot/research/grid_history_runner.py": Path(
+            str(runner_module.__file__)
+        ),
+        "src/adaptive_trading_bot/research/grid_history_preflight.py": Path(
+            str(preflight_module.__file__)
+        ),
+        "src/adaptive_trading_bot/research/grid_v1.py": Path(str(grid_module.__file__)),
+    }
+
+    def git_text(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    if Path(git_text("rev-parse", "--show-toplevel")).resolve() != repo:
+        raise GridHistoryRunnerError("repository root identity differs")
+    if git_text("status", "--porcelain=v1", "--untracked-files=all"):
+        raise GridHistoryRunnerError("historical execution requires an exact clean checkout")
+    for relative, imported in files.items():
+        expected = (repo / relative).resolve(strict=True)
+        if imported.resolve(strict=True) != expected:
+            raise GridHistoryRunnerError("imported execution module is outside the named checkout")
+        committed = subprocess.run(
+            ["git", "show", f"HEAD:{relative}"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        ).stdout
+        if expected.read_bytes() != committed:
+            raise GridHistoryRunnerError("imported execution module bytes differ from HEAD")
+    return git_text("rev-parse", "HEAD"), git_text("rev-parse", "HEAD^{tree}")
 
 
 def _synthetic_fixture(
@@ -112,8 +165,10 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate-grant")
     validate.add_argument("--grant", required=True, type=Path)
+    validate.add_argument("--approval", required=True, type=Path)
     run = commands.add_parser("run")
     run.add_argument("--grant", required=True, type=Path)
+    run.add_argument("--approval", required=True, type=Path)
     run.add_argument("--data-root", required=True, type=Path)
     run.add_argument("--ledger-root", required=True, type=Path)
     synthetic = commands.add_parser("synthetic-run")
@@ -128,12 +183,19 @@ def main() -> int:
         print(json.dumps(verify_finalized(args.ledger), sort_keys=True, separators=(",", ":")))
         return 0
     grant = GridStudyGrant.from_file(args.grant)
-    actual_sha, actual_tree = _git_identity(repo)
     if args.command == "validate-grant":
-        grant.validate(actual_sha=actual_sha, actual_tree=actual_tree, synthetic=False)
+        approval = GridGrantApproval.from_file(args.approval)
+        actual_sha, actual_tree = _verified_checkout_identity(repo)
+        grant.validate(
+            actual_sha=actual_sha,
+            actual_tree=actual_tree,
+            synthetic=False,
+            approval=approval,
+        )
         print(json.dumps({"grant_sha256": grant.sha256, "status": "VALID"}, sort_keys=True))
         return 0
     if args.command == "synthetic-run":
+        actual_sha, actual_tree = _git_identity(repo)
         grant.validate(actual_sha=actual_sha, actual_tree=actual_tree, synthetic=True)
         calendar, loader = _synthetic_fixture(args.fixture, grant)
         preflight = {
@@ -153,7 +215,14 @@ def main() -> int:
             synthetic=True,
         )
     else:
-        grant.validate(actual_sha=actual_sha, actual_tree=actual_tree, synthetic=False)
+        approval = GridGrantApproval.from_file(args.approval)
+        actual_sha, actual_tree = _verified_checkout_identity(repo)
+        grant.validate(
+            actual_sha=actual_sha,
+            actual_tree=actual_tree,
+            synthetic=False,
+            approval=approval,
+        )
         calendar = VerifiedCalendar.accepted(
             repo / "docs/research/btc_eth_grid_4h_v1_eligibility_calendar.json"
         )
@@ -175,6 +244,7 @@ def main() -> int:
             week_loader=adapter.load_week,
             preflight=preflight,
             synthetic=False,
+            approval=approval,
         )
     print(json.dumps(projection, sort_keys=True, separators=(",", ":")))
     return 0

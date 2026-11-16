@@ -5,18 +5,30 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Context, Decimal, localcontext
 from pathlib import Path
 
+import numpy as np
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from numpy.random import PCG64, Generator
+from scripts.research import grid_history_runner as runner_cli
 
 from adaptive_trading_bot.domain import TradingSymbol
 from adaptive_trading_bot.research.grid_history_preflight import (
+    ACCEPTED_CALENDAR_SHA256,
+    ACCEPTED_DATASET_VERSION,
+    ACCEPTED_QUALIFICATION_PROTOCOL,
+    ACCEPTED_V3_MANIFEST_SHA256,
+    ACCEPTED_V3_REPORT_SHA256,
     CalendarEpisode,
     CalendarStatus,
     GridHistoryWeek,
+    LedgerWeekRecord,
     V3SourceIdentity,
     VerifiedCalendar,
     canonical_json,
@@ -24,15 +36,21 @@ from adaptive_trading_bot.research.grid_history_preflight import (
 from adaptive_trading_bot.research.grid_history_runner import (
     ACCEPTED_ENGINE_HEAD,
     ACCEPTED_PREFLIGHT_HEAD,
+    ACCEPTED_SOURCE_ID,
+    APPROVAL_SCHEMA,
+    EXTERNAL_GRANT_KIND,
     RUNNER_SCHEMA,
     SYNTHETIC_GRANT_KIND,
     TASK_IDS,
+    GridGrantApproval,
     GridHistoryRunnerError,
     GridStudyGrant,
     GridStudyLedgerStore,
     TaskState,
+    classify_task_reports,
     moving_block_lower_bound,
     run_one_shot,
+    summarize_task,
     verify_finalized,
 )
 from adaptive_trading_bot.research.grid_v1 import (
@@ -43,6 +61,7 @@ from adaptive_trading_bot.research.grid_v1 import (
     GRID_PROTOCOL_VERSION,
     GRID_STRATEGY_ID,
     GridEpisodeInput,
+    GridEpisodeReport,
     GridHistoricalSourceAdmission,
     GridLedgerCarry,
     GridMinute,
@@ -166,6 +185,102 @@ def _grant(
     )
 
 
+def _external_grant() -> GridStudyGrant:
+    return replace(
+        _grant("6" * 64),
+        kind=EXTERNAL_GRANT_KIND,
+        calendar_sha256=ACCEPTED_CALENDAR_SHA256,
+        dataset_version=ACCEPTED_DATASET_VERSION,
+        qualification_protocol=ACCEPTED_QUALIFICATION_PROTOCOL,
+        manifest_sha256=ACCEPTED_V3_MANIFEST_SHA256,
+        report_sha256=ACCEPTED_V3_REPORT_SHA256,
+        source_id=ACCEPTED_SOURCE_ID,
+    )
+
+
+def _signed_approval(
+    grant: GridStudyGrant, private_key: Ed25519PrivateKey
+) -> tuple[GridGrantApproval, str]:
+    public_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    approval = GridGrantApproval(
+        APPROVAL_SCHEMA,
+        hashlib.sha256(public_bytes).hexdigest(),
+        grant.sha256,
+        private_key.sign(canonical_json(asdict(grant))).hex(),
+    )
+    return approval, public_bytes.hex()
+
+
+def _minute_audit(sequence: int, equity: str, peak: str) -> dict[str, object]:
+    return {
+        "sequence": sequence,
+        "observed_at": datetime(2026, 1, 5, 0, sequence, tzinfo=UTC).isoformat(),
+        "event_type": "MINUTE_MARKED",
+        "order_id": None,
+        "lot_id": None,
+        "details": {"equity": equity, "peak_equity": peak},
+    }
+
+
+def _recovered_report(*, episode_start: datetime, final_equity: str) -> GridEpisodeReport:
+    return GridEpisodeReport(
+        "btc-eth-grid-v1-synthetic-report",
+        GRID_STRATEGY_ID,
+        GRID_PROTOCOL_VERSION,
+        GRID_ENGINE_VERSION,
+        _git("HEAD"),
+        {key: str(value) for key, value in asdict(verified_grid_contract_identity()).items()},
+        "synthetic-grid-runner-fixture",
+        "BTC/USDT",
+        "BASE",
+        episode_start.isoformat(),
+        "COMPLETE",
+        "GRID_ACTIVE",
+        None,
+        {"current_equity": "10000"},
+        {"current_equity": final_equity},
+        {"required_minute_count": 3},
+        {},
+        {},
+        {"running_peak_drawdown_fraction": "0.04166666666666666666666666667"},
+        (
+            _minute_audit(1, "12000", "12000"),
+            _minute_audit(2, "9000", "12000"),
+            _minute_audit(3, final_equity, "12000"),
+        ),
+    )
+
+
+def _classification_report(task_id: str) -> dict[str, object]:
+    partition = {
+        "scheduled_weeks": 80,
+        "eligible_weeks": 80,
+        "excluded_weeks": 0,
+        "fill_weeks": 40,
+        "opening_equity": "10000",
+        "closing_equity": "10100",
+        "total_net_equity_change": "100",
+        "total_net_return": "0.01",
+        "maximum_running_peak_drawdown_fraction": "0.10",
+    }
+    return {
+        "task_id": task_id,
+        "validation_eligible_weeks": 80,
+        "validation_fill_weeks": 40,
+        "validation_median_weekly_return": "0.001",
+        "validation_mean_lower_95_bound": "0.0001",
+        "retrospective_median_weekly_return": "0.001",
+        "partition_metrics": {
+            "VALIDATION": dict(partition),
+            "RETROSPECTIVE_ASSESSMENT": dict(partition),
+        },
+        "terminated": False,
+    }
+
+
 def test_synthetic_four_task_flow_is_durable_and_read_only_verifiable(tmp_path: Path) -> None:
     fixture_sha = "1" * 64
     grant = _grant(fixture_sha)
@@ -191,7 +306,10 @@ def test_synthetic_four_task_flow_is_durable_and_read_only_verifiable(tmp_path: 
     assert all(report["metadata_ineligible"] == 1 for report in task_reports)
     assert all(report["fill_count"] == 0 for report in task_reports)
     verified = verify_finalized(store.directory)
-    assert verified["status"] == "VERIFIED"
+    assert verified["status"] == "ARTIFACT_CONSISTENCY_VERIFIED"
+    verification_scope = verified["verification_scope"]
+    assert isinstance(verification_scope, str)
+    assert "NOT_INDEPENDENT_ECONOMIC_REPLICATION" in verification_scope
     assert verified["task_states"] == ["COMPLETED"] * 4
 
 
@@ -216,8 +334,31 @@ def test_grant_gate_rejects_wrong_identity_and_synthetic_promotion() -> None:
             grant,
             manifest_sha256="9d63123b073e35a010c130308452fd554f707de0e1967f82a752ff44b6155214",
         ).validate(actual_sha=_git("HEAD"), actual_tree=_git("HEAD^{tree}"), synthetic=True)
-    with pytest.raises(GridHistoryRunnerError, match="reviewed historical grant is absent"):
+    with pytest.raises(GridHistoryRunnerError, match="historical grant identity differs"):
         grant.validate(actual_sha=_git("HEAD"), actual_tree=_git("HEAD^{tree}"), synthetic=False)
+
+
+def test_external_grant_requires_independent_ed25519_approval() -> None:
+    grant = _external_grant()
+    with pytest.raises(GridHistoryRunnerError, match="approval is absent"):
+        grant.validate(
+            actual_sha=_git("HEAD"),
+            actual_tree=_git("HEAD^{tree}"),
+            synthetic=False,
+        )
+    approval, public_key_hex = _signed_approval(grant, Ed25519PrivateKey.generate())
+    approval.verify(grant, trusted_public_key_hex=public_key_hex)
+    forged, _ = _signed_approval(grant, Ed25519PrivateKey.generate())
+    forged = replace(forged, key_id=approval.key_id)
+    with pytest.raises(GridHistoryRunnerError, match="signature is invalid"):
+        forged.verify(grant, trusted_public_key_hex=public_key_hex)
+    with pytest.raises(GridHistoryRunnerError, match="no architect approval key is pinned"):
+        grant.validate(
+            actual_sha=_git("HEAD"),
+            actual_tree=_git("HEAD^{tree}"),
+            synthetic=False,
+            approval=approval,
+        )
 
 
 def test_ledger_refuses_duplicate_uuid_start_resume_and_changed_artifact(tmp_path: Path) -> None:
@@ -306,12 +447,129 @@ def test_non_synthetic_engine_input_requires_matching_admission() -> None:
 
 
 def test_fixed_pcg64_bootstrap_is_deterministic_and_context_independent() -> None:
+    assert [int(value) for value in PCG64(241).random_raw(5)] == [
+        4068375204327186869,
+        6550784330610757275,
+        13618598653077127767,
+        7851333619796801121,
+        4116955697039603463,
+    ]
+    assert Generator(PCG64(241)).integers(0, 7, size=20, dtype=np.uint64).tolist() == [
+        3,
+        1,
+        0,
+        2,
+        0,
+        5,
+        1,
+        2,
+        5,
+        1,
+        4,
+        3,
+        3,
+        0,
+        1,
+        3,
+        1,
+        3,
+        0,
+        0,
+    ]
     values = tuple(Decimal(index) / Decimal("10000") for index in range(-5, 7))
     first = moving_block_lower_bound(values)
     with localcontext(Context(prec=7, rounding=ROUND_DOWN)):
         second = moving_block_lower_bound(values)
-    assert first == second
-    assert first is not None
+    assert first == second == Decimal("-0.00025")
+
+
+def test_intrawEEK_drawdown_uses_every_minute_and_survives_terminal_recovery() -> None:
+    first_start = datetime(2026, 1, 5, tzinfo=UTC)
+    second_start = first_start + timedelta(days=7)
+    first = _recovered_report(episode_start=first_start, final_equity="11500")
+    second = replace(
+        first,
+        episode_start=second_start.isoformat(),
+        carry_in={"current_equity": "11500"},
+        carry_out={"current_equity": "11800"},
+        snapshot={"running_peak_drawdown_fraction": "0.01666666666666666666666666667"},
+        audit=(
+            _minute_audit(1, "11500", "12000"),
+            _minute_audit(2, "11700", "12000"),
+            _minute_audit(3, "11800", "12000"),
+        ),
+    )
+    records = tuple(
+        LedgerWeekRecord(
+            index,
+            "BTCUSDT",
+            "BASE",
+            start.isoformat(),
+            "VALIDATION",
+            CalendarStatus.METADATA_ELIGIBLE.value,
+            "ELIGIBLE_ENGINE_RESULT",
+            True,
+            weekly_return,
+            (),
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
+            "COMPLETE",
+            "GRID_ACTIVE",
+            None,
+        )
+        for index, start, weekly_return in (
+            (1, first_start, "0.15"),
+            (2, second_start, "0.0260869565217391304347826087"),
+        )
+    )
+    final_carry = replace(
+        GridLedgerCarry.initial(TradingSymbol("BTC", "USDT")),
+        current_cash=Decimal("11800"),
+        current_equity=Decimal("11800"),
+        cumulative_gross_realized_pnl=Decimal("1800"),
+        peak_equity=Decimal("12000"),
+        previous_episode_start=second_start,
+    )
+    summary = summarize_task(
+        task_id="BTCUSDT:BASE",
+        records=records,
+        reports=(first, second),
+        final_carry=final_carry,
+    )
+    assert summary["maximum_running_peak_drawdown_fraction"] == "0.25"
+    partitions = summary["partition_metrics"]
+    assert isinstance(partitions, dict)
+    assert partitions["VALIDATION"]["maximum_running_peak_drawdown_fraction"] == "0.25"
+
+
+def test_economic_classification_boundaries_are_explicit() -> None:
+    reports = [_classification_report(task_id) for task_id in TASK_IDS]
+    for report in reports:
+        partitions = report["partition_metrics"]
+        assert isinstance(partitions, dict)
+        for partition in partitions.values():
+            assert isinstance(partition, dict)
+            partition["maximum_running_peak_drawdown_fraction"] = "0.20"
+    assert classify_task_reports(reports[:-1]) == "TECHNICAL_OR_INTEGRITY_INVALID"
+
+    insufficient = deepcopy(reports)
+    insufficient[0]["validation_eligible_weeks"] = 79
+    assert classify_task_reports(insufficient) == "INSUFFICIENT_EVIDENCE"
+
+    negative = deepcopy(reports)
+    partitions = negative[0]["partition_metrics"]
+    assert isinstance(partitions, dict)
+    validation = partitions["VALIDATION"]
+    assert isinstance(validation, dict)
+    validation["maximum_running_peak_drawdown_fraction"] = "0.2000000000000000000000000001"
+    assert classify_task_reports(negative) == "NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION"
+
+    assert classify_task_reports(reports) == "CANDIDATE_FOR_PROSPECTIVE_CONFIRMATION"
+
+    zero_economic_gate = deepcopy(reports)
+    zero_economic_gate[0]["validation_median_weekly_return"] = "0"
+    assert classify_task_reports(zero_economic_gate) == "NEGATIVE_ECONOMIC_EVIDENCE_NO_PROMOTION"
 
 
 def test_actual_cli_writes_and_reads_final_synthetic_projection(tmp_path: Path) -> None:
@@ -377,7 +635,7 @@ def test_actual_cli_writes_and_reads_final_synthetic_projection(tmp_path: Path) 
         text=True,
     )
     assert verify.returncode == 0, verify.stderr
-    assert json.loads(verify.stdout)["status"] == "VERIFIED"
+    assert json.loads(verify.stdout)["status"] == "ARTIFACT_CONSISTENCY_VERIFIED"
 
 
 def test_no_grant_cli_fails_before_creating_a_ledger(tmp_path: Path) -> None:
@@ -403,6 +661,47 @@ def test_no_grant_cli_fails_before_creating_a_ledger(tmp_path: Path) -> None:
     )
     assert completed.returncode != 0
     assert not (tmp_path / "ledgers").exists()
+
+
+def test_historical_checkout_gate_rejects_dirty_and_import_mismatch(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    relative_paths = (
+        "scripts/research/grid_history_runner.py",
+        "src/adaptive_trading_bot/research/grid_history_runner.py",
+        "src/adaptive_trading_bot/research/grid_history_preflight.py",
+        "src/adaptive_trading_bot/research/grid_v1.py",
+    )
+    imported: dict[str, Path] = {}
+    for index, relative in enumerate(relative_paths):
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# fixture {index}\n", encoding="utf-8", newline="\n")
+        imported[relative] = path
+    for command in (
+        ("init",),
+        ("config", "user.email", "fixture@example.invalid"),
+        ("config", "user.name", "Fixture"),
+        ("add", "."),
+        ("commit", "-m", "fixture"),
+    ):
+        subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
+
+    head, tree = runner_cli._verified_checkout_identity(repo, imported_files=imported)
+    assert len(head) == 40
+    assert len(tree) == 40
+
+    first = imported[relative_paths[0]]
+    original = first.read_bytes()
+    first.write_bytes(original + b"# dirty\n")
+    with pytest.raises(GridHistoryRunnerError, match="exact clean checkout"):
+        runner_cli._verified_checkout_identity(repo, imported_files=imported)
+    first.write_bytes(original)
+
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(original)
+    mismatched = {**imported, relative_paths[0]: outside}
+    with pytest.raises(GridHistoryRunnerError, match="outside the named checkout"):
+        runner_cli._verified_checkout_identity(repo, imported_files=mismatched)
 
 
 def test_fixed_wall_budget_stops_once_and_records_actual_failure(tmp_path: Path) -> None:

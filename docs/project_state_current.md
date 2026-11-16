@@ -68,18 +68,23 @@ remain preserved.
 
 ## Issue #247 — guarded one-shot runner, synthetic validation only
 
-- A separate opt-in runner now requires a canonical external grant binding the reviewed executable
-  SHA/tree, inert plan, accepted protocol/parameters/engine/preflight/calendar/data identities, one
-  unique UUID, frozen four-task order, zero network requests, concurrency one and fixed wall budget.
-  No accepted historical grant is committed or implied.
+- A separate opt-in runner now requires a canonical external grant plus detached Ed25519 approval
+  from a public key pinned in the reviewed executable. It binds the reviewed SHA/tree, inert plan,
+  accepted protocol/parameters/engine/preflight/calendar/data identities, one UUID, frozen task
+  order, zero network requests, concurrency one and fixed wall budget. Issue #247 pins no approval
+  key and includes no signed grant, so accepted-history execution remains cryptographically blocked.
+- Historical admission also requires a clean checkout and byte equality between HEAD and the
+  actually imported runner/preflight/engine modules; dirty/untracked or other-installation imports
+  fail before retained values are read.
 - The genuine-source seam is an explicit research-only identity receipt. It preserves the Grid
   engine's fixture guard and does not make retained data, Paper, Shadow or Live runtime-eligible.
 - Its external ledger is hash-linked and append-only, rejects duplicate UUID/task starts and
   ambiguous continuation, persists every chronological calendar/week result and records actual run
   exit separately. A missing or unusable observation becomes `UNKNOWN`, never a fabricated zero.
-- Deterministic reports preserve contiguous eligible blocks across exclusions/partitions, frozen
-  PCG64 seed 241 / 10,000-draw validation uncertainty, BASE/STRESS economics, all costs, continuous
-  capital, drawdown, termination and four non-trading classifications.
+- Deterministic reports calculate drawdown from every completed-minute equity/peak audit and
+  preserve contiguous eligible blocks across exclusions/partitions. NumPy 2.3.5 `PCG64(241)`, the
+  exact bounded-integer sampler, 10,000 draws and golden vectors are frozen alongside BASE/STRESS
+  economics, costs, continuous capital, termination and four non-trading classifications.
 - Only fixture grants and synthetic data exercised the complete four-task CLI/report/verifier path.
   No accepted v3 price, MARK or funding observation was processed through the Grid and no historical
   fill, PnL, promotion result, market request or trading action exists.
