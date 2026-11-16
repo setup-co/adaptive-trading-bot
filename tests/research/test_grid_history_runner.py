@@ -338,6 +338,17 @@ def test_grant_gate_rejects_wrong_identity_and_synthetic_promotion() -> None:
         ).validate(actual_sha=_git("HEAD"), actual_tree=_git("HEAD^{tree}"), synthetic=True)
     with pytest.raises(GridHistoryRunnerError, match="historical grant identity differs"):
         grant.validate(actual_sha=_git("HEAD"), actual_tree=_git("HEAD^{tree}"), synthetic=False)
+    fixture_approval, _public_key_hex = _signed_approval(
+        grant,
+        Ed25519PrivateKey.generate(),
+    )
+    with pytest.raises(GridHistoryRunnerError, match="fixture-only"):
+        grant.validate(
+            actual_sha=_git("HEAD"),
+            actual_tree=_git("HEAD^{tree}"),
+            synthetic=True,
+            approval=fixture_approval,
+        )
 
 
 def test_external_grant_requires_independent_ed25519_approval() -> None:
@@ -354,13 +365,35 @@ def test_external_grant_requires_independent_ed25519_approval() -> None:
     forged = replace(forged, key_id=approval.key_id)
     with pytest.raises(GridHistoryRunnerError, match="signature is invalid"):
         forged.verify(grant, trusted_public_key_hex=public_key_hex)
-    with pytest.raises(GridHistoryRunnerError, match="no architect approval key is pinned"):
+    with pytest.raises(GridHistoryRunnerError, match="approval provenance differs"):
         grant.validate(
             actual_sha=_git("HEAD"),
             actual_tree=_git("HEAD^{tree}"),
             synthetic=False,
             approval=approval,
         )
+    with pytest.raises(GridHistoryRunnerError, match="approval provenance differs"):
+        approval.verify(
+            replace(grant, max_wall_seconds=grant.max_wall_seconds + 1),
+            trusted_public_key_hex=public_key_hex,
+        )
+    with pytest.raises(GridHistoryRunnerError, match="approval provenance differs"):
+        replace(approval, key_id="0" * 64).verify(
+            grant,
+            trusted_public_key_hex=public_key_hex,
+        )
+    for changed in (
+        replace(grant, executable_sha="0" * 40),
+        replace(grant, executable_tree="0" * 40),
+        replace(grant, source_id="different-source"),
+    ):
+        with pytest.raises(GridHistoryRunnerError):
+            changed.validate(
+                actual_sha=_git("HEAD"),
+                actual_tree=_git("HEAD^{tree}"),
+                synthetic=False,
+                approval=approval,
+            )
 
 
 def test_ledger_refuses_duplicate_uuid_start_resume_and_changed_artifact(tmp_path: Path) -> None:

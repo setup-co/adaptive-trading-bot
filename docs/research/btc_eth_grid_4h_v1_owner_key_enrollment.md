@@ -1,11 +1,14 @@
 # BTC/ETH Grid historical approval: owner-key enrollment
 
-Status: **PREPARATION ONLY / REAL HISTORY STILL BLOCKED**
+Status: **PUBLIC KEY PINNED / NO GRANT / NO RUN**
 
 This procedure prepares an owner-controlled Ed25519 trust root for a possible later Grid historical
-study. It does not issue a grant, signature, run UUID, or historical-run authorization. The accepted
-runner keeps `ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX = None`; no production key is stored in this
-repository.
+study. It does not issue a grant, signature, run UUID, or historical-run authorization. Issue #251
+pins only the owner-approved public trust root
+`500c6dbcafaa57c5ea534d44001714210f29cb7a384428db97d120a8d40872c1`; its independently
+recomputed key ID is
+`384cbb9e327433b3ade48f77510cdf90e97e37e2d0461be337a8bfcd34b28ace`. No private key or
+passphrase is stored in this repository.
 
 ## Security boundary
 
@@ -72,7 +75,7 @@ new pinned executable identity has been frozen.
 
 ## Two-stage checkpoint
 
-### Stage A — this issue
+### Stage A — Issue #249
 
 - Provide the auditable offline generation and public-fingerprint helper.
 - Exercise key generation and detached-signature compatibility only with ephemeral test keys.
@@ -81,17 +84,18 @@ new pinned executable identity has been frozen.
 
 Acceptance of Stage A confirms tooling behavior only. It does not establish an owner trust root.
 
-### Stage B — separate owner-approved action
+### Stage B — Issue #251 owner-approved public-key pin
 
 1. The owner generates the private key locally and supplies **only** the raw public-key hex and key
    ID through the explicitly approved channel.
 2. An independent reviewer recomputes `SHA256(raw public-key bytes)` and confirms the exact public
    value and fingerprint with the owner.
-3. A separate PR replaces `ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX = None` with that exact reviewed
-   public hex. No private material enters the PR.
+3. This stacked PR replaces `ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX = None` with that exact
+   reviewed public hex. No private material enters the PR.
 4. Because the pin changes source bytes, reviewers record and approve the new executable commit and
    tree after exact-head CI. PR #248's executable identity cannot be used for a later grant.
-5. Only after that freeze may a separate action create one canonical grant naming the newly pinned
+5. Only after independent review and exact-head CI freeze may a separate action create one canonical
+   grant naming the newly pinned
    executable SHA/tree and one new UUID. The owner signs the exact immutable canonical grant bytes
    offline. The detached approval must use the existing `GridGrantApproval` schema and matching key
    ID.

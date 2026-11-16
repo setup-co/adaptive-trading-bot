@@ -66,8 +66,10 @@ from adaptive_trading_bot.storage import SourceId
 RUNNER_SCHEMA = "btc-eth-grid-4h-v1-one-shot-runner-v1"
 RUNNER_VERSION = "0.1.0-guarded"
 APPROVAL_SCHEMA = "btc-eth-grid-history-ed25519-approval-v1"
-# A later architect decision must pin a real public key before any external grant can pass.
-ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX: str | None = None
+# Owner-approved public trust root from Issue #251. The corresponding private key remains offline.
+ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX: str | None = (
+    "500c6dbcafaa57c5ea534d44001714210f29cb7a384428db97d120a8d40872c1"
+)
 ACCEPTED_PREFLIGHT_HEAD = "bbe6a33b5ca7f20537a23e5a050d81a454f6f7c3"
 ACCEPTED_ENGINE_HEAD = "dc450a4a3a0f2dfe114a690459971bc79d2aba68"
 ACCEPTED_SOURCE_ID = "binance-usdm-btc-eth-grid-v3"

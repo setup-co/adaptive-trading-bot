@@ -125,6 +125,22 @@ def test_public_key_round_trip_and_independent_fingerprint() -> None:
         verify_public_info(public_key_hex=public_hex, expected_key_id="0" * 64)
 
 
+def test_owner_approved_public_key_and_independent_fingerprint_are_pinned() -> None:
+    expected_public_key = "500c6dbcafaa57c5ea534d44001714210f29cb7a384428db97d120a8d40872c1"
+    expected_key_id = "384cbb9e327433b3ade48f77510cdf90e97e37e2d0461be337a8bfcd34b28ace"
+
+    assert expected_public_key == ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX
+    assert len(bytes.fromhex(expected_public_key)) == 32
+    assert hashlib.sha256(bytes.fromhex(expected_public_key)).hexdigest() == expected_key_id
+    assert (
+        verify_public_info(
+            public_key_hex=expected_public_key,
+            expected_key_id=expected_key_id,
+        ).key_id_sha256
+        == expected_key_id
+    )
+
+
 def test_temporary_fixture_signature_matches_exact_canonical_grant_bytes() -> None:
     grant = _external_grant()
     private_key = Ed25519PrivateKey.generate()
@@ -229,12 +245,12 @@ def test_public_info_rejects_noncanonical_or_malformed_keys(public_key_hex: str)
         GridApprovalPublicInfo.from_public_key_hex(public_key_hex)
 
 
-def test_fixture_key_cannot_enable_real_history_without_owner_pin() -> None:
-    assert ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX is None
+def test_fixture_key_cannot_enable_real_history_with_owner_pin() -> None:
+    assert ARCHITECT_APPROVAL_ED25519_PUBLIC_KEY_HEX is not None
     grant = _external_grant()
     approval, _public_hex = _signed_approval(grant, Ed25519PrivateKey.generate())
 
-    with pytest.raises(GridHistoryRunnerError, match="no architect approval key is pinned"):
+    with pytest.raises(GridHistoryRunnerError, match="approval provenance differs"):
         grant.validate(
             actual_sha=grant.executable_sha,
             actual_tree=grant.executable_tree,
