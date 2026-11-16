@@ -9,7 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "ci" / "fast_ci.py"
-WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+FAST_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+FULL_WORKFLOW = ROOT / ".github" / "workflows" / "ci-full.yml"
 
 
 def _plan(*paths: str) -> dict[str, object]:
@@ -144,30 +145,58 @@ def test_fast_gate_rejects_a_failed_or_missing_planned_job() -> None:
     assert subprocess.run(command, cwd=ROOT, check=False).returncode != 0
 
 
-def test_workflow_preserves_deliberate_exact_head_full_gate_and_fast_cancellation() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+def test_fast_gate_accepts_an_exact_successful_plan() -> None:
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "gate",
+        "--plan-result",
+        "success",
+        "--python-planned",
+        "true",
+        "--python-result",
+        "success",
+        "--frontend-planned",
+        "false",
+        "--frontend-result",
+        "skipped",
+        "--docs-planned",
+        "false",
+        "--docs-result",
+        "skipped",
+    ]
 
-    assert "types: [opened, synchronize, reopened, ready_for_review, labeled]" in workflow
+    assert subprocess.run(command, cwd=ROOT, check=False).returncode == 0
+
+
+def test_fast_workflow_is_green_only_and_cancels_obsolete_fast_runs() -> None:
+    workflow = FAST_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "types: [opened, synchronize, reopened, ready_for_review]" in workflow
+    assert "group: fast-ci-pr-${{ github.event.pull_request.number }}" in workflow
+    assert "cancel-in-progress: true" in workflow
+    assert "name: fast-ci" in workflow
+    assert "FULL_NOT_REQUESTED" not in workflow
+    assert "name: full-suite" not in workflow
+    assert "name: quality" not in workflow
+    assert "exit 1" not in workflow
+
+
+def test_full_workflow_is_absent_until_label_and_binds_exact_head() -> None:
+    workflow = FULL_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "types: [labeled]" in workflow
+    assert "branches: [main]" in workflow
     assert "github.event.label.name == 'ci-full'" in workflow
     assert "Verify exact full-suite SHA" in workflow
-    assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert "ref: ${{ github.event_name == 'push' && github.sha" in workflow
     assert "run: python -m pytest" in workflow
-    assert "name: quality" in workflow
-    assert "name: frontend-quality" in workflow
-    assert "name: full-suite" in workflow
-    assert "FULL_NOT_REQUESTED" in workflow
-    full_gate = (
-        "full-suite:\n"
-        "    name: full-suite\n"
-        "    needs: [quality, frontend-quality]\n"
-        "    if: always()"
-    )
-    assert full_gate in workflow
-    assert "format('fast-ci-pr-{0}', github.event.pull_request.number)" in workflow
-    assert "format('full-ci-run-{0}', github.run_id)" in workflow
-    assert "cancel-in-progress:" in workflow
-    full_section = workflow[workflow.index("  quality:") :]
-    assert "cancel-in-progress" not in full_section
+    assert "'quality' || 'full-not-requested / quality'" in workflow
+    assert "'frontend-quality' || 'full-not-requested / frontend-quality'" in workflow
+    assert "'full-suite' || 'full-not-requested / full-suite'" in workflow
+    assert "synchronize" not in workflow
+    assert "concurrency:" not in workflow
+    assert "cancel-in-progress" not in workflow
 
 
 @pytest.mark.parametrize("unsafe", ("../secret.py", "/absolute.py"))

@@ -8,21 +8,21 @@ scope/whitespace preflight; protocol, manifest, research and project-state docum
 source-sensitive.
 
 FAST runs use PR-scoped concurrency with `cancel-in-progress: true`. A new commit cancels only the
-obsolete FAST run for that PR. FULL events use a separate unique run group and cannot be cancelled
-by FAST. Every FAST run reports
-measured job seconds, summed runner minutes and the longest measured job, and explicitly says that
-its coverage is not the full regression gate.
+obsolete FAST workflow for that PR. FULL is a distinct workflow with no cancellation policy, so a
+new FAST event cannot cancel it. Every FAST run reports measured job seconds, summed runner minutes
+and the longest measured job, and explicitly says that its coverage is not the full regression
+gate. When every planned FAST job passes, the overall FAST workflow is green.
 
 **FULL CI** is deliberate. An owner or reviewer adds the `ci-full` label to the PR only when the
 current HEAD is ready for final validation. The workflow checks out and verifies the exact event
 HEAD, then runs the complete Python suite, Ruff, Mypy and all frontend gates under the preserved
 `quality` and `frontend-quality` job names. `full-suite` succeeds only if both complete jobs pass.
-An ordinary PR update records `FULL_NOT_REQUESTED` as a small failing `full-suite` check rather than
-using a skipped job (GitHub treats skipped required jobs as successful). Adding `ci-full` on that
-exact HEAD replaces the failure with the result of the real complete gate.
-After any later commit, the old check suite remains attached to the old SHA and cannot validate the
-new HEAD. Remove and re-add `ci-full` to request one new exact-head FULL run. Integration to `main`
-also retains the complete gate.
+Because FULL is separately triggered, ordinary PR updates create no `quality`, `frontend-quality`
+or `full-suite` checks at all—there is no skipped FULL job that GitHub could treat as success. After
+any later commit, the old check suite remains attached to the old SHA and cannot validate the new
+HEAD. Remove and re-add `ci-full` to request one new exact-head FULL run. Unrelated labels do not run
+the expensive jobs and use distinct `full-not-requested / ...` check names, so they cannot satisfy
+the required FULL contexts. Integration to `main` also retains the complete gate.
 
 Repository branch-protection/ruleset details are not readable with the current GitHub plan (the API
 returns HTTP 403). The owner must ensure final acceptance requires the exact-head `full-suite`
