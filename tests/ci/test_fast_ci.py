@@ -57,6 +57,38 @@ def test_grid_and_risk_changes_include_shared_authority_regressions() -> None:
     assert "tests/admission/test_portfolio.py" in targets
 
 
+def test_issue_255_cumulative_diff_is_targeted_not_full() -> None:
+    plan = _plan(
+        ".github/workflows/ci-full.yml",
+        ".github/workflows/ci.yml",
+        "docs/ci_policy.md",
+        "scripts/ci/fast_ci.py",
+        "scripts/research/grid_history_offline.py",
+        "src/adaptive_trading_bot/research/grid_history_offline.py",
+        "src/adaptive_trading_bot/research/grid_v1.py",
+        "tests/ci/test_fast_ci.py",
+        "tests/research/test_grid_history_offline.py",
+        "tests/research/test_grid_history_preflight.py",
+        "tests/research/test_grid_v1.py",
+    )
+
+    assert plan["python"] is True
+    assert plan["frontend"] is True  # Workflow changes still validate frontend CI wiring.
+    assert plan["collect_all"] is True
+    assert plan["pytest_mode"] == "targeted"
+    reasons = plan["reasons"]
+    assert isinstance(reasons, list)
+    assert "unknown-fail-closed" not in reasons
+    targets = plan["pytest_targets"]
+    assert isinstance(targets, list)
+    assert "tests/ci/test_fast_ci.py" in targets
+    assert "tests/research/test_grid_history_offline.py" in targets
+    assert "tests/research/test_grid_history_preflight.py" in targets
+    assert "tests/research/test_grid_v1.py" in targets
+    assert "tests/accounting/test_positions.py" in targets
+    assert "tests/risk/test_operational_safety.py" in targets
+
+
 def test_frontend_only_change_skips_python_and_documentation() -> None:
     plan = _plan("web/src/App.tsx", "web/package-lock.json")
 

@@ -15,12 +15,16 @@ from typing import Literal
 _SHA = re.compile(r"[0-9a-f]{40}")
 _GRID_TESTS = (
     "tests/research/test_grid_approval_enrollment.py",
+    "tests/research/test_grid_history_offline.py",
     "tests/research/test_grid_history_runner.py",
     "tests/research/test_grid_history_preflight.py",
     "tests/research/test_grid_v1.py",
     "tests/research/test_grid_v1_metadata_calendar.py",
     "tests/research/test_binance_grid_history.py",
 )
+_GRID_RESEARCH_ENTRY_POINTS = {
+    "scripts/research/grid_history_offline.py",
+}
 _SAFETY_TESTS = (
     "tests/accounting/test_positions.py",
     "tests/admission/test_portfolio.py",
@@ -122,6 +126,12 @@ def classify(paths: tuple[str, ...]) -> FastPlan:
             python = collect_all = True
             targets.add(_CI_TEST)
             reasons.add("python-ci-config")
+            continue
+        if path in _GRID_RESEARCH_ENTRY_POINTS:
+            python = True
+            targets.update(_GRID_TESTS)
+            targets.update(_SAFETY_TESTS)
+            reasons.add("grid-or-history-authority")
             continue
         if path.startswith("tests/") and suffix == ".py":
             python = True
