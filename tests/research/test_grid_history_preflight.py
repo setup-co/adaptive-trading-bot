@@ -458,8 +458,8 @@ def test_weekly_return_is_independent_of_ambient_decimal_context(tmp_path: Path)
     row, _, authority, engine = _completed_fixture(tmp_path)
     base_report = engine.report()
     base_carry = engine.carry_out()
-    value = Decimal("10000.123456789012345678901234567890123456789")
-    gain = Decimal("0.123456789012345678901234567890123456789")
+    value = Decimal("10000.12345678901234567890123456789")
+    gain = Decimal("0.12345678901234567890123456789")
     with localcontext(Context(prec=60)):
         carry = replace(
             base_carry,

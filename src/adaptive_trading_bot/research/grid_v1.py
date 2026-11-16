@@ -75,6 +75,23 @@ class GridV1Error(ValueError):
     """A supplied synthetic input violates the frozen protocol."""
 
 
+def _canonical_cash(
+    original_account_capital: Decimal,
+    cumulative_gross_realized_pnl: Decimal,
+    cumulative_fees: Decimal,
+    cumulative_funding: Decimal,
+) -> Decimal:
+    """Rebuild cash once from cumulative authorities under the fixed context."""
+
+    with localcontext(_CONTEXT):
+        return (
+            original_account_capital
+            + cumulative_gross_realized_pnl
+            - cumulative_fees
+            + cumulative_funding
+        )
+
+
 class _GridPreOrderRejection(GridV1Error):
     def __init__(self, reason: GridNoTradeReason) -> None:
         super().__init__(reason.value)
@@ -198,11 +215,11 @@ class GridLedgerCarry:
             or self.peak_equity < self.current_equity
         ):
             raise GridV1Error("carry cash/peak equity is invalid")
-        expected_cash = (
-            self.original_account_capital
-            + self.cumulative_gross_realized_pnl
-            - self.cumulative_fees
-            + self.cumulative_funding
+        expected_cash = _canonical_cash(
+            self.original_account_capital,
+            self.cumulative_gross_realized_pnl,
+            self.cumulative_fees,
+            self.cumulative_funding,
         )
         if self.current_cash != expected_cash:
             raise GridV1Error("carry economics do not reconcile to current cash")
@@ -918,6 +935,7 @@ class GridV1Engine:
         self.last_equity = self._equity(minute.mark_price)
         self.peak_equity = max(self.peak_equity, self.last_equity)
         position = self.accounting.position(self.episode.symbol)
+        cash, cumulative_gross, cumulative_fees, cumulative_funding = self._cumulative_economics()
         unrealized = (
             _ZERO
             if not position.quantity or position.average_entry_price is None
@@ -928,16 +946,10 @@ class GridV1Engine:
             "MINUTE_MARKED",
             (
                 ("mark_price", str(minute.mark_price)),
-                ("cash", str(self._cash())),
-                (
-                    "gross_realized_pnl",
-                    str(
-                        self.episode.carry_in.cumulative_gross_realized_pnl
-                        + position.cumulative_gross_realized_pnl
-                    ),
-                ),
-                ("fees", str(self.episode.carry_in.cumulative_fees + position.cumulative_fees)),
-                ("funding", str(self.episode.carry_in.cumulative_funding + self.funding_cash)),
+                ("cash", str(cash)),
+                ("gross_realized_pnl", str(cumulative_gross)),
+                ("fees", str(cumulative_fees)),
+                ("funding", str(cumulative_funding)),
                 ("unrealized_pnl", str(unrealized)),
                 ("equity", str(self.last_equity)),
                 ("peak_equity", str(self.peak_equity)),
@@ -1329,13 +1341,24 @@ class GridV1Engine:
                 self._record(at, "ORDER_CANCELLED", order=order, details=("reason", reason))
 
     def _cash(self) -> Decimal:
+        return self._cumulative_economics()[0]
+
+    def _cumulative_economics(self) -> tuple[Decimal, Decimal, Decimal, Decimal]:
         state = self.accounting.position(self.episode.symbol)
-        return (
-            self.episode.carry_in.current_cash
-            + state.cumulative_gross_realized_pnl
-            - state.cumulative_fees
-            + self.funding_cash
+        with localcontext(_CONTEXT):
+            cumulative_gross = (
+                self.episode.carry_in.cumulative_gross_realized_pnl
+                + state.cumulative_gross_realized_pnl
+            )
+            cumulative_fees = self.episode.carry_in.cumulative_fees + state.cumulative_fees
+            cumulative_funding = self.episode.carry_in.cumulative_funding + self.funding_cash
+        cash = _canonical_cash(
+            self.episode.carry_in.original_account_capital,
+            cumulative_gross,
+            cumulative_fees,
+            cumulative_funding,
         )
+        return cash, cumulative_gross, cumulative_fees, cumulative_funding
 
     def _equity(self, mark: Decimal) -> Decimal:
         state = self.accounting.position(self.episode.symbol)
@@ -1346,20 +1369,20 @@ class GridV1Engine:
 
     def snapshot(self) -> GridLedgerSnapshot:
         state = self.accounting.position(self.episode.symbol)
+        cash, cumulative_gross, cumulative_fees, cumulative_funding = self._cumulative_economics()
         unrealized = _ZERO
         if state.quantity and state.average_entry_price is not None:
             unrealized = state.quantity * (self.last_mark - state.average_entry_price)
-        equity = self._cash() + unrealized
+        equity = cash + unrealized
         drawdown = (self.peak_equity - equity) / self.peak_equity if self.peak_equity > 0 else _ZERO
         return GridLedgerSnapshot(
             self.state,
-            self._cash(),
+            cash,
             state.quantity,
             state.average_entry_price,
-            self.episode.carry_in.cumulative_gross_realized_pnl
-            + state.cumulative_gross_realized_pnl,
-            self.episode.carry_in.cumulative_fees + state.cumulative_fees,
-            self.episode.carry_in.cumulative_funding + self.funding_cash,
+            cumulative_gross,
+            cumulative_fees,
+            cumulative_funding,
             unrealized,
             equity,
             self.peak_equity,
@@ -1376,15 +1399,15 @@ class GridV1Engine:
             raise GridV1Error("partial or blocked episode has no authoritative carry-out")
         if state.quantity != 0 or self.state not in {GridState.STOPPED, GridState.TERMINATED}:
             raise GridV1Error("complete episode must be flat and terminal for the week")
+        cash, cumulative_gross, cumulative_fees, cumulative_funding = self._cumulative_economics()
         return GridLedgerCarry(
             self.episode.symbol,
             self.episode.carry_in.original_account_capital,
-            self._cash(),
-            self._cash(),
-            self.episode.carry_in.cumulative_gross_realized_pnl
-            + state.cumulative_gross_realized_pnl,
-            self.episode.carry_in.cumulative_fees + state.cumulative_fees,
-            self.episode.carry_in.cumulative_funding + self.funding_cash,
+            cash,
+            cash,
+            cumulative_gross,
+            cumulative_fees,
+            cumulative_funding,
             self.peak_equity,
             self.state is GridState.TERMINATED,
             self.episode.episode_start,
