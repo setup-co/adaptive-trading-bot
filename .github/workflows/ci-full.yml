@@ -1,0 +1,105 @@
+name: Full CI
+
+on:
+  pull_request:
+    types: [labeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: >-
+      ${{ (github.event_name == 'push' || github.event.label.name == 'ci-full') &&
+      'quality' || 'full-not-requested / quality' }}
+    if: >-
+      github.event_name == 'push' || github.event.label.name == 'ci-full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+
+      - name: Verify exact full-suite SHA
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Ruff format
+        run: ruff format --check .
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy src tests migrations scripts/ci
+
+      - name: Complete regression suite
+        run: python -m pytest
+
+  frontend-quality:
+    name: >-
+      ${{ (github.event_name == 'push' || github.event.label.name == 'ci-full') &&
+      'frontend-quality' || 'full-not-requested / frontend-quality' }}
+    if: >-
+      github.event_name == 'push' || github.event.label.name == 'ci-full'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+
+      - name: Verify exact full-suite SHA
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend type check
+        run: npm run typecheck
+
+      - name: Frontend test
+        run: npm test
+
+      - name: Frontend build
+        run: npm run build
+
+  full-suite:
+    name: >-
+      ${{ (github.event_name == 'push' || github.event.label.name == 'ci-full') &&
+      'full-suite' || 'full-not-requested / full-suite' }}
+    needs: [quality, frontend-quality]
+    if: >-
+      always() &&
+      (github.event_name == 'push' || github.event.label.name == 'ci-full')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every full-suite job
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
+        run: test "$QUALITY_RESULT" = success && test "$FRONTEND_RESULT" = success
